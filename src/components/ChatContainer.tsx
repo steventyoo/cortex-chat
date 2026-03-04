@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChat } from '@/hooks/useChat';
 import { ProjectSummary } from '@/lib/types';
@@ -93,11 +94,19 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
           </button>
 
           <div className="flex-1">
-            <h2 className="text-[14px] font-medium text-[#1a1a1a]">
-              {currentProjectId
-                ? projects.find((p) => p.projectId === currentProjectId)?.projectName || currentProjectId
-                : 'Project Cortex'}
-            </h2>
+            {currentProjectId ? (
+              <h2 className="text-[14px] font-medium text-[#1a1a1a]">
+                {projects.find((p) => p.projectId === currentProjectId)?.projectName || currentProjectId}
+              </h2>
+            ) : (
+              <Image
+                src="/owp-logo.png"
+                alt="One Way Plumbing"
+                width={150}
+                height={30}
+                className="h-[24px] w-auto"
+              />
+            )}
           </div>
         </div>
 
