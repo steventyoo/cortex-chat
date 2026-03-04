@@ -11,7 +11,8 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon') ||
-    pathname === '/cortex-logo.svg'
+    pathname === '/cortex-logo.svg' ||
+    pathname.startsWith('/owp-logo')
   ) {
     return NextResponse.next();
   }
@@ -27,5 +28,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|cortex-logo.svg).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|cortex-logo.svg|owp-logo).*)'],
 };
