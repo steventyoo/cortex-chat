@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChat } from '@/hooks/useChat';
@@ -33,7 +33,10 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
     setProject,
   } = useChat();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState<'pdf' | 'csv' | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -43,6 +46,59 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
       });
     }
   }, [messages]);
+
+  // Close export dropdown when clicking outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const currentProject = projects.find((p) => p.projectId === currentProjectId);
+
+  const handleExport = useCallback(
+    async (type: 'pdf' | 'csv') => {
+      if (!currentProjectId || !currentProject) return;
+      setExporting(type);
+      setExportOpen(false);
+
+      try {
+        const endpoint = type === 'pdf' ? '/api/brief' : '/api/export-csv';
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            projectId: currentProjectId,
+            projectName: currentProject.projectName,
+          }),
+        });
+
+        if (!res.ok) throw new Error('Export failed');
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download =
+          type === 'pdf'
+            ? `${currentProject.projectName}-Brief.pdf`
+            : `${currentProject.projectName}-Data.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        console.error('Export error:', err);
+      } finally {
+        setExporting(null);
+      }
+    },
+    [currentProjectId, currentProject]
+  );
 
   return (
     <div className="flex h-dvh bg-white">
@@ -96,7 +152,7 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
           <div className="flex-1">
             {currentProjectId ? (
               <h2 className="text-[14px] font-medium text-[#1a1a1a]">
-                {projects.find((p) => p.projectId === currentProjectId)?.projectName || currentProjectId}
+                {currentProject?.projectName || currentProjectId}
               </h2>
             ) : (
               <Image
@@ -108,6 +164,69 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
               />
             )}
           </div>
+
+          {/* Export dropdown */}
+          {currentProjectId && (
+            <div className="relative" ref={exportRef}>
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setExportOpen(!exportOpen)}
+                disabled={!!exporting}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-medium text-[#6b6b6b] hover:text-[#1a1a1a] hover:bg-[#f0f0f0] transition-colors disabled:opacity-50"
+              >
+                {exporting ? (
+                  <>
+                    <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                    {exporting === 'pdf' ? 'Generating...' : 'Exporting...'}
+                  </>
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                    </svg>
+                    Export
+                  </>
+                )}
+              </motion.button>
+
+              <AnimatePresence>
+                {exportOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -4, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 top-full mt-1 w-[200px] bg-white rounded-xl border border-[#e8e8e8] shadow-lg overflow-hidden z-50"
+                  >
+                    <button
+                      onClick={() => handleExport('pdf')}
+                      className="w-full text-left px-4 py-2.5 text-[13px] text-[#37352f] hover:bg-[#f7f7f5] transition-colors flex items-center gap-2.5"
+                    >
+                      <span className="text-[16px]">📄</span>
+                      <div>
+                        <div className="font-medium">One Page Brief</div>
+                        <div className="text-[11px] text-[#999]">PDF with tables & flags</div>
+                      </div>
+                    </button>
+                    <div className="h-px bg-[#f0f0f0]" />
+                    <button
+                      onClick={() => handleExport('csv')}
+                      className="w-full text-left px-4 py-2.5 text-[13px] text-[#37352f] hover:bg-[#f7f7f5] transition-colors flex items-center gap-2.5"
+                    >
+                      <span className="text-[16px]">📊</span>
+                      <div>
+                        <div className="font-medium">Export Data</div>
+                        <div className="text-[11px] text-[#999]">CSV for Excel / Sheets</div>
+                      </div>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
         </div>
 
         {/* Messages area */}
