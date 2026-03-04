@@ -152,7 +152,9 @@ export async function fetchProjectHealthData(): Promise<ProjectHealth[]> {
     const projectName = String(p['Project Name'] || '');
     const contractValue = Number(p['Contract Value'] || 0);
     const jobToDate = Number(p['Job to Date'] || 0);
-    const percentComplete = Number(p['Percent Complete Cost'] || 0);
+    const rawPercent = Number(p['Percent Complete Cost'] || 0);
+    // Airtable stores percentages as decimals (0.84 = 84%), convert if needed
+    const percentComplete = rawPercent > 0 && rawPercent <= 1 ? rawPercent * 100 : rawPercent;
     const totalCOs = Number(p['Total COs'] || 0);
     const status = String(p['Project Status'] || '');
 
