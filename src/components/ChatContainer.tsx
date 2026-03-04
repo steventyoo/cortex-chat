@@ -24,6 +24,7 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
     sendMessage,
     clearConversation,
     setProject,
+    clearProject,
     setMessages,
   } = useChat();
 
@@ -124,6 +125,13 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
     prevMessagesLenRef.current = 0;
   }, [clearConversation, startNewConversation]);
 
+  const handleGoHome = useCallback(() => {
+    clearConversation();
+    clearProject();
+    startNewConversation();
+    prevMessagesLenRef.current = 0;
+  }, [clearConversation, clearProject, startNewConversation]);
+
   const handleSelectProject = useCallback(
     (projectId: string) => {
       setProject(projectId);
@@ -215,11 +223,22 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
             </svg>
           </button>
 
-          <div className="flex-1">
+          <div className="flex-1 flex items-center gap-2">
             {currentProjectId ? (
-              <h2 className="text-[14px] font-medium text-[#1a1a1a]">
-                {currentProject?.projectName || currentProjectId}
-              </h2>
+              <>
+                <button
+                  onClick={handleGoHome}
+                  className="p-1 rounded-md hover:bg-[#f0f0f0] text-[#999] hover:text-[#1a1a1a] transition-colors"
+                  title="Back to dashboard"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M19 12H5M12 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <h2 className="text-[14px] font-medium text-[#1a1a1a]">
+                  {currentProject?.projectName || currentProjectId}
+                </h2>
+              </>
             ) : (
               <Image
                 src="/owp-logo.png"

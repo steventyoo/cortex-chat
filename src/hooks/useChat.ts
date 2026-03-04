@@ -143,6 +143,10 @@ export function useChat() {
     []
   );
 
+  const clearProject = useCallback(() => {
+    setCurrentProjectId(null);
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -151,6 +155,7 @@ export function useChat() {
     sendMessage,
     clearConversation,
     setProject,
+    clearProject,
     setMessages,
   };
 }
