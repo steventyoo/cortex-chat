@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChat } from '@/hooks/useChat';
 import { ProjectSummary } from '@/lib/types';
@@ -94,19 +93,11 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
           </button>
 
           <div className="flex-1">
-            {currentProjectId ? (
-              <h2 className="text-[14px] font-medium text-[#1a1a1a]">
-                {projects.find((p) => p.projectId === currentProjectId)?.projectName || currentProjectId}
-              </h2>
-            ) : (
-              <Image
-                src="/owp-logo.png"
-                alt="One Way Plumbing"
-                width={150}
-                height={30}
-                className="h-[24px] w-auto"
-              />
-            )}
+            <h2 className="text-[14px] font-medium text-[#1a1a1a]">
+              {currentProjectId
+                ? projects.find((p) => p.projectId === currentProjectId)?.projectName || currentProjectId
+                : 'Project Cortex'}
+            </h2>
           </div>
         </div>
 
@@ -126,23 +117,20 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
                     initial={{ scale: 0.9, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     transition={{ type: 'spring', damping: 25, stiffness: 200, delay: 0.1 }}
-                    className="mb-5"
+                    className="w-[52px] h-[52px] rounded-[14px] bg-[#1a1a1a] flex items-center justify-center mb-5"
                   >
-                    <Image
-                      src="/owp-logo.png"
-                      alt="One Way Plumbing"
-                      width={300}
-                      height={60}
-                      className="h-[48px] w-auto"
-                      priority
-                    />
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                      <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                      <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                      <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                    </svg>
                   </motion.div>
 
                   <motion.h2
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ delay: 0.2 }}
-                    className="text-[18px] font-semibold text-[#1a1a1a] mb-1.5 tracking-[-0.02em]"
+                    className="text-[22px] font-semibold text-[#1a1a1a] mb-1.5 tracking-[-0.02em]"
                   >
                     Project Cortex
                   </motion.h2>

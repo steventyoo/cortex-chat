@@ -1,6 +1,5 @@
 'use client';
 
-import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { ProjectSummary } from '@/lib/types';
 import { formatCurrency } from '@/lib/utils';
@@ -43,15 +42,17 @@ export default function Sidebar({
       >
         {/* Header */}
         <div className="p-3 pt-4">
-          <div className="flex items-center mb-3 px-2">
-            <Image
-              src="/owp-logo.png"
-              alt="One Way Plumbing"
-              width={180}
-              height={36}
-              className="h-[32px] w-auto"
-              priority
-            />
+          <div className="flex items-center gap-2.5 mb-3 px-2">
+            <div className="w-6 h-6 rounded-[6px] bg-[#1a1a1a] flex items-center justify-center">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <span className="text-[14px] font-semibold text-[#37352f] tracking-[-0.01em]">
+              Project Cortex
+            </span>
           </div>
 
           <motion.button
