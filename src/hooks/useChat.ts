@@ -151,5 +151,6 @@ export function useChat() {
     sendMessage,
     clearConversation,
     setProject,
+    setMessages,
   };
 }

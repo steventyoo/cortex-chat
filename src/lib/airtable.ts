@@ -1,4 +1,4 @@
-import { AirtableRecord, ProjectData, ProjectSummary } from './types';
+import { AirtableRecord, ProjectData, ProjectSummary, ProjectHealth, ProjectAlert, HealthStatus } from './types';
 
 const BASE_URL = 'https://api.airtable.com/v0';
 
@@ -119,6 +119,155 @@ export async function fetchProjectList(): Promise<ProjectSummary[]> {
       contractValue: Number(rec.fields['Contract Value'] || 0),
     }))
     .filter((p) => p.projectId.length > 0); // Skip empty records
+}
+
+function computeHealthStatus(value: number, warningThreshold: number, criticalThreshold: number): HealthStatus {
+  if (value >= criticalThreshold) return 'critical';
+  if (value >= warningThreshold) return 'warning';
+  return 'healthy';
+}
+
+export async function fetchProjectHealthData(): Promise<ProjectHealth[]> {
+  // Fetch all projects
+  const projectRecords = await fetchTable('PROJECTS');
+  const projects = projectRecords
+    .map((rec) => rec.fields)
+    .filter((p) => String(p['Project ID'] || '').length > 0);
+
+  if (projects.length === 0) return [];
+
+  // Fetch all change orders, production, and job costs in parallel (no filter = all projects)
+  const [allCOs, allProduction, allJobCosts] = await Promise.all([
+    fetchTable('CHANGE_ORDERS'),
+    fetchTable('PRODUCTION'),
+    fetchTable('JOB_COSTS'),
+  ]);
+
+  const coFields = allCOs.map((r) => r.fields);
+  const prodFields = allProduction.map((r) => r.fields);
+  const jcFields = allJobCosts.map((r) => r.fields);
+
+  return projects.map((p) => {
+    const projectId = String(p['Project ID'] || '');
+    const projectName = String(p['Project Name'] || '');
+    const contractValue = Number(p['Contract Value'] || 0);
+    const jobToDate = Number(p['Job to Date'] || 0);
+    const percentComplete = Number(p['Percent Complete Cost'] || 0);
+    const totalCOs = Number(p['Total COs'] || 0);
+    const status = String(p['Project Status'] || '');
+
+    // Filter data for this project
+    const projectCOs = coFields.filter((co) => String(co['Project ID'] || '') === projectId);
+    const projectProd = prodFields.filter((pr) => String(pr['Project ID'] || '') === projectId);
+    const projectJC = jcFields.filter((jc) => String(jc['Project ID'] || '') === projectId);
+
+    // Pending COs
+    const pendingCOs = projectCOs.filter((co) => {
+      const approval = String(co['Approval Status'] || '').toLowerCase();
+      return approval.includes('pending') || approval.includes('submitted') || approval.includes('review');
+    });
+    const pendingCOAmount = pendingCOs.reduce(
+      (sum, co) => sum + Number(co['GC Proposed Amount'] || 0),
+      0
+    );
+
+    // Labor performance
+    const totalBudgetHrs = projectProd.reduce(
+      (sum, pr) => sum + Number(pr['Budget Labor Hours'] || 0),
+      0
+    );
+    const totalActualHrs = projectProd.reduce(
+      (sum, pr) => sum + Number(pr['Actual Labor Hours'] || 0),
+      0
+    );
+    const laborPerformanceRatio = totalBudgetHrs > 0 ? totalActualHrs / totalBudgetHrs : 0;
+
+    // Budget variance (how much over/under budget overall)
+    const revisedBudget = Number(p['Revised Budget'] || contractValue);
+    const budgetVariancePercent = revisedBudget > 0
+      ? ((jobToDate - revisedBudget) / revisedBudget) * 100
+      : 0;
+
+    // Compute health statuses
+    const budgetHealth = computeHealthStatus(
+      Math.max(0, budgetVariancePercent),
+      5,  // 5% over = warning
+      15  // 15% over = critical
+    );
+
+    const laborHealth = computeHealthStatus(
+      Math.max(0, (laborPerformanceRatio - 1) * 100),
+      10, // 10% over hours = warning
+      25  // 25% over hours = critical
+    );
+
+    // Overall health: worst of budget and labor
+    const healthPriority: Record<HealthStatus, number> = { healthy: 0, warning: 1, critical: 2 };
+    const worstHealth = Math.max(healthPriority[budgetHealth], healthPriority[laborHealth]);
+    const overallHealth: HealthStatus = worstHealth === 2 ? 'critical' : worstHealth === 1 ? 'warning' : 'healthy';
+
+    // Generate alerts
+    const alerts: ProjectAlert[] = [];
+
+    // Over-budget job cost items
+    const overBudgetItems = projectJC.filter((jc) => {
+      const variance = String(jc['Variance Status'] || '').toLowerCase();
+      return variance.includes('over');
+    });
+    if (overBudgetItems.length > 0) {
+      const worstItem = overBudgetItems.reduce((worst, jc) =>
+        Math.abs(Number(jc['Over Under'] || 0)) > Math.abs(Number(worst['Over Under'] || 0)) ? jc : worst
+      );
+      alerts.push({
+        type: 'budget',
+        severity: budgetHealth === 'critical' ? 'critical' : budgetHealth === 'warning' ? 'warning' : 'info',
+        message: `${overBudgetItems.length} cost item${overBudgetItems.length > 1 ? 's' : ''} over budget — worst: ${String(worstItem['Item Description'] || worstItem['Item Code'])}`,
+        projectId,
+        projectName,
+      });
+    }
+
+    // Labor over hours
+    if (laborPerformanceRatio > 1.1) {
+      const overPct = ((laborPerformanceRatio - 1) * 100).toFixed(0);
+      alerts.push({
+        type: 'labor',
+        severity: laborHealth === 'critical' ? 'critical' : 'warning',
+        message: `Labor ${overPct}% over budgeted hours (ratio: ${laborPerformanceRatio.toFixed(2)})`,
+        projectId,
+        projectName,
+      });
+    }
+
+    // Pending COs
+    if (pendingCOs.length > 0) {
+      alerts.push({
+        type: 'change_order',
+        severity: pendingCOAmount > 50000 ? 'warning' : 'info',
+        message: `${pendingCOs.length} pending CO${pendingCOs.length > 1 ? 's' : ''} totaling $${(pendingCOAmount / 1000).toFixed(0)}K awaiting approval`,
+        projectId,
+        projectName,
+      });
+    }
+
+    return {
+      projectId,
+      projectName,
+      status,
+      contractValue,
+      jobToDate,
+      percentComplete,
+      totalCOs,
+      pendingCOs: pendingCOs.length,
+      pendingCOAmount,
+      budgetHealth,
+      laborHealth,
+      overallHealth,
+      laborPerformanceRatio,
+      budgetVariancePercent,
+      alerts,
+    };
+  });
 }
 
 export async function resolveProjectId(
