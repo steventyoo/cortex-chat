@@ -13,7 +13,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Project Cortex — Construction Intelligence",
+  title: "One Way Plumbing — Project Cortex",
   description:
     "AI-powered construction data analysis. Query change orders, budgets, production metrics, and more.",
 };

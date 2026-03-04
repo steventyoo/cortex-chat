@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, FormEvent } from 'react';
+import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { useRouter } from 'next/navigation';
 
@@ -49,14 +50,15 @@ export default function LoginForm() {
         transition={{ delay: 0.1, type: 'spring', damping: 25 }}
         className="flex flex-col items-center mb-10"
       >
-        <div className="w-[60px] h-[60px] rounded-[16px] bg-[#1a1a1a] flex items-center justify-center mb-5">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
-            <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
-            <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
-          </svg>
-        </div>
-        <h1 className="text-[26px] font-semibold tracking-[-0.02em] text-[#1a1a1a]">
+        <Image
+          src="/owp-logo.png"
+          alt="One Way Plumbing"
+          width={300}
+          height={60}
+          className="h-[52px] w-auto mb-4"
+          priority
+        />
+        <h1 className="text-[20px] font-semibold tracking-[-0.02em] text-[#1a1a1a]">
           Project Cortex
         </h1>
         <p className="text-[14px] text-[#999] mt-1">Construction Intelligence</p>
