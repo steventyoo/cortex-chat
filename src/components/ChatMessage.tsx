@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { ChatMessage as ChatMessageType } from '@/lib/types';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -16,13 +17,21 @@ export default function ChatMessage({
   isStreaming = false,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(message.content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [message.content]);
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ type: 'spring', damping: 28, stiffness: 280 }}
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-5`}
+      className={`group/msg flex ${isUser ? 'justify-end' : 'justify-start'} mb-5`}
     >
       {!isUser && (
         <div className="w-7 h-7 rounded-[8px] bg-[#1a1a1a] flex items-center justify-center mr-3 mt-0.5 flex-shrink-0">
@@ -57,6 +66,33 @@ export default function ChatMessage({
             transition={{ duration: 0.5, repeat: Infinity }}
             className="inline-block w-[2px] h-[18px] bg-[#007aff] ml-0.5 rounded-full"
           />
+        )}
+
+        {/* Copy response button — assistant only, after streaming done */}
+        {!isUser && message.content && !isStreaming && (
+          <div className="mt-2 opacity-0 group-hover/msg:opacity-100 transition-opacity">
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium text-[#aeaeb2] hover:text-[#1a1a1a] hover:bg-[#f0f0f0] transition-all"
+            >
+              {copied ? (
+                <>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 6L9 17l-5-5" />
+                  </svg>
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                  </svg>
+                  Copy response
+                </>
+              )}
+            </button>
+          </div>
         )}
       </div>
     </motion.div>
