@@ -2,6 +2,18 @@
   "functions": {
     "src/app/api/chat/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/pipeline/scan-drive/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/pipeline/extract/route.ts": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/pipeline/scan-drive",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }

@@ -45,6 +45,10 @@ export default function PipelineReview() {
   // Test mode — approvals won't push to real Airtable tables
   const [testMode, setTestMode] = useState(true);
 
+  // Drive scan state
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<string | null>(null);
+
   const fetchItems = useCallback(async () => {
     setLoading(true);
     try {
@@ -98,6 +102,34 @@ export default function PipelineReview() {
       alert('Failed to process document');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleScanDrive = async () => {
+    setScanning(true);
+    setScanResult(null);
+    try {
+      const res = await fetch('/api/pipeline/scan-drive');
+      const data = await res.json();
+      if (res.ok) {
+        const processed = data.processed?.length || 0;
+        const remaining = data.remainingNewFiles || 0;
+        setScanResult(
+          processed > 0
+            ? `Found ${processed} new file${processed > 1 ? 's' : ''}${remaining > 0 ? ` (${remaining} more queued)` : ''}`
+            : data.message || 'No new files found'
+        );
+        if (processed > 0) await fetchItems();
+      } else {
+        setScanResult(data.error || 'Scan failed');
+      }
+    } catch (err) {
+      console.error('Drive scan error:', err);
+      setScanResult('Failed to connect to Drive');
+    } finally {
+      setScanning(false);
+      // Clear result after 5 seconds
+      setTimeout(() => setScanResult(null), 5000);
     }
   };
 
@@ -401,6 +433,30 @@ export default function PipelineReview() {
               Test
             </button>
 
+            {/* Scan Drive button */}
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={handleScanDrive}
+              disabled={scanning}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[#e0e0e0] text-[13px] font-medium text-[#555] hover:bg-[#f7f7f5] transition-colors disabled:opacity-50"
+              title="Scan Google Drive for new documents"
+            >
+              <svg className={`w-3.5 h-3.5 ${scanning ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                {scanning ? (
+                  <>
+                    <circle cx="12" cy="12" r="10" className="opacity-25" />
+                    <path d="M4 12a8 8 0 018-8" />
+                  </>
+                ) : (
+                  <>
+                    <path d="M1 4v6h6" />
+                    <path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
+                  </>
+                )}
+              </svg>
+              {scanning ? 'Scanning...' : 'Scan Drive'}
+            </motion.button>
+
             <motion.button
               whileTap={{ scale: 0.97 }}
               onClick={() => setShowUpload(true)}
@@ -435,6 +491,21 @@ export default function PipelineReview() {
           </span>
         </div>
       )}
+
+      {/* Scan result notification */}
+      <AnimatePresence>
+        {scanResult && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="px-6 py-2.5 bg-blue-50 border-b border-blue-200 flex items-center gap-2"
+          >
+            <span className="text-[13px]">📂</span>
+            <span className="text-[12px] font-medium text-blue-800">{scanResult}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Upload modal */}
       <AnimatePresence>
