@@ -10,9 +10,10 @@ export async function POST(request: NextRequest) {
 
   try {
     const { password } = await request.json();
-    const adminPassword = process.env.CORTEX_ADMIN_PASSWORD;
+    const adminPassword = (process.env.CORTEX_ADMIN_PASSWORD || '').trim();
+    const inputPassword = (password || '').trim();
 
-    if (!adminPassword || password !== adminPassword) {
+    if (!adminPassword || inputPassword !== adminPassword) {
       return Response.json({ error: 'Invalid admin password' }, { status: 403 });
     }
 
