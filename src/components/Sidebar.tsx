@@ -15,6 +15,8 @@ interface SidebarProps {
   activeConversationId?: string | null;
   onSelectConversation?: (id: string) => void;
   onDeleteConversation?: (id: string) => void;
+  currentView?: 'chat' | 'pipeline';
+  onNavigate?: (view: 'chat' | 'pipeline') => void;
 }
 
 function timeAgo(timestamp: number): string {
@@ -40,6 +42,8 @@ export default function Sidebar({
   activeConversationId,
   onSelectConversation,
   onDeleteConversation,
+  currentView = 'chat',
+  onNavigate,
 }: SidebarProps) {
   return (
     <>
@@ -78,12 +82,29 @@ export default function Sidebar({
           <motion.button
             whileTap={{ scale: 0.98 }}
             onClick={onNewChat}
-            className="w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] text-[#6b6b6b] hover:text-[#37352f] transition-colors flex items-center gap-2"
+            className={`w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 ${
+              currentView === 'chat' ? 'text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
+            }`}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M12 5V19M5 12H19" />
             </svg>
             New chat
+          </motion.button>
+
+          <motion.button
+            whileTap={{ scale: 0.98 }}
+            onClick={() => onNavigate?.('pipeline')}
+            className={`w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 ${
+              currentView === 'pipeline' ? 'bg-[#ebebea] text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
+            }`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+              <path d="M14 2v6h6" />
+              <path d="M9 15l2 2 4-4" />
+            </svg>
+            Document Pipeline
           </motion.button>
         </div>
 
