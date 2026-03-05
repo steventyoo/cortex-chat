@@ -60,7 +60,7 @@ export async function fetchAllProjectData(
 ): Promise<ProjectData> {
   const filter = `{Project ID}='${projectId}'`;
 
-  // Fetch all 8 tables in parallel
+  // Fetch all 9 tables in parallel
   const results = await Promise.allSettled([
     fetchTable('PROJECTS', filter),
     fetchTable('DOCUMENTS', filter),
@@ -70,6 +70,7 @@ export async function fetchAllProjectData(
     fetchTable('DESIGN_CHANGES', filter),
     fetchTable('CROSS_REFS', filter),
     fetchTable('LABELING_LOG', filter),
+    fetchTable('STAFFING', filter),
   ]);
 
   const extract = (r: PromiseSettledResult<AirtableRecord[]>) =>
@@ -83,6 +84,7 @@ export async function fetchAllProjectData(
   const designChanges = extract(results[5]);
   const crossRefs = extract(results[6]);
   const labelingLog = extract(results[7]);
+  const staffing = extract(results[8]);
 
   return {
     project: projectRecords[0] || null,
@@ -93,6 +95,7 @@ export async function fetchAllProjectData(
     designChanges,
     crossRefs,
     labelingLog,
+    staffing,
     meta: {
       projectId,
       fetchedAt: Date.now(),
@@ -104,6 +107,7 @@ export async function fetchAllProjectData(
         designChanges: designChanges.length,
         crossRefs: crossRefs.length,
         labelingLog: labelingLog.length,
+        staffing: staffing.length,
       },
     },
   };
@@ -136,16 +140,18 @@ export async function fetchProjectHealthData(): Promise<ProjectHealth[]> {
 
   if (projects.length === 0) return [];
 
-  // Fetch all change orders, production, and job costs in parallel (no filter = all projects)
-  const [allCOs, allProduction, allJobCosts] = await Promise.all([
+  // Fetch all change orders, production, job costs, and staffing in parallel
+  const [allCOs, allProduction, allJobCosts, allStaffing] = await Promise.all([
     fetchTable('CHANGE_ORDERS'),
     fetchTable('PRODUCTION'),
     fetchTable('JOB_COSTS'),
+    fetchTable('STAFFING'),
   ]);
 
   const coFields = allCOs.map((r) => r.fields);
   const prodFields = allProduction.map((r) => r.fields);
   const jcFields = allJobCosts.map((r) => r.fields);
+  const staffFields = allStaffing.map((r) => r.fields);
 
   return projects.map((p) => {
     const projectId = String(p['Project ID'] || '');
@@ -162,6 +168,21 @@ export async function fetchProjectHealthData(): Promise<ProjectHealth[]> {
     const projectCOs = coFields.filter((co) => String(co['Project ID'] || '') === projectId);
     const projectProd = prodFields.filter((pr) => String(pr['Project ID'] || '') === projectId);
     const projectJC = jcFields.filter((jc) => String(jc['Project ID'] || '') === projectId);
+    const projectStaff = staffFields.filter((s) => String(s['Project ID'] || '') === projectId);
+
+    // Staffing
+    const activeStaff = projectStaff.filter((s) => s['Active']);
+    const foremanRecord = activeStaff.find((s) => {
+      const role = String(s['Role'] || '').toLowerCase();
+      return role.includes('foreman') || role.includes('superintendent');
+    });
+    const pmRecord = activeStaff.find((s) => {
+      const role = String(s['Role'] || '').toLowerCase();
+      return role.includes('project manager');
+    });
+    const foreman = foremanRecord ? String(foremanRecord['Name'] || '') : null;
+    const projectManager = pmRecord ? String(pmRecord['Name'] || '') : null;
+    const crewSize = activeStaff.length;
 
     // Pending COs
     const pendingCOs = projectCOs.filter((co) => {
@@ -267,6 +288,9 @@ export async function fetchProjectHealthData(): Promise<ProjectHealth[]> {
       overallHealth,
       laborPerformanceRatio,
       budgetVariancePercent,
+      foreman,
+      projectManager,
+      crewSize,
       alerts,
     };
   });

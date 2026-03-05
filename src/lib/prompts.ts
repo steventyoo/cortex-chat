@@ -181,6 +181,18 @@ export function assembleContext(data: ProjectData): string {
     lines.push('');
   }
 
+  // Staffing
+  lines.push(`\n## STAFFING (${data.staffing.length} records)`);
+  if (data.staffing.length > 0) {
+    data.staffing.forEach((s) => {
+      const active = s['Active'] ? 'ACTIVE' : 'INACTIVE';
+      lines.push(
+        `- ${s['Name']}: ${s['Role']} | ${s['Hours Per Week'] || '?'} hrs/week | Rate: $${s['Labor Rate'] || '?'}/hr | ${active} | ${s['Phone'] || ''} | ${s['Email'] || ''}`
+      );
+    });
+    lines.push('');
+  }
+
   // Record counts summary
   lines.push('\n## DATA COMPLETENESS');
   const counts = data.meta.recordCounts;
@@ -190,6 +202,7 @@ export function assembleContext(data: ProjectData): string {
   lines.push(`- Design Changes: ${counts.designChanges} records`);
   lines.push(`- Cross References: ${counts.crossRefs} records`);
   lines.push(`- Documents: ${counts.documents} records`);
+  lines.push(`- Staffing: ${counts.staffing || 0} records`);
 
   return lines.join('\n');
 }

@@ -71,14 +71,24 @@ export default function ProjectHealthCard({
       }`}
     >
       {/* Header: Name + Status Badge */}
-      <div className="flex items-start justify-between gap-2 mb-3">
-        <h3
-          className={`text-[14px] font-semibold leading-tight ${
-            isCompleted ? 'text-[#999]' : 'text-[#1a1a1a]'
-          }`}
-        >
-          {project.projectName}
-        </h3>
+      <div className="flex items-start justify-between gap-2 mb-1">
+        <div>
+          <h3
+            className={`text-[14px] font-semibold leading-tight ${
+              isCompleted ? 'text-[#999]' : 'text-[#1a1a1a]'
+            }`}
+          >
+            {project.projectName}
+          </h3>
+          {!isCompleted && (project.foreman || project.projectManager) && (
+            <p className="text-[11px] text-[#aeaeb2] mt-0.5">
+              {project.projectManager && `PM: ${project.projectManager}`}
+              {project.projectManager && project.foreman && ' · '}
+              {project.foreman && `Foreman: ${project.foreman}`}
+              {project.crewSize > 0 && ` · ${project.crewSize} crew`}
+            </p>
+          )}
+        </div>
         <span
           className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap ${
             isCompleted ? 'bg-[#f0f0f0] text-[#999]' : `${health.bg} ${health.text}`
@@ -94,7 +104,7 @@ export default function ProjectHealthCard({
       </div>
 
       {/* Metrics Grid */}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-2">
         <div>
           <p className={`text-[10px] uppercase tracking-wider ${isCompleted ? 'text-[#ccc]' : 'text-[#aeaeb2]'}`}>
             Contract

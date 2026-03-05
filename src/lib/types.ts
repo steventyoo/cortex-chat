@@ -14,6 +14,7 @@ export interface ProjectData {
   designChanges: Record<string, unknown>[];
   crossRefs: Record<string, unknown>[];
   labelingLog: Record<string, unknown>[];
+  staffing: Record<string, unknown>[];
   meta: {
     projectId: string;
     fetchedAt: number;
@@ -58,6 +59,9 @@ export interface ProjectHealth {
   overallHealth: HealthStatus;
   laborPerformanceRatio: number;
   budgetVariancePercent: number;
+  foreman: string | null;
+  projectManager: string | null;
+  crewSize: number;
   alerts: ProjectAlert[];
 }
 
