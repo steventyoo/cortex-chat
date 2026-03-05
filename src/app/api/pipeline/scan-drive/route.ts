@@ -96,15 +96,20 @@ export async function GET(request: NextRequest) {
     }
 
     // 4. Map Drive folder names to project IDs
+    //    Matches on: Project Name, Project ID, or normalized versions of both.
+    //    e.g., folder "2103-NORTHGATE-M2" matches projectId "2103-NORTHGATE-M2"
+    //    e.g., folder "Compass Northgate M2" matches projectName "Compass Northgate M2"
     const projects = await fetchProjectList();
-    const projectNameToId = new Map<string, string>();
+    const folderLookup = new Map<string, string>(); // normalized key → projectId
     for (const p of projects) {
-      projectNameToId.set(p.projectName.toLowerCase(), p.projectId);
-      // Also try common abbreviations
-      const words = p.projectName.toLowerCase().split(/\s+/);
-      if (words.length > 1) {
-        projectNameToId.set(words.join(' '), p.projectId);
-      }
+      // Match on project name (lowercase)
+      folderLookup.set(p.projectName.toLowerCase(), p.projectId);
+      // Match on project ID (lowercase)
+      folderLookup.set(p.projectId.toLowerCase(), p.projectId);
+      // Match on project ID with spaces instead of dashes/underscores
+      folderLookup.set(p.projectId.toLowerCase().replace(/[-_]/g, ' '), p.projectId);
+      // Match on project name with dashes instead of spaces
+      folderLookup.set(p.projectName.toLowerCase().replace(/\s+/g, '-'), p.projectId);
     }
 
     // 5. Process up to MAX_FILES_PER_RUN new files
@@ -119,7 +124,7 @@ export async function GET(request: NextRequest) {
 
     for (const file of filesToProcess) {
       try {
-        const result = await processFile(file, projectNameToId);
+        const result = await processFile(file, folderLookup);
         results.push(result);
       } catch (err) {
         results.push({
@@ -212,12 +217,13 @@ async function getProcessedDriveFileIds(): Promise<Set<string>> {
  */
 async function processFile(
   file: DriveFile,
-  projectNameToId: Map<string, string>
+  folderLookup: Map<string, string>
 ): Promise<{
   fileName: string;
   driveId: string;
   status: string;
   pipelineId?: string;
+  projectId?: string;
   error?: string;
 }> {
   const pipelineId = generatePipelineId();
@@ -225,15 +231,26 @@ async function processFile(
   const now = new Date().toISOString();
 
   // Resolve project ID from folder name
+  // Tries: exact match on name/ID, then normalized (dashes↔spaces), then fuzzy substring
   let projectId = '';
   if (file.parentFolderName && file.parentFolderName !== '_Root') {
     const folderLower = file.parentFolderName.toLowerCase();
-    projectId = projectNameToId.get(folderLower) || '';
 
-    // Fuzzy match: check if any project name is contained in folder name or vice versa
+    // 1. Direct lookup (matches project name, project ID, or normalized variants)
+    projectId = folderLookup.get(folderLower) || '';
+
+    // 2. Try with dashes replaced by spaces and vice versa
     if (!projectId) {
-      for (const [name, id] of projectNameToId) {
-        if (folderLower.includes(name) || name.includes(folderLower)) {
+      projectId = folderLookup.get(folderLower.replace(/[-_]/g, ' ')) || '';
+    }
+    if (!projectId) {
+      projectId = folderLookup.get(folderLower.replace(/\s+/g, '-')) || '';
+    }
+
+    // 3. Fuzzy substring match (folder contains project name/ID or vice versa)
+    if (!projectId) {
+      for (const [key, id] of folderLookup) {
+        if (folderLower.includes(key) || key.includes(folderLower)) {
           projectId = id;
           break;
         }
@@ -413,6 +430,7 @@ async function processFile(
     driveId: file.id,
     status: finalStatus,
     pipelineId,
+    projectId: projectId || '(unmatched)',
   };
 }
 
