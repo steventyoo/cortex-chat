@@ -42,6 +42,9 @@ export default function PipelineReview() {
   const [editedFields, setEditedFields] = useState<Record<string, string>>({});
   const [submittingReview, setSubmittingReview] = useState(false);
 
+  // Test mode — approvals won't push to real Airtable tables
+  const [testMode, setTestMode] = useState(true);
+
   const fetchItems = useCallback(async () => {
     setLoading(true);
     try {
@@ -108,6 +111,7 @@ export default function PipelineReview() {
         action: reviewAction,
         reviewer: 'Admin',
         notes: reviewNotes,
+        testMode,
       };
 
       if (reviewAction === 'rejected') {
@@ -339,6 +343,12 @@ export default function PipelineReview() {
                   className="w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] mb-3 resize-none focus:outline-none focus:ring-2 focus:ring-[#007aff]/30"
                 />
 
+                {testMode && reviewAction === 'approved' && (
+                  <div className="mb-3 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[12px] text-amber-800">
+                    🧪 Test mode — this approval will NOT push data to Airtable
+                  </div>
+                )}
+
                 <button
                   onClick={handleReview}
                   disabled={!reviewAction || submittingReview}
@@ -353,7 +363,7 @@ export default function PipelineReview() {
                       Processing...
                     </>
                   ) : (
-                    `Submit ${reviewAction === 'approved' ? 'Approval' : reviewAction === 'rejected' ? 'Rejection' : 'Review'}`
+                    `Submit ${reviewAction === 'approved' ? 'Approval' : reviewAction === 'rejected' ? 'Rejection' : 'Review'}${testMode && reviewAction !== 'rejected' ? ' (Test)' : ''}`
                   )}
                 </button>
               </div>
@@ -374,16 +384,34 @@ export default function PipelineReview() {
             <h1 className="text-[20px] font-bold text-[#1a1a1a] tracking-tight">Document Pipeline</h1>
             <p className="text-[13px] text-[#999] mt-0.5">Extract, validate, and approve construction documents</p>
           </div>
-          <motion.button
-            whileTap={{ scale: 0.97 }}
-            onClick={() => setShowUpload(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M12 5V19M5 12H19" />
-            </svg>
-            New Document
-          </motion.button>
+          <div className="flex items-center gap-3">
+            {/* Test mode toggle */}
+            <button
+              onClick={() => setTestMode(!testMode)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
+                testMode
+                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                  : 'bg-[#f0f0f0] text-[#999] hover:bg-[#e8e8e8]'
+              }`}
+              title={testMode ? 'Test mode ON — approvals will NOT push to Airtable' : 'Test mode OFF — approvals WILL push to real data'}
+            >
+              <div className={`w-7 h-4 rounded-full relative transition-colors ${testMode ? 'bg-amber-400' : 'bg-[#ccc]'}`}>
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${testMode ? 'left-3.5' : 'left-0.5'}`} />
+              </div>
+              Test
+            </button>
+
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={() => setShowUpload(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M12 5V19M5 12H19" />
+              </svg>
+              New Document
+            </motion.button>
+          </div>
         </div>
 
         {/* Stats bar */}
@@ -397,6 +425,16 @@ export default function PipelineReview() {
           </div>
         )}
       </div>
+
+      {/* Test mode banner */}
+      {testMode && (
+        <div className="px-6 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
+          <span className="text-[13px]">🧪</span>
+          <span className="text-[12px] font-medium text-amber-800">
+            Test Mode — approvals will NOT push data to Airtable tables. Toggle off when ready for production.
+          </span>
+        </div>
+      )}
 
       {/* Upload modal */}
       <AnimatePresence>

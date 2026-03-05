@@ -30,6 +30,7 @@ export async function POST(request: NextRequest) {
   let notes: string;
   let rejectionReason: string;
   let editedFields: Record<string, unknown> | null;
+  let testMode: boolean;
 
   try {
     const body = await request.json();
@@ -39,6 +40,7 @@ export async function POST(request: NextRequest) {
     notes = body.notes || '';
     rejectionReason = body.rejectionReason || '';
     editedFields = body.editedFields || null;
+    testMode = body.testMode === true;
 
     if (!recordId || !action) {
       return Response.json({ error: 'recordId and action are required' }, { status: 400 });
@@ -106,8 +108,9 @@ export async function POST(request: NextRequest) {
     });
 
     // 3. If approved, push data to the appropriate Airtable table
+    //    UNLESS testMode is on — then skip the push and just keep status as 'approved'
     let pushedRecordId: string | null = null;
-    if (action === 'approved' || action === 'edited') {
+    if ((action === 'approved' || action === 'edited') && !testMode) {
       try {
         const extractedData: ExtractionResult = JSON.parse(
           action === 'edited' && updateFields['Extracted Data']
@@ -170,7 +173,10 @@ export async function POST(request: NextRequest) {
       action,
       recordId,
       pushedRecordId,
-      status: pushedRecordId ? 'pushed' : action === 'rejected' ? 'rejected' : 'approved',
+      testMode,
+      status: testMode
+        ? 'approved (test mode — not pushed)'
+        : pushedRecordId ? 'pushed' : action === 'rejected' ? 'rejected' : 'approved',
     });
   } catch (err) {
     console.error('Review error:', err);
