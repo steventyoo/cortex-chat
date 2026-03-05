@@ -1,13 +1,40 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import React from 'react';
+import React, { createContext, useContext } from 'react';
+
+// Context to disable animations during streaming
+const StreamingContext = createContext(false);
+
+export function StreamingProvider({
+  isStreaming,
+  children,
+}: {
+  isStreaming: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <StreamingContext.Provider value={isStreaming}>
+      {children}
+    </StreamingContext.Provider>
+  );
+}
 
 interface DataTableProps {
   children: React.ReactNode;
 }
 
 export default function DataTable({ children }: DataTableProps) {
+  const isStreaming = useContext(StreamingContext);
+
+  if (isStreaming) {
+    return (
+      <div className="my-4 overflow-x-auto rounded-xl border border-[#e8e8e8] bg-white">
+        <table className="min-w-full text-[13px]">{children}</table>
+      </div>
+    );
+  }
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
@@ -39,6 +66,16 @@ export function TableRow({
   children: React.ReactNode;
   index?: number;
 }) {
+  const isStreaming = useContext(StreamingContext);
+
+  if (isStreaming) {
+    return (
+      <tr className="hover:bg-[#f8f9fa] transition-colors">
+        {children}
+      </tr>
+    );
+  }
+
   return (
     <motion.tr
       initial={{ opacity: 0, x: -6 }}

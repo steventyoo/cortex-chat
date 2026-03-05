@@ -3,6 +3,7 @@
 import { motion } from 'framer-motion';
 import { ChatMessage as ChatMessageType } from '@/lib/types';
 import MarkdownRenderer from './MarkdownRenderer';
+import { StreamingProvider } from './DataTable';
 import LoadingDots from './LoadingDots';
 
 interface ChatMessageProps {
@@ -43,9 +44,9 @@ export default function ChatMessage({
         {isUser ? (
           <p className="text-[15px] leading-[1.5]">{message.content}</p>
         ) : message.content ? (
-          <div>
+          <StreamingProvider isStreaming={isStreaming}>
             <MarkdownRenderer content={message.content} />
-          </div>
+          </StreamingProvider>
         ) : isStreaming ? (
           <LoadingDots />
         ) : null}
