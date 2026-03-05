@@ -1,6 +1,7 @@
 'use client';
 
-import { motion } from 'framer-motion';
+import { useState, useRef, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { ProjectSummary, ConversationSummary } from '@/lib/types';
 import { formatCurrency } from '@/lib/utils';
 
@@ -17,6 +18,8 @@ interface SidebarProps {
   onDeleteConversation?: (id: string) => void;
   currentView?: 'chat' | 'pipeline';
   onNavigate?: (view: 'chat' | 'pipeline') => void;
+  isAdmin?: boolean;
+  onAdminAuth?: (password: string) => Promise<boolean>;
 }
 
 function timeAgo(timestamp: number): string {
@@ -44,7 +47,54 @@ export default function Sidebar({
   onDeleteConversation,
   currentView = 'chat',
   onNavigate,
+  isAdmin = false,
+  onAdminAuth,
 }: SidebarProps) {
+  const [showAdminPrompt, setShowAdminPrompt] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminError, setAdminError] = useState(false);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const clickCountRef = useRef(0);
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Triple-click "Project Cortex" to reveal admin prompt
+  const handleLogoClick = useCallback(() => {
+    clickCountRef.current += 1;
+
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+    }
+
+    if (clickCountRef.current >= 3) {
+      clickCountRef.current = 0;
+      if (!isAdmin) {
+        setShowAdminPrompt(true);
+        setAdminPassword('');
+        setAdminError(false);
+      }
+    } else {
+      clickTimerRef.current = setTimeout(() => {
+        clickCountRef.current = 0;
+      }, 500);
+    }
+  }, [isAdmin]);
+
+  const handleAdminSubmit = useCallback(async () => {
+    if (!adminPassword.trim() || !onAdminAuth) return;
+    setAdminLoading(true);
+    setAdminError(false);
+
+    const success = await onAdminAuth(adminPassword);
+    setAdminLoading(false);
+
+    if (success) {
+      setShowAdminPrompt(false);
+      setAdminPassword('');
+    } else {
+      setAdminError(true);
+    }
+  }, [adminPassword, onAdminAuth]);
+
   return (
     <>
       {isOpen && (
@@ -66,7 +116,10 @@ export default function Sidebar({
       >
         {/* Header */}
         <div className="p-3 pt-4">
-          <div className="flex items-center gap-2.5 mb-3 px-2">
+          <div
+            className="flex items-center gap-2.5 mb-3 px-2 cursor-default select-none"
+            onClick={handleLogoClick}
+          >
             <div className="w-6 h-6 rounded-[6px] bg-[#1a1a1a] flex items-center justify-center">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                 <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
@@ -77,6 +130,11 @@ export default function Sidebar({
             <span className="text-[14px] font-semibold text-[#37352f] tracking-[-0.01em]">
               Project Cortex
             </span>
+            {isAdmin && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#1a1a1a] text-white font-medium tracking-wide uppercase">
+                Admin
+              </span>
+            )}
           </div>
 
           <motion.button
@@ -92,20 +150,22 @@ export default function Sidebar({
             New chat
           </motion.button>
 
-          <motion.button
-            whileTap={{ scale: 0.98 }}
-            onClick={() => onNavigate?.('pipeline')}
-            className={`w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 ${
-              currentView === 'pipeline' ? 'bg-[#ebebea] text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
-            }`}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-              <path d="M14 2v6h6" />
-              <path d="M9 15l2 2 4-4" />
-            </svg>
-            Document Pipeline
-          </motion.button>
+          {isAdmin && (
+            <motion.button
+              whileTap={{ scale: 0.98 }}
+              onClick={() => onNavigate?.('pipeline')}
+              className={`w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 ${
+                currentView === 'pipeline' ? 'bg-[#ebebea] text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
+              }`}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <path d="M14 2v6h6" />
+                <path d="M9 15l2 2 4-4" />
+              </svg>
+              Document Pipeline
+            </motion.button>
+          )}
         </div>
 
         {/* Scrollable content */}
@@ -213,6 +273,81 @@ export default function Sidebar({
           </p>
         </div>
       </motion.aside>
+
+      {/* Admin password modal */}
+      <AnimatePresence>
+        {showAdminPrompt && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+            onClick={() => setShowAdminPrompt(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-lg bg-[#1a1a1a] flex items-center justify-center">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                    <path d="M7 11V7a5 5 0 0110 0v4" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="text-[14px] font-semibold text-[#1a1a1a]">Admin Access</p>
+                  <p className="text-[11px] text-[#999]">Enter admin password</p>
+                </div>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleAdminSubmit();
+                }}
+              >
+                <input
+                  type="password"
+                  value={adminPassword}
+                  onChange={(e) => { setAdminPassword(e.target.value); setAdminError(false); }}
+                  placeholder="Password"
+                  autoFocus
+                  className={`w-full px-3 py-2.5 rounded-xl border text-[14px] mb-3 focus:outline-none focus:ring-2 transition-colors ${
+                    adminError
+                      ? 'border-red-300 focus:ring-red-200 bg-red-50'
+                      : 'border-[#e0e0e0] focus:ring-[#007aff]/30 focus:border-[#007aff]'
+                  }`}
+                />
+
+                {adminError && (
+                  <p className="text-[12px] text-red-500 mb-3">Invalid password</p>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPrompt(false)}
+                    className="flex-1 py-2 rounded-xl text-[13px] text-[#666] hover:bg-[#f0f0f0] transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!adminPassword.trim() || adminLoading}
+                    className="flex-1 py-2 rounded-xl bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40"
+                  >
+                    {adminLoading ? 'Checking...' : 'Unlock'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }

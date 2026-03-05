@@ -42,9 +42,18 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState<'pdf' | 'csv' | null>(null);
   const [currentView, setCurrentView] = useState<'chat' | 'pipeline'>('chat');
+  const [isAdmin, setIsAdmin] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const exportRef = useRef<HTMLDivElement>(null);
   const prevMessagesLenRef = useRef(0);
+
+  // Check admin status on mount
+  useEffect(() => {
+    fetch('/api/admin-auth')
+      .then((res) => res.json())
+      .then((data) => { if (data.isAdmin) setIsAdmin(true); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -160,6 +169,23 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
     [loadConversation, setProject, setMessages]
   );
 
+  const handleAdminAuth = useCallback(async (password: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/admin-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      if (res.ok) {
+        setIsAdmin(true);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const handleNavigate = useCallback(
     (view: 'chat' | 'pipeline') => {
       setCurrentView(view);
@@ -200,6 +226,8 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
           onDeleteConversation={deleteConversation}
           currentView={currentView}
           onNavigate={handleNavigate}
+          isAdmin={isAdmin}
+          onAdminAuth={handleAdminAuth}
         />
       </div>
 
@@ -226,6 +254,8 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
           onDeleteConversation={deleteConversation}
           currentView={currentView}
           onNavigate={(view) => { handleNavigate(view); setSidebarOpen(false); }}
+          isAdmin={isAdmin}
+          onAdminAuth={handleAdminAuth}
         />
       </div>
 
