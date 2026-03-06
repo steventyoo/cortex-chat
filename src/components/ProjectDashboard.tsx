@@ -121,10 +121,17 @@ interface DashboardData {
   recordCounts: Record<string, number>;
 }
 
+interface ProjectDoc {
+  id: string;
+  fileName: string;
+  documentType: string | null;
+  status: string;
+  createdAt: string;
+}
+
 interface ProjectDashboardProps {
   projectId: string;
   projectName?: string;
-  onStartChat?: () => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────
@@ -151,11 +158,13 @@ function alertIcon(severity: string) {
 }
 
 // ─── Main Component ───────────────────────────────────────
-export default function ProjectDashboard({ projectId, projectName, onStartChat }: ProjectDashboardProps) {
+export default function ProjectDashboard({ projectId, projectName }: ProjectDashboardProps) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [prediction, setPrediction] = useState<PredictionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -177,6 +186,29 @@ export default function ProjectDashboard({ projectId, projectName, onStartChat }
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+  }, [projectId]);
+
+  // Fetch project documents
+  useEffect(() => {
+    if (!projectId) return;
+    setDocsLoading(true);
+    fetch(`/api/pipeline/list?projectId=${encodeURIComponent(projectId)}`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((result) => {
+        if (result?.items) {
+          setProjectDocs(
+            result.items.map((item: ProjectDoc) => ({
+              id: item.id,
+              fileName: item.fileName,
+              documentType: item.documentType,
+              status: item.status,
+              createdAt: item.createdAt,
+            }))
+          );
+        }
+      })
+      .catch(() => setProjectDocs([]))
+      .finally(() => setDocsLoading(false));
   }, [projectId]);
 
   if (loading) {
@@ -215,25 +247,11 @@ export default function ProjectDashboard({ projectId, projectName, onStartChat }
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
       {/* ─── Header ─────────────────────────────────── */}
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-[22px] font-bold text-[#1a1a1a] tracking-[-0.02em]">
-              {data.projectName}
-            </h1>
-            <p className="text-[13px] text-[#999] mt-0.5">{data.projectId} &middot; {data.projectStatus || 'Active'}</p>
-          </div>
-          {onStartChat && (
-            <motion.button
-              whileTap={{ scale: 0.97 }}
-              onClick={onStartChat}
-              className="px-4 py-2 rounded-xl bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors flex items-center gap-2"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
-              </svg>
-              Ask Cortex
-            </motion.button>
-          )}
+        <div>
+          <h1 className="text-[22px] font-bold text-[#1a1a1a] tracking-[-0.02em]">
+            {data.projectName}
+          </h1>
+          <p className="text-[13px] text-[#999] mt-0.5">{data.projectId} &middot; {data.projectStatus || 'Active'}</p>
         </div>
       </motion.div>
 
@@ -662,6 +680,62 @@ export default function ProjectDashboard({ projectId, projectName, onStartChat }
           </motion.div>
         )}
       </div>
+
+      {/* ─── Project Documents ──────────────────────── */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.28 }}
+        className="mb-6 rounded-2xl ring-1 ring-[#e8e8e8] bg-white overflow-hidden"
+      >
+        <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b6b6b" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <path d="M14 2v6h6" />
+          </svg>
+          <h3 className="text-[13px] font-semibold text-[#1a1a1a]">Project Documents</h3>
+          <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#f0f0f0] text-[#666]">{projectDocs.length}</span>
+        </div>
+        {docsLoading ? (
+          <div className="px-5 py-4">
+            <p className="text-[12px] text-[#999]">Loading documents...</p>
+          </div>
+        ) : projectDocs.length === 0 ? (
+          <div className="px-5 py-4">
+            <p className="text-[12px] text-[#999]">No documents uploaded yet</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-[#f5f5f5]">
+            {projectDocs.map((doc) => (
+              <div key={doc.id} className="px-5 py-2.5 flex items-center gap-3">
+                <span className="flex-shrink-0 text-[13px]">
+                  {doc.status === 'pushed' ? '✅' : doc.status === 'approved' ? '🟢' : doc.status === 'rejected' ? '🔴' : '🟡'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[12px] font-medium text-[#1a1a1a] truncate">{doc.fileName}</p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    {doc.documentType && (
+                      <span className="text-[10px] text-[#999]">{doc.documentType}</span>
+                    )}
+                    <span className="text-[10px] text-[#ccc]">·</span>
+                    <span className={`text-[10px] ${
+                      doc.status === 'pushed' ? 'text-emerald-600' :
+                      doc.status === 'approved' ? 'text-blue-600' :
+                      doc.status === 'rejected' ? 'text-red-600' :
+                      'text-amber-600'
+                    }`}>
+                      {doc.status === 'pushed' ? 'In Database' :
+                       doc.status === 'pending_review' ? 'Pending Review' :
+                       doc.status === 'approved' ? 'Approved' :
+                       doc.status}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </motion.div>
 
       {/* ─── Staffing ───────────────────────────────── */}
       {data.staffing.length > 0 && (

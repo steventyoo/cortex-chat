@@ -1,17 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ProjectSummary, ConversationSummary } from '@/lib/types';
 import { formatCurrency } from '@/lib/utils';
-
-interface ProjectDoc {
-  id: string;
-  fileName: string;
-  documentType: string | null;
-  status: string;
-  createdAt: string;
-}
 
 interface SidebarProps {
   projects: ProjectSummary[];
@@ -64,35 +55,6 @@ export default function Sidebar({
   userEmail,
   onLogout,
 }: SidebarProps) {
-  const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
-  const [docsLoading, setDocsLoading] = useState(false);
-
-  // Fetch documents for selected project
-  useEffect(() => {
-    if (!selectedProject) {
-      setProjectDocs([]);
-      return;
-    }
-    setDocsLoading(true);
-    fetch(`/api/pipeline/list?projectId=${encodeURIComponent(selectedProject)}`)
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (data?.items) {
-          setProjectDocs(
-            data.items.map((item: { id: string; fileName: string; documentType: string | null; status: string; createdAt: string }) => ({
-              id: item.id,
-              fileName: item.fileName,
-              documentType: item.documentType,
-              status: item.status,
-              createdAt: item.createdAt,
-            }))
-          );
-        }
-      })
-      .catch(() => setProjectDocs([]))
-      .finally(() => setDocsLoading(false));
-  }, [selectedProject]);
-
   return (
     <>
       {isOpen && (
@@ -216,47 +178,6 @@ export default function Sidebar({
                   </div>
                 </motion.button>
               ))}
-            </div>
-          )}
-
-          {/* Project Documents */}
-          {selectedProject && (
-            <div className="mb-4">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-[#aeaeb2] mb-2 px-2">
-                Project Documents
-              </p>
-              {docsLoading ? (
-                <p className="text-[12px] text-[#b4b4b4] px-2">Loading...</p>
-              ) : projectDocs.length === 0 ? (
-                <p className="text-[12px] text-[#b4b4b4] px-2">No documents yet</p>
-              ) : (
-                <div className="space-y-0.5">
-                  {projectDocs.map((doc) => (
-                    <div
-                      key={doc.id}
-                      className="px-3 py-1.5 rounded-lg text-[12px]"
-                    >
-                      <div className="flex items-center gap-1.5">
-                        <span className="flex-shrink-0">
-                          {doc.status === 'pushed' ? '✅' : doc.status === 'approved' ? '🟢' : doc.status === 'rejected' ? '🔴' : '🟡'}
-                        </span>
-                        <span className="text-[#37352f] truncate font-medium" title={doc.fileName}>
-                          {doc.fileName}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 ml-5 mt-0.5">
-                        {doc.documentType && (
-                          <span className="text-[10px] text-[#999]">{doc.documentType}</span>
-                        )}
-                        <span className="text-[10px] text-[#ccc]">·</span>
-                        <span className="text-[10px] text-[#999]">
-                          {doc.status === 'pushed' ? 'In DB' : doc.status === 'pending_review' ? 'Pending' : doc.status}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           )}
 

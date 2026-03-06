@@ -313,9 +313,15 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
               <ProjectDashboard
                 projectId={currentProjectId}
                 projectName={currentProject?.projectName}
-                onStartChat={() => setCurrentView('chat')}
               />
             </div>
+            <ChatInput
+              onSend={(msg) => {
+                setCurrentView('chat');
+                sendMessage(msg);
+              }}
+              disabled={isStreaming}
+            />
           </>
         ) : (
           /* ─── Chat View ─────────────────────────────── */
