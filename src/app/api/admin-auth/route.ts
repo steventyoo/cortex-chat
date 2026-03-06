@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { validateToken, SESSION_COOKIE } from '@/lib/auth';
+import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 
 export async function POST(request: NextRequest) {
   // Must be logged in first
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateToken(token))) {
+  if (!token || !(await validateUserSession(token))) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
 // Check admin status
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateToken(token))) {
+  if (!token || !(await validateUserSession(token))) {
     return Response.json({ isAdmin: false });
   }
 

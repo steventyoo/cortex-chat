@@ -113,8 +113,9 @@ export async function fetchAllProjectData(
   };
 }
 
-export async function fetchProjectList(): Promise<ProjectSummary[]> {
-  const records = await fetchTable('PROJECTS');
+export async function fetchProjectList(orgId?: string): Promise<ProjectSummary[]> {
+  const filter = orgId ? `{Organization ID}='${orgId}'` : undefined;
+  const records = await fetchTable('PROJECTS', filter);
   return records
     .map((rec) => ({
       projectId: String(rec.fields['Project ID'] || ''),
@@ -125,15 +126,25 @@ export async function fetchProjectList(): Promise<ProjectSummary[]> {
     .filter((p) => p.projectId.length > 0); // Skip empty records
 }
 
+/** Verify that a project belongs to the given org. */
+export async function verifyProjectAccess(projectId: string, orgId: string): Promise<boolean> {
+  const records = await fetchTable(
+    'PROJECTS',
+    `AND({Project ID}='${projectId}',{Organization ID}='${orgId}')`
+  );
+  return records.length > 0;
+}
+
 function computeHealthStatus(value: number, warningThreshold: number, criticalThreshold: number): HealthStatus {
   if (value >= criticalThreshold) return 'critical';
   if (value >= warningThreshold) return 'warning';
   return 'healthy';
 }
 
-export async function fetchProjectHealthData(): Promise<ProjectHealth[]> {
-  // Fetch all projects
-  const projectRecords = await fetchTable('PROJECTS');
+export async function fetchProjectHealthData(orgId?: string): Promise<ProjectHealth[]> {
+  // Fetch all projects (optionally filtered by org)
+  const projectFilter = orgId ? `{Organization ID}='${orgId}'` : undefined;
+  const projectRecords = await fetchTable('PROJECTS', projectFilter);
   const projects = projectRecords
     .map((rec) => rec.fields)
     .filter((p) => String(p['Project ID'] || '').length > 0);
@@ -297,9 +308,10 @@ export async function fetchProjectHealthData(): Promise<ProjectHealth[]> {
 }
 
 export async function resolveProjectId(
-  userQuery: string
+  userQuery: string,
+  orgId?: string
 ): Promise<string | null> {
-  const projects = await fetchProjectList();
+  const projects = await fetchProjectList(orgId);
   if (projects.length === 0) return null;
 
   const query = userQuery.toLowerCase();

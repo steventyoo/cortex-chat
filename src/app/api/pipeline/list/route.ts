@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { validateToken, SESSION_COOKIE } from '@/lib/auth';
+import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { parsePipelineItem } from '@/lib/pipeline';
 
 const BASE_URL = 'https://api.airtable.com/v0';
@@ -18,7 +18,7 @@ function getBaseId() {
 export async function GET(request: NextRequest) {
   // Auth check
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateToken(token))) {
+  if (!token || !(await validateUserSession(token))) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -27,8 +27,8 @@ export async function GET(request: NextRequest) {
   const projectId = searchParams.get('projectId');
   const status = searchParams.get('status');
 
-  // Build filter formula
-  const filters: string[] = [];
+  // Build filter formula — always exclude soft-deleted items
+  const filters: string[] = [`{Status}!='deleted'`];
   if (projectId) {
     filters.push(`{Project ID}='${projectId}'`);
   }
@@ -36,10 +36,10 @@ export async function GET(request: NextRequest) {
     filters.push(`{Status}='${status}'`);
   }
 
-  let filterFormula = '';
+  let filterFormula: string;
   if (filters.length === 1) {
     filterFormula = filters[0];
-  } else if (filters.length > 1) {
+  } else {
     filterFormula = `AND(${filters.join(',')})`;
   }
 
@@ -49,9 +49,7 @@ export async function GET(request: NextRequest) {
       'sort[0][field]': 'Created At',
       'sort[0][direction]': 'desc',
     });
-    if (filterFormula) {
-      params.set('filterByFormula', filterFormula);
-    }
+    params.set('filterByFormula', filterFormula);
 
     const url = `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?${params}`;
     const response = await fetch(url, { headers: getHeaders(), cache: 'no-store' });

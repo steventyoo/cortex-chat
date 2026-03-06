@@ -1,0 +1,499 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
+
+// ─── Types ────────────────────────────────────────────────
+interface CostCode {
+  code: string;
+  description: string;
+  budget: number;
+  actual: number;
+  variance: number;
+  variancePercent: number;
+  status: string;
+}
+
+interface ProductionItem {
+  code: string;
+  description: string;
+  budgetHours: number;
+  actualHours: number;
+  hoursRemaining: number;
+  performanceRatio: number;
+  status: string;
+}
+
+interface ChangeOrder {
+  coId: string;
+  scope: string;
+  proposedAmount: number;
+  approvedAmount: number;
+  approvalStatus: string;
+  dateSubmitted: string;
+  isPending: boolean;
+}
+
+interface DashboardAlert {
+  type: string;
+  severity: string;
+  message: string;
+}
+
+interface StaffMember {
+  name: string;
+  role: string;
+}
+
+interface PredictionData {
+  estimateAtCompletion: number;
+  eacVariance: number;
+  eacVariancePercent: number;
+  budgetAtRisk: number;
+  burnMultiplier: number;
+  riskScore: number;
+  riskLevel: string;
+  laborEAC: number;
+  laborVariance: number;
+  pendingCOExposure: number;
+  topRisks: string[];
+}
+
+interface DashboardData {
+  projectId: string;
+  projectName: string;
+  projectStatus: string;
+  budgetOverview: {
+    contractValue: number;
+    revisedBudget: number;
+    jobToDate: number;
+    percentComplete: number;
+    totalCOValue: number;
+    budgetRemaining: number;
+    budgetVariance: number;
+    budgetVariancePercent: number;
+  };
+  costCodes: CostCode[];
+  production: {
+    items: ProductionItem[];
+    totalBudgetHours: number;
+    totalActualHours: number;
+    overallRatio: number;
+  };
+  changeOrders: {
+    items: ChangeOrder[];
+    totalProposed: number;
+    totalApproved: number;
+    pendingCount: number;
+    pendingAmount: number;
+  };
+  healthScore: number;
+  healthStatus: string;
+  alerts: DashboardAlert[];
+  staffing: StaffMember[];
+  recordCounts: Record<string, number>;
+}
+
+interface ProjectDashboardProps {
+  projectId: string;
+  projectName?: string;
+  onStartChat?: () => void;
+}
+
+// ─── Helpers ──────────────────────────────────────────────
+function fmt(n: number): string {
+  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
+  return `$${n.toFixed(0)}`;
+}
+
+function fmtHrs(n: number): string {
+  return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+function healthColor(status: string) {
+  if (status === 'critical') return { bg: 'bg-red-50', text: 'text-red-600', ring: 'ring-red-200', dot: 'bg-red-500' };
+  if (status === 'warning') return { bg: 'bg-amber-50', text: 'text-amber-600', ring: 'ring-amber-200', dot: 'bg-amber-500' };
+  return { bg: 'bg-emerald-50', text: 'text-emerald-600', ring: 'ring-emerald-200', dot: 'bg-emerald-500' };
+}
+
+function alertIcon(severity: string) {
+  if (severity === 'critical') return '🔴';
+  if (severity === 'warning') return '🟡';
+  return '🔵';
+}
+
+// ─── Main Component ───────────────────────────────────────
+export default function ProjectDashboard({ projectId, projectName, onStartChat }: ProjectDashboardProps) {
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [prediction, setPrediction] = useState<PredictionData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    // Fetch dashboard + predictions in parallel
+    Promise.all([
+      fetch(`/api/dashboard?projectId=${encodeURIComponent(projectId)}`).then((res) => {
+        if (res.status === 401) { window.location.href = '/login'; return null; }
+        if (!res.ok) throw new Error('Failed to fetch');
+        return res.json();
+      }),
+      fetch(`/api/intelligence?projectId=${encodeURIComponent(projectId)}`).then((res) =>
+        res.ok ? res.json() : null
+      ).catch(() => null),
+    ])
+      .then(([dashData, predData]) => {
+        if (dashData) setData(dashData);
+        if (predData && !predData.error) setPrediction(predData);
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [projectId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center gap-3">
+          <div className="w-[48px] h-[48px] rounded-[14px] bg-[#1a1a1a] flex items-center justify-center">
+            <motion.svg animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }} width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+              <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+              <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+            </motion.svg>
+          </div>
+          <p className="text-[13px] text-[#999]">Loading dashboard...</p>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh] text-center px-4">
+        <div>
+          <p className="text-[16px] font-medium text-[#1a1a1a] mb-1">Unable to load dashboard</p>
+          <p className="text-[13px] text-[#999]">{error || 'No data'}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const hc = healthColor(data.healthStatus);
+  const b = data.budgetOverview;
+  const prod = data.production;
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
+      {/* ─── Header ─────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-[22px] font-bold text-[#1a1a1a] tracking-[-0.02em]">
+              {data.projectName}
+            </h1>
+            <p className="text-[13px] text-[#999] mt-0.5">{data.projectId} &middot; {data.projectStatus || 'Active'}</p>
+          </div>
+          {onStartChat && (
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={onStartChat}
+              className="px-4 py-2 rounded-xl bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors flex items-center gap-2"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+              </svg>
+              Ask Cortex
+            </motion.button>
+          )}
+        </div>
+      </motion.div>
+
+      {/* ─── KPI Cards ──────────────────────────────── */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.05 }}
+        className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6"
+      >
+        {/* Health Score */}
+        <div className={`rounded-2xl p-4 ring-1 ${hc.bg} ${hc.ring}`}>
+          <p className="text-[11px] font-medium uppercase tracking-wider text-[#999] mb-1">Health Score</p>
+          <div className="flex items-end gap-2">
+            <span className={`text-[36px] font-bold leading-none tracking-tight ${hc.text}`}>{data.healthScore}</span>
+            <span className="text-[14px] text-[#999] mb-1">/100</span>
+          </div>
+          <div className="mt-2 w-full h-2 rounded-full bg-white/60">
+            <div
+              className={`h-2 rounded-full transition-all ${data.healthStatus === 'critical' ? 'bg-red-500' : data.healthStatus === 'warning' ? 'bg-amber-500' : 'bg-emerald-500'}`}
+              style={{ width: `${data.healthScore}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Budget */}
+        <div className="rounded-2xl p-4 ring-1 ring-[#e8e8e8] bg-white">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-[#999] mb-1">Budget Status</p>
+          <div className="flex items-end gap-1.5">
+            <span className="text-[22px] font-bold text-[#1a1a1a] leading-none">{fmt(b.jobToDate)}</span>
+            <span className="text-[13px] text-[#999] mb-0.5">/ {fmt(b.revisedBudget)}</span>
+          </div>
+          <div className="mt-2 w-full h-2 rounded-full bg-[#f0f0f0]">
+            <div
+              className={`h-2 rounded-full ${b.budgetVariancePercent > 5 ? 'bg-red-500' : b.budgetVariancePercent > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+              style={{ width: `${Math.min(100, b.percentComplete)}%` }}
+            />
+          </div>
+          <p className="text-[11px] text-[#999] mt-1.5">{b.percentComplete.toFixed(0)}% complete</p>
+        </div>
+
+        {/* Labor */}
+        <div className="rounded-2xl p-4 ring-1 ring-[#e8e8e8] bg-white">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-[#999] mb-1">Labor Ratio</p>
+          <div className="flex items-end gap-1.5">
+            <span className={`text-[22px] font-bold leading-none ${prod.overallRatio > 1.15 ? 'text-red-600' : prod.overallRatio > 1.0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+              {prod.overallRatio.toFixed(2)}
+            </span>
+          </div>
+          <p className="text-[11px] text-[#999] mt-1.5">
+            {fmtHrs(prod.totalActualHours)} / {fmtHrs(prod.totalBudgetHours)} hrs
+          </p>
+          <p className={`text-[11px] mt-0.5 ${prod.overallRatio > 1.0 ? 'text-red-500' : 'text-emerald-500'}`}>
+            {prod.overallRatio > 1.0
+              ? `${((prod.overallRatio - 1) * 100).toFixed(0)}% over budget`
+              : `${((1 - prod.overallRatio) * 100).toFixed(0)}% under budget`}
+          </p>
+        </div>
+
+        {/* Change Orders */}
+        <div className="rounded-2xl p-4 ring-1 ring-[#e8e8e8] bg-white">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-[#999] mb-1">Change Orders</p>
+          <div className="flex items-end gap-1.5">
+            <span className="text-[22px] font-bold text-[#1a1a1a] leading-none">{data.changeOrders.items.length}</span>
+            <span className="text-[13px] text-[#999] mb-0.5">total</span>
+          </div>
+          <p className="text-[11px] text-[#999] mt-1.5">
+            {fmt(data.changeOrders.totalProposed)} proposed
+          </p>
+          {data.changeOrders.pendingCount > 0 && (
+            <p className="text-[11px] text-amber-600 mt-0.5">
+              {data.changeOrders.pendingCount} pending ({fmt(data.changeOrders.pendingAmount)})
+            </p>
+          )}
+        </div>
+      </motion.div>
+
+      {/* ─── Predictive Intelligence ────────────────── */}
+      {prediction && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.08 }}
+          className="mb-6"
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+            {/* EAC */}
+            <div className={`rounded-2xl p-4 ring-1 ${prediction.eacVariancePercent > 5 ? 'ring-red-200 bg-red-50' : prediction.eacVariancePercent > 0 ? 'ring-amber-200 bg-amber-50' : 'ring-emerald-200 bg-emerald-50'}`}>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-[#999] mb-1">Projected at Completion</p>
+              <span className={`text-[22px] font-bold leading-none ${prediction.eacVariancePercent > 5 ? 'text-red-600' : prediction.eacVariancePercent > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                {fmt(prediction.estimateAtCompletion)}
+              </span>
+              <p className={`text-[11px] mt-1.5 ${prediction.eacVariance > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                {prediction.eacVariance > 0
+                  ? `${fmt(prediction.eacVariance)} over budget`
+                  : `${fmt(Math.abs(prediction.eacVariance))} under budget`}
+              </p>
+            </div>
+
+            {/* Risk Score */}
+            <div className={`rounded-2xl p-4 ring-1 ${prediction.riskScore >= 60 ? 'ring-red-200 bg-red-50' : prediction.riskScore >= 30 ? 'ring-amber-200 bg-amber-50' : 'ring-emerald-200 bg-emerald-50'}`}>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-[#999] mb-1">Risk Score</p>
+              <div className="flex items-end gap-2">
+                <span className={`text-[36px] font-bold leading-none tracking-tight ${prediction.riskScore >= 60 ? 'text-red-600' : prediction.riskScore >= 30 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                  {prediction.riskScore}
+                </span>
+                <span className="text-[14px] text-[#999] mb-1">/100</span>
+              </div>
+              <p className="text-[11px] text-[#999] mt-1.5 capitalize">{prediction.riskLevel} risk</p>
+            </div>
+
+            {/* Burn Rate */}
+            <div className={`rounded-2xl p-4 ring-1 ${prediction.burnMultiplier > 1.15 ? 'ring-red-200 bg-red-50' : prediction.burnMultiplier > 1.0 ? 'ring-amber-200 bg-amber-50' : 'ring-emerald-200 bg-emerald-50'}`}>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-[#999] mb-1">Burn Rate</p>
+              <span className={`text-[22px] font-bold leading-none ${prediction.burnMultiplier > 1.15 ? 'text-red-600' : prediction.burnMultiplier > 1.0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                {prediction.burnMultiplier.toFixed(2)}x
+              </span>
+              <p className="text-[11px] text-[#999] mt-1.5">
+                {prediction.burnMultiplier > 1.0
+                  ? `Spending ${((prediction.burnMultiplier - 1) * 100).toFixed(0)}% faster than planned`
+                  : 'On track or under-spending'}
+              </p>
+            </div>
+          </div>
+
+          {/* Risk Narrative */}
+          {prediction.topRisks.length > 0 && (
+            <div className="rounded-2xl ring-1 ring-[#e8e8e8] bg-white p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[13px]">&#129504;</span>
+                <h3 className="text-[13px] font-semibold text-[#1a1a1a]">Cortex Intelligence</h3>
+              </div>
+              <div className="space-y-1.5">
+                {prediction.topRisks.map((risk, i) => (
+                  <p key={i} className="text-[12px] text-[#6b6b6b] flex items-start gap-2">
+                    <span className="text-[10px] mt-0.5">&#x2022;</span>
+                    {risk}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+        </motion.div>
+      )}
+
+      {/* ─── Alerts ─────────────────────────────────── */}
+      {data.alerts.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="mb-6 rounded-2xl ring-1 ring-[#e8e8e8] bg-white overflow-hidden"
+        >
+          <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
+            <span className="text-[14px]">&#9888;&#65039;</span>
+            <h3 className="text-[13px] font-semibold text-[#1a1a1a]">Active Alerts</h3>
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#f0f0f0] text-[#666]">{data.alerts.length}</span>
+          </div>
+          <div className="divide-y divide-[#f5f5f5]">
+            {data.alerts.map((alert, i) => (
+              <div key={i} className="px-5 py-2.5 flex items-start gap-2.5">
+                <span className="text-[12px] mt-0.5">{alertIcon(alert.severity)}</span>
+                <div>
+                  <span className="text-[12px] text-[#37352f]">{alert.message}</span>
+                  <span className="text-[10px] text-[#999] ml-2 uppercase">{alert.type.replace('_', ' ')}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+
+      {/* ─── Two-Column: Production + Change Orders ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Production Performance */}
+        {prod.items.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="rounded-2xl ring-1 ring-[#e8e8e8] bg-white overflow-hidden"
+          >
+            <div className="px-5 py-3 border-b border-[#f0f0f0]">
+              <h3 className="text-[13px] font-semibold text-[#1a1a1a]">Production Performance</h3>
+              <p className="text-[11px] text-[#999]">Labor hours by activity — ratio &gt; 1.0 = over budget</p>
+            </div>
+            <div className="divide-y divide-[#f5f5f5]">
+              {prod.items.map((p, i) => {
+                const maxRatio = Math.max(...prod.items.map(x => x.performanceRatio), 1.5);
+                const barWidth = Math.min(100, (p.performanceRatio / maxRatio) * 100);
+                return (
+                  <div key={i} className="px-5 py-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[12px] font-medium text-[#1a1a1a]">{p.code}</span>
+                        <span className="text-[11px] text-[#999] ml-1.5 truncate">{p.description}</span>
+                      </div>
+                      <span className={`text-[13px] font-bold ml-3 ${p.status === 'critical' ? 'text-red-600' : p.status === 'warning' ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {p.performanceRatio.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-[#f0f0f0]">
+                      <div
+                        className={`h-2 rounded-full transition-all ${p.status === 'critical' ? 'bg-red-400' : p.status === 'warning' ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                        style={{ width: `${barWidth}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between mt-1">
+                      <span className="text-[10px] text-[#999]">{fmtHrs(p.actualHours)} / {fmtHrs(p.budgetHours)} hrs</span>
+                      <span className={`text-[10px] ${p.performanceRatio > 1 ? 'text-red-500' : 'text-emerald-500'}`}>
+                        {p.performanceRatio > 1
+                          ? `+${fmtHrs(p.actualHours - p.budgetHours)} hrs over`
+                          : `${fmtHrs(p.budgetHours - p.actualHours)} hrs under`}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+
+        {/* Change Orders */}
+        {data.changeOrders.items.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25 }}
+            className="rounded-2xl ring-1 ring-[#e8e8e8] bg-white overflow-hidden"
+          >
+            <div className="px-5 py-3 border-b border-[#f0f0f0]">
+              <h3 className="text-[13px] font-semibold text-[#1a1a1a]">Change Orders</h3>
+              <p className="text-[11px] text-[#999]">
+                {fmt(data.changeOrders.totalProposed)} total
+                {data.changeOrders.pendingCount > 0 && ` · ${data.changeOrders.pendingCount} pending`}
+              </p>
+            </div>
+            <div className="divide-y divide-[#f5f5f5] max-h-[400px] overflow-y-auto">
+              {data.changeOrders.items.map((co, i) => (
+                <div key={i} className="px-5 py-3">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[12px] font-semibold text-[#1a1a1a]">{co.coId || `CO-${i + 1}`}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                        co.isPending
+                          ? 'bg-amber-50 text-amber-700'
+                          : co.approvalStatus.toLowerCase().includes('approv')
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {co.approvalStatus || 'Unknown'}
+                      </span>
+                    </div>
+                    <span className="text-[13px] font-semibold text-[#1a1a1a]">{fmt(co.proposedAmount)}</span>
+                  </div>
+                  <p className="text-[11px] text-[#6b6b6b] line-clamp-2">{co.scope}</p>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </div>
+
+      {/* ─── Staffing ───────────────────────────────── */}
+      {data.staffing.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="rounded-2xl ring-1 ring-[#e8e8e8] bg-white p-5"
+        >
+          <h3 className="text-[13px] font-semibold text-[#1a1a1a] mb-3">Team</h3>
+          <div className="flex flex-wrap gap-2">
+            {data.staffing.map((s, i) => (
+              <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#f7f7f5] text-[12px]">
+                <div className="w-6 h-6 rounded-full bg-[#e8e8e8] flex items-center justify-center text-[10px] font-bold text-[#666]">
+                  {s.name.charAt(0)}
+                </div>
+                <div>
+                  <span className="font-medium text-[#1a1a1a]">{s.name}</span>
+                  <span className="text-[#999] ml-1">{s.role}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
+    </div>
+  );
+}

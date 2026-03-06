@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { validateToken, SESSION_COOKIE } from '@/lib/auth';
+import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { fetchAllProjectData } from '@/lib/airtable';
 import { generateProjectBrief } from '@/lib/pdf-brief';
 
@@ -10,7 +10,8 @@ export const maxDuration = 30;
 export async function POST(request: NextRequest) {
   // 1. Auth check
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateToken(token))) {
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },

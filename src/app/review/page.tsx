@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
-import { validateToken, SESSION_COOKIE } from '@/lib/auth';
+import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import PipelineReview from '@/components/PipelineReview';
 
 export const dynamic = 'force-dynamic';
@@ -10,7 +10,7 @@ export default async function ReviewPage() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
 
-  if (!token || !(await validateToken(token))) {
+  if (!token || !(await validateUserSession(token))) {
     redirect('/');
   }
 

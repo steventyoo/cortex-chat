@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { validateToken, SESSION_COOKIE } from '@/lib/auth';
+import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -8,7 +8,10 @@ export async function middleware(request: NextRequest) {
   // Allow public paths
   if (
     pathname === '/login' ||
+    pathname === '/signup' ||
+    pathname === '/onboarding' ||
     pathname.startsWith('/api/auth') ||
+    pathname.startsWith('/api/onboarding') ||
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon') ||
     pathname === '/cortex-logo.svg' ||
@@ -17,14 +20,32 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check auth
+  // Allow cron-triggered endpoints (auth handled inside the route)
+  if (pathname === '/api/pipeline/scan-drive') {
+    return NextResponse.next();
+  }
+
+  // Check JWT auth
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateToken(token))) {
+  if (!token) {
     const loginUrl = new URL('/login', request.url);
     return NextResponse.redirect(loginUrl);
   }
 
-  return NextResponse.next();
+  const session = await validateUserSession(token);
+  if (!session) {
+    const loginUrl = new URL('/login', request.url);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // Propagate session info to API routes via headers
+  const response = NextResponse.next();
+  response.headers.set('x-user-id', session.userId);
+  response.headers.set('x-org-id', session.orgId);
+  response.headers.set('x-user-email', session.email);
+  response.headers.set('x-user-role', session.role);
+
+  return response;
 }
 
 export const config = {

@@ -1,25 +1,36 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ProjectSummary, ConversationSummary } from '@/lib/types';
 import { formatCurrency } from '@/lib/utils';
+
+interface ProjectDoc {
+  id: string;
+  fileName: string;
+  documentType: string | null;
+  status: string;
+  createdAt: string;
+}
 
 interface SidebarProps {
   projects: ProjectSummary[];
   selectedProject: string | null;
   onSelectProject: (projectId: string) => void;
   onNewChat: () => void;
+  onGoHome?: () => void;
   isOpen: boolean;
   onToggle: () => void;
   conversations?: ConversationSummary[];
   activeConversationId?: string | null;
   onSelectConversation?: (id: string) => void;
   onDeleteConversation?: (id: string) => void;
-  currentView?: 'chat' | 'pipeline';
-  onNavigate?: (view: 'chat' | 'pipeline') => void;
+  currentView?: 'chat' | 'pipeline' | 'dashboard';
+  onNavigate?: (view: 'chat' | 'pipeline' | 'dashboard') => void;
   isAdmin?: boolean;
-  onAdminAuth?: (password: string) => Promise<boolean>;
+  userName?: string;
+  userEmail?: string;
+  onLogout?: () => void;
 }
 
 function timeAgo(timestamp: number): string {
@@ -39,6 +50,7 @@ export default function Sidebar({
   selectedProject,
   onSelectProject,
   onNewChat,
+  onGoHome,
   isOpen,
   onToggle,
   conversations = [],
@@ -48,52 +60,38 @@ export default function Sidebar({
   currentView = 'chat',
   onNavigate,
   isAdmin = false,
-  onAdminAuth,
+  userName,
+  userEmail,
+  onLogout,
 }: SidebarProps) {
-  const [showAdminPrompt, setShowAdminPrompt] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
-  const [adminError, setAdminError] = useState(false);
-  const [adminLoading, setAdminLoading] = useState(false);
-  const clickCountRef = useRef(0);
-  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
 
-  // Triple-click "Project Cortex" to reveal admin prompt
-  const handleLogoClick = useCallback(() => {
-    clickCountRef.current += 1;
-
-    if (clickTimerRef.current) {
-      clearTimeout(clickTimerRef.current);
+  // Fetch documents for selected project
+  useEffect(() => {
+    if (!selectedProject) {
+      setProjectDocs([]);
+      return;
     }
-
-    if (clickCountRef.current >= 3) {
-      clickCountRef.current = 0;
-      if (!isAdmin) {
-        setShowAdminPrompt(true);
-        setAdminPassword('');
-        setAdminError(false);
-      }
-    } else {
-      clickTimerRef.current = setTimeout(() => {
-        clickCountRef.current = 0;
-      }, 500);
-    }
-  }, [isAdmin]);
-
-  const handleAdminSubmit = useCallback(async () => {
-    if (!adminPassword.trim() || !onAdminAuth) return;
-    setAdminLoading(true);
-    setAdminError(false);
-
-    const success = await onAdminAuth(adminPassword);
-    setAdminLoading(false);
-
-    if (success) {
-      setShowAdminPrompt(false);
-      setAdminPassword('');
-    } else {
-      setAdminError(true);
-    }
-  }, [adminPassword, onAdminAuth]);
+    setDocsLoading(true);
+    fetch(`/api/pipeline/list?projectId=${encodeURIComponent(selectedProject)}`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data?.items) {
+          setProjectDocs(
+            data.items.map((item: { id: string; fileName: string; documentType: string | null; status: string; createdAt: string }) => ({
+              id: item.id,
+              fileName: item.fileName,
+              documentType: item.documentType,
+              status: item.status,
+              createdAt: item.createdAt,
+            }))
+          );
+        }
+      })
+      .catch(() => setProjectDocs([]))
+      .finally(() => setDocsLoading(false));
+  }, [selectedProject]);
 
   return (
     <>
@@ -118,7 +116,6 @@ export default function Sidebar({
         <div className="p-3 pt-4">
           <div
             className="flex items-center gap-2.5 mb-3 px-2 cursor-default select-none"
-            onClick={handleLogoClick}
           >
             <div className="w-6 h-6 rounded-[6px] bg-[#1a1a1a] flex items-center justify-center">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
@@ -139,9 +136,23 @@ export default function Sidebar({
 
           <motion.button
             whileTap={{ scale: 0.98 }}
+            onClick={onGoHome}
+            className={`w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 ${
+              currentView === 'chat' && !selectedProject ? 'bg-[#ebebea] text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
+            }`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+            Home
+          </motion.button>
+
+          <motion.button
+            whileTap={{ scale: 0.98 }}
             onClick={onNewChat}
             className={`w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 ${
-              currentView === 'chat' ? 'text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
+              currentView === 'chat' && selectedProject ? 'text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
             }`}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -189,14 +200,63 @@ export default function Sidebar({
                       : 'text-[#6b6b6b] hover:bg-[#ebebea] hover:text-[#37352f]'
                   }`}
                 >
-                  <div className="font-medium truncate">
+                  <div className="font-medium truncate flex items-center gap-2">
+                    <span
+                      className={`inline-block w-[8px] h-[8px] rounded-full flex-shrink-0 ${
+                        project.status.toLowerCase().includes('complete') ||
+                        project.status.toLowerCase().includes('closed')
+                          ? 'bg-[#c0c0c0]'
+                          : 'bg-[#34c759]'
+                      }`}
+                    />
                     {project.projectName}
                   </div>
-                  <div className="text-[11px] mt-0.5 text-[#aeaeb2]">
+                  <div className="text-[11px] mt-0.5 text-[#aeaeb2] ml-[16px]">
                     {formatCurrency(project.contractValue)}
                   </div>
                 </motion.button>
               ))}
+            </div>
+          )}
+
+          {/* Project Documents */}
+          {selectedProject && (
+            <div className="mb-4">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-[#aeaeb2] mb-2 px-2">
+                Project Documents
+              </p>
+              {docsLoading ? (
+                <p className="text-[12px] text-[#b4b4b4] px-2">Loading...</p>
+              ) : projectDocs.length === 0 ? (
+                <p className="text-[12px] text-[#b4b4b4] px-2">No documents yet</p>
+              ) : (
+                <div className="space-y-0.5">
+                  {projectDocs.map((doc) => (
+                    <div
+                      key={doc.id}
+                      className="px-3 py-1.5 rounded-lg text-[12px]"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex-shrink-0">
+                          {doc.status === 'pushed' ? '✅' : doc.status === 'approved' ? '🟢' : doc.status === 'rejected' ? '🔴' : '🟡'}
+                        </span>
+                        <span className="text-[#37352f] truncate font-medium" title={doc.fileName}>
+                          {doc.fileName}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 ml-5 mt-0.5">
+                        {doc.documentType && (
+                          <span className="text-[10px] text-[#999]">{doc.documentType}</span>
+                        )}
+                        <span className="text-[10px] text-[#ccc]">·</span>
+                        <span className="text-[10px] text-[#999]">
+                          {doc.status === 'pushed' ? 'In DB' : doc.status === 'pending_review' ? 'Pending' : doc.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -266,88 +326,42 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-[#e8e8e8]">
-          <p className="text-[11px] text-[#b4b4b4] text-center">
-            Powered by Claude AI
-          </p>
+        {/* Footer — user info + logout */}
+        <div className="p-3 border-t border-[#e8e8e8]">
+          {userEmail ? (
+            <div className="flex items-center gap-2 px-2">
+              <div className="w-7 h-7 rounded-full bg-[#1a1a1a] flex items-center justify-center flex-shrink-0">
+                <span className="text-[11px] font-medium text-white">
+                  {(userName || userEmail).charAt(0).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex-1 min-w-0">
+                {userName && (
+                  <p className="text-[12px] font-medium text-[#37352f] truncate">{userName}</p>
+                )}
+                <p className="text-[11px] text-[#999] truncate">{userEmail}</p>
+              </div>
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  className="p-1.5 rounded-md hover:bg-[#ebebea] text-[#999] hover:text-[#666] transition-colors flex-shrink-0"
+                  title="Sign out"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                    <polyline points="16 17 21 12 16 7" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="text-[11px] text-[#b4b4b4] text-center">
+              Powered by Claude AI
+            </p>
+          )}
         </div>
       </motion.aside>
-
-      {/* Admin password modal */}
-      <AnimatePresence>
-        {showAdminPrompt && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
-            onClick={() => setShowAdminPrompt(false)}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-6"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-8 h-8 rounded-lg bg-[#1a1a1a] flex items-center justify-center">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                    <path d="M7 11V7a5 5 0 0110 0v4" />
-                  </svg>
-                </div>
-                <div>
-                  <p className="text-[14px] font-semibold text-[#1a1a1a]">Admin Access</p>
-                  <p className="text-[11px] text-[#999]">Enter admin password</p>
-                </div>
-              </div>
-
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleAdminSubmit();
-                }}
-              >
-                <input
-                  type="password"
-                  value={adminPassword}
-                  onChange={(e) => { setAdminPassword(e.target.value); setAdminError(false); }}
-                  placeholder="Password"
-                  autoFocus
-                  className={`w-full px-3 py-2.5 rounded-xl border text-[14px] mb-3 focus:outline-none focus:ring-2 transition-colors ${
-                    adminError
-                      ? 'border-red-300 focus:ring-red-200 bg-red-50'
-                      : 'border-[#e0e0e0] focus:ring-[#007aff]/30 focus:border-[#007aff]'
-                  }`}
-                />
-
-                {adminError && (
-                  <p className="text-[12px] text-red-500 mb-3">Invalid password</p>
-                )}
-
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowAdminPrompt(false)}
-                    className="flex-1 py-2 rounded-xl text-[13px] text-[#666] hover:bg-[#f0f0f0] transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!adminPassword.trim() || adminLoading}
-                    className="flex-1 py-2 rounded-xl bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40"
-                  >
-                    {adminLoading ? 'Checking...' : 'Unlock'}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </>
   );
 }

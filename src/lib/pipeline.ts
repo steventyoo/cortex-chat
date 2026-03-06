@@ -10,7 +10,8 @@ export type PipelineStatus =
   | 'pending_review'
   | 'approved'
   | 'rejected'
-  | 'pushed';
+  | 'pushed'
+  | 'deleted';
 
 export type DocumentType =
   | 'Change Order'
@@ -35,6 +36,13 @@ export interface ExtractionResult {
   documentType: DocumentType;
   documentTypeConfidence: number;
   fields: Record<string, ExtractedField>;
+  /** Multi-record extraction: array of records for tabular data (e.g., 24 JOB_COSTS line items) */
+  records?: Array<Record<string, ExtractedField>>;
+  /** Target table override — for documents that push to multiple tables */
+  targetTables?: Array<{
+    table: string;
+    records: Array<Record<string, ExtractedField>>;
+  }>;
   rawText?: string;
 }
 
@@ -73,10 +81,11 @@ export interface PipelineItem {
 // Extraction prompt templates per document type
 export const EXTRACTION_SYSTEM_PROMPT = `You are a construction document data extraction AI for OWP (One Way Plumbing LLC), a mechanical/plumbing subcontractor.
 
-Your job is to read construction documents and extract structured data fields. You must be accurate and assign confidence scores (0.0 to 1.0) to each extracted field based on how certain you are.
+Your job is to read construction documents and extract ALL structured data — every line item, every row, every record. You must be thorough and extract COMPLETE data, not summaries.
 
 ## Rules
 - Extract ONLY what's explicitly stated in the document. Never infer or fabricate data.
+- **CRITICAL: Extract EVERY individual line item / row.** For Job Cost Reports, extract ALL cost code line items. For spreadsheets, extract ALL rows. For Change Orders, extract all COs.
 - Assign confidence scores honestly:
   - 0.95-1.0: Field is clearly stated with no ambiguity
   - 0.80-0.94: Field is likely correct but some interpretation needed
@@ -85,16 +94,57 @@ Your job is to read construction documents and extract structured data fields. Y
 - If a field cannot be found, set value to null and confidence to 0.0
 - For dollar amounts, extract as numbers (no $ sign)
 - For dates, use ISO format (YYYY-MM-DD)
+- For percentages, extract as decimal numbers (e.g., 84.5 not 0.845)
+
+## Multi-Record Extraction
+Many construction documents contain MULTIPLE records (line items, rows, cost codes, etc.). You MUST extract each one individually.
+
+**For Job Cost Reports / Job Reports:**
+- Extract EVERY cost code line item into "records" array, targeting JOB_COSTS table
+- Each record: Cost Code, Description, Contract Budget, Estimated Cost at Completion, Variance, % Over/Under
+- ALSO extract production/labor data into "targetTables" with table "PRODUCTION"
+- Each production record: Cost Code, Activity Description, Budget Labor Hours, Actual Labor Hours, Hours to Complete, Performance Ratio, Productivity Indicator
+- Include a PROJECT summary record in "fields" with totals
+
+**For Change Order documents (including COR spreadsheets):**
+- Extract each Change Order as an individual record in "records" array
+- Each record: CO ID, CO Type, Scope Description, Date Submitted, Labor amounts, Material amounts, Total Amount, Approval Status
+
+**For Excel spreadsheets with tabular data:**
+- Extract EVERY row as a separate record
+- Map columns to the appropriate field names
 
 ## Response Format
-Respond with ONLY valid JSON (no markdown, no explanation). The format must be:
+Respond with ONLY valid JSON (no markdown, no explanation).
+
+**For single-record documents:**
 {
-  "documentType": "Change Order" | "ASI" | "RFI" | "Invoice" | "Daily Report" | "Submittal" | "Contract" | "Job Cost Report" | "Schedule" | "Other",
+  "documentType": "Change Order",
   "documentTypeConfidence": 0.95,
   "fields": {
-    "fieldName": { "value": "extracted value", "confidence": 0.95 },
-    ...
+    "fieldName": { "value": "extracted value", "confidence": 0.95 }
   }
+}
+
+**For multi-record documents (Job Cost Reports, spreadsheets with multiple rows):**
+{
+  "documentType": "Job Cost Report",
+  "documentTypeConfidence": 0.95,
+  "fields": {
+    "Report Date": { "value": "2025-02-28", "confidence": 0.95 },
+    "Total Budget": { "value": 4361802, "confidence": 0.95 }
+  },
+  "records": [
+    { "Cost Code": { "value": "260", "confidence": 0.95 }, "Description": { "value": "Plumbing Rough-In", "confidence": 0.95 }, "Contract Budget": { "value": 500000, "confidence": 0.95 }, "Estimated Cost": { "value": 480000, "confidence": 0.95 }, "Variance": { "value": 20000, "confidence": 0.95 }, "% Over/Under": { "value": -4.0, "confidence": 0.95 } }
+  ],
+  "targetTables": [
+    {
+      "table": "PRODUCTION",
+      "records": [
+        { "Cost Code": { "value": "260", "confidence": 0.95 }, "Activity Description": { "value": "Plumbing Rough-In", "confidence": 0.95 }, "Budget Labor Hours": { "value": 3000, "confidence": 0.95 }, "Actual Labor Hours": { "value": 2800, "confidence": 0.95 }, "Performance Ratio": { "value": 1.07, "confidence": 0.95 } }
+      ]
+    }
+  ]
 }`;
 
 // Field definitions per document type
@@ -133,6 +183,30 @@ export const DOCUMENT_TYPE_FIELDS: Record<string, string[]> = {
   'Job Cost Report': [
     'Report Date', 'Period', 'Total Budget',
     'Total Actual', 'Total Variance', 'Percent Complete',
+    // Per-row fields (in records array):
+    'Cost Code', 'Description', 'Contract Budget',
+    'Estimated Cost at Completion', 'Variance', '% Over/Under',
+  ],
+};
+
+// Fields for multi-record line items in each target table
+export const MULTI_RECORD_FIELDS: Record<string, string[]> = {
+  'JOB_COSTS': [
+    'Cost Code', 'Description', 'Contract Budget',
+    'Estimated Cost at Completion', 'Variance', '% Over/Under',
+    'JTD Cost', 'Cost to Complete', 'Invoice Amount', 'Vendor',
+  ],
+  'PRODUCTION': [
+    'Cost Code', 'Activity Description', 'Budget Labor Hours',
+    'Actual Labor Hours', 'Hours to Complete', 'Performance Ratio',
+    'Productivity Indicator', 'Hrs Remaining', 'Production Status',
+  ],
+  'CHANGE_ORDERS': [
+    'CO ID', 'CO Type', 'Scope Description', 'Date Submitted',
+    'Triggering Doc Ref', 'Labor Subtotal', 'Material Subtotal',
+    'Sub Tier Amount', 'OHP Rate', 'GC Proposed Amount',
+    'Owner Approved Amount', 'Approval Status', 'Change Reason',
+    'Schedule Impact',
   ],
 };
 
@@ -153,7 +227,8 @@ export const DOC_TYPE_TO_TABLE: Record<string, string> = {
 // Build extraction prompt for a specific document
 export function buildExtractionPrompt(sourceText: string, projectId?: string): string {
   const lines: string[] = [];
-  lines.push('Extract structured data from the following construction document.');
+  lines.push('Extract ALL structured data from the following construction document.');
+  lines.push('**IMPORTANT: Extract EVERY individual line item, row, and record. Do NOT summarize.**');
   if (projectId) {
     lines.push(`This document belongs to Project ID: ${projectId}`);
   }
@@ -163,6 +238,20 @@ export function buildExtractionPrompt(sourceText: string, projectId?: string): s
   lines.push('Available document types and their fields:');
   for (const [docType, fields] of Object.entries(DOCUMENT_TYPE_FIELDS)) {
     lines.push(`\n${docType}: ${fields.join(', ')}`);
+  }
+  lines.push('');
+  lines.push('## Multi-Record Extraction Rules:');
+  lines.push('- For Job Cost Reports: Put EACH cost code as a separate object in the "records" array.');
+  lines.push('  Also extract production/labor data into "targetTables" with table="PRODUCTION".');
+  lines.push('- For spreadsheets with multiple rows: Put EACH row as a separate object in "records".');
+  lines.push('- For Change Order spreadsheets with multiple COs: Put EACH CO in the "records" array.');
+  lines.push('- Use "fields" for document-level summary data (totals, dates, etc.).');
+  lines.push('- Use "records" for individual line items that go to the primary target table.');
+  lines.push('- Use "targetTables" for line items that go to a DIFFERENT table (e.g., PRODUCTION data from a Job Cost Report).');
+  lines.push('');
+  lines.push('Target table field names for multi-record extraction:');
+  for (const [table, fields] of Object.entries(MULTI_RECORD_FIELDS)) {
+    lines.push(`  ${table}: ${fields.join(', ')}`);
   }
   lines.push('\n--- DOCUMENT TEXT ---');
   lines.push(sourceText);
@@ -178,14 +267,38 @@ export function generatePipelineId(): string {
   return `PL-${datePart}-${randomPart}`;
 }
 
-// Compute overall confidence from extracted fields
+// Compute overall confidence from extracted fields (including multi-record)
 export function computeOverallConfidence(extraction: ExtractionResult): number {
-  const fields = Object.values(extraction.fields);
-  if (fields.length === 0) return 0;
-  const nonNull = fields.filter((f) => f.value !== null);
-  if (nonNull.length === 0) return 0;
-  const sum = nonNull.reduce((acc, f) => acc + f.confidence, 0);
-  return Math.round((sum / nonNull.length) * 100) / 100;
+  const allFields: ExtractedField[] = [];
+
+  // Summary fields
+  for (const f of Object.values(extraction.fields)) {
+    if (f.value !== null) allFields.push(f);
+  }
+
+  // Multi-record fields
+  if (extraction.records) {
+    for (const rec of extraction.records) {
+      for (const f of Object.values(rec)) {
+        if (f.value !== null) allFields.push(f);
+      }
+    }
+  }
+
+  // Target table fields
+  if (extraction.targetTables) {
+    for (const tt of extraction.targetTables) {
+      for (const rec of tt.records) {
+        for (const f of Object.values(rec)) {
+          if (f.value !== null) allFields.push(f);
+        }
+      }
+    }
+  }
+
+  if (allFields.length === 0) return 0;
+  const sum = allFields.reduce((acc, f) => acc + f.confidence, 0);
+  return Math.round((sum / allFields.length) * 100) / 100;
 }
 
 // Get confidence color class
@@ -225,6 +338,8 @@ export function getStatusDisplay(status: PipelineStatus): { label: string; color
       return { label: 'Rejected', color: 'text-red-700', bgColor: 'bg-red-100' };
     case 'pushed':
       return { label: 'Pushed to DB', color: 'text-green-800', bgColor: 'bg-green-100' };
+    case 'deleted':
+      return { label: 'Deleted', color: 'text-gray-400', bgColor: 'bg-gray-50' };
   }
 }
 

@@ -32,6 +32,7 @@ import {
   DOCUMENT_TYPE_FIELDS,
 } from '@/lib/pipeline';
 import { fetchProjectList } from '@/lib/airtable';
+import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 
 const BASE_URL = 'https://api.airtable.com/v0';
 const MAX_FILES_PER_RUN = 3; // Stay within 60s timeout
@@ -54,14 +55,16 @@ export const maxDuration = 60;
  * Vercel Cron sends an Authorization header with CRON_SECRET.
  */
 export async function GET(request: NextRequest) {
-  // Auth: accept either CRON_SECRET or admin cookie
+  // Auth: accept CRON_SECRET, admin cookie, or valid session (for logged-in users on Pipeline page)
   const authHeader = request.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
 
   const isCronCall = cronSecret && authHeader === `Bearer ${cronSecret}`;
   const isAdminCall = request.cookies.get('cortex-admin')?.value === 'true';
+  const sessionToken = request.cookies.get(SESSION_COOKIE)?.value;
+  const isLoggedIn = sessionToken ? await validateUserSession(sessionToken) : false;
 
-  if (!isCronCall && !isAdminCall) {
+  if (!isCronCall && !isAdminCall && !isLoggedIn) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -78,13 +81,18 @@ export async function GET(request: NextRequest) {
     const allDriveFiles = await listAllDriveFiles();
     const supportedFiles = allDriveFiles.filter((f) => isSupportedFileType(f.mimeType));
 
-    // 2. Get already-processed file IDs from PIPELINE_LOG
-    const processedFileUrls = await getProcessedDriveFileIds();
+    // 2. Get already-processed files from PIPELINE_LOG (by URL and by name+project)
+    const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles();
 
-    // 3. Find new files (not yet in pipeline)
-    const newFiles = supportedFiles.filter(
-      (f) => !processedFileUrls.has(buildDriveFileUrl(f.id))
-    );
+    // 3. Find new files (not yet in pipeline) — check both URL and name dedup
+    const newFiles = supportedFiles.filter((f) => {
+      // Primary dedup: exact Drive file ID
+      if (processedFileUrls.has(buildDriveFileUrl(f.id))) return false;
+      // Secondary dedup: same file name + same project folder (catches re-scans)
+      const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
+      if (processedNameKeys.has(nameKey)) return false;
+      return true;
+    });
 
     if (newFiles.length === 0) {
       return Response.json({
@@ -146,8 +154,17 @@ export async function GET(request: NextRequest) {
     });
   } catch (err) {
     console.error('Drive scan error:', err);
+    const detail = err instanceof Error ? err.message : 'Unknown';
+    // Include more context for debugging
+    const hint = detail.includes('invalid_grant') || detail.includes('private key')
+      ? 'Check that GOOGLE_PRIVATE_KEY is correctly formatted with real newlines'
+      : detail.includes('notFound') || detail.includes('404')
+      ? 'Check that the Drive folder is shared with the service account email'
+      : detail.includes('403') || detail.includes('forbidden')
+      ? 'The service account does not have access. Share the Drive folder with the service account email as a Viewer.'
+      : undefined;
     return Response.json(
-      { error: 'Drive scan failed', detail: err instanceof Error ? err.message : 'Unknown' },
+      { error: 'Drive scan failed', detail, ...(hint && { hint }) },
       { status: 500 }
     );
   }
@@ -156,49 +173,56 @@ export async function GET(request: NextRequest) {
 // ─── Helper Functions ────────────────────────────────────────────
 
 /**
- * Get all Drive file URLs already in PIPELINE_LOG to avoid reprocessing.
+ * Get all Drive file URLs AND file names already in PIPELINE_LOG to avoid reprocessing.
+ * Returns a Set of gdrive:// URLs for deduplication.
+ * Also returns a Set of "fileName|projectId" keys as a secondary check.
  */
-async function getProcessedDriveFileIds(): Promise<Set<string>> {
+async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: Set<string> }> {
   const urls = new Set<string>();
+  const nameKeys = new Set<string>();
+
+  function addRecord(record: { fields: Record<string, unknown> }) {
+    const fileUrl = record.fields['File URL'];
+    if (fileUrl) urls.add(String(fileUrl));
+    const fileName = record.fields['File Name'];
+    const projectId = record.fields['Project ID'];
+    if (fileName) {
+      nameKeys.add(`${String(fileName).toLowerCase()}|${String(projectId || '').toLowerCase()}`);
+    }
+  }
 
   try {
-    // Fetch all PIPELINE_LOG records that have a File URL starting with "gdrive://"
+    // Fetch ALL PIPELINE_LOG records to catch duplicates by URL and name.
+    // Use fields[] array format for Airtable REST API (NOT JSON.stringify).
+    const params = new URLSearchParams({ pageSize: '100' });
+    params.append('fields[]', 'File URL');
+    params.append('fields[]', 'File Name');
+    params.append('fields[]', 'Project ID');
+
     const res = await fetch(
-      `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?` +
-        new URLSearchParams({
-          filterByFormula: `SEARCH("gdrive://", {File URL}) > 0`,
-          fields: JSON.stringify(['File URL']),
-          pageSize: '100',
-        }),
+      `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?${params}`,
       { headers: getHeaders() }
     );
 
     if (res.ok) {
       const data = await res.json();
-      for (const record of data.records || []) {
-        const fileUrl = record.fields['File URL'];
-        if (fileUrl) urls.add(String(fileUrl));
-      }
+      for (const record of data.records || []) addRecord(record);
 
       // Handle pagination
       let offset = data.offset;
       while (offset) {
+        const nextParams = new URLSearchParams({ pageSize: '100', offset });
+        nextParams.append('fields[]', 'File URL');
+        nextParams.append('fields[]', 'File Name');
+        nextParams.append('fields[]', 'Project ID');
+
         const nextRes = await fetch(
-          `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?` +
-            new URLSearchParams({
-              filterByFormula: `SEARCH("gdrive://", {File URL}) > 0`,
-              fields: JSON.stringify(['File URL']),
-              pageSize: '100',
-              offset,
-            }),
+          `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?${nextParams}`,
           { headers: getHeaders() }
         );
         if (nextRes.ok) {
           const nextData = await nextRes.json();
-          for (const record of nextData.records || []) {
-            const fileUrl = record.fields['File URL'];
-            if (fileUrl) urls.add(String(fileUrl));
-          }
+          for (const record of nextData.records || []) addRecord(record);
           offset = nextData.offset;
         } else {
           break;
@@ -209,7 +233,8 @@ async function getProcessedDriveFileIds(): Promise<Set<string>> {
     console.error('Failed to fetch processed file IDs:', err);
   }
 
-  return urls;
+  console.log(`Dedup loaded: ${urls.size} URLs, ${nameKeys.size} name keys`);
+  return { urls, nameKeys };
 }
 
 /**
@@ -255,6 +280,29 @@ async function processFile(
           break;
         }
       }
+    }
+  }
+
+  // 0. Final dedup check — right before inserting, verify this file URL doesn't exist yet
+  //    This catches race conditions where two scans run concurrently.
+  const dupParams = new URLSearchParams({
+    filterByFormula: `{File URL}='${driveFileUrl}'`,
+    pageSize: '1',
+  });
+  dupParams.append('fields[]', 'Pipeline ID');
+  const dupCheck = await fetch(
+    `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?${dupParams}`,
+    { headers: getHeaders() }
+  );
+  if (dupCheck.ok) {
+    const dupData = await dupCheck.json();
+    if (dupData.records && dupData.records.length > 0) {
+      return {
+        fileName: file.name,
+        driveId: file.id,
+        status: 'already_exists',
+        pipelineId: dupData.records[0].fields['Pipeline ID'],
+      };
     }
   }
 
@@ -306,10 +354,10 @@ async function processFile(
   let sourceText: string;
 
   if (content.text) {
-    // Already have text (text files, Google Docs)
+    // Already have text (text files, Google Docs, Excel, Word, PPT, emails)
     sourceText = content.text;
   } else if (content.base64 && (content.method === 'pdf' || content.method === 'image')) {
-    // Use Claude to OCR/read the document
+    // Use Claude to OCR/read the document (PDFs, images)
     sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
   } else {
     // No usable content
@@ -342,7 +390,7 @@ async function processFile(
 
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
+      max_tokens: 8192,
       system: EXTRACTION_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: extractionPrompt }],
     });

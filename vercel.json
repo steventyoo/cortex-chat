@@ -13,7 +13,7 @@
   "crons": [
     {
       "path": "/api/pipeline/scan-drive",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 14 * * *"
     }
   ]
 }

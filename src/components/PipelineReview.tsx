@@ -11,6 +11,43 @@ import {
 
 type ViewMode = 'list' | 'review';
 
+// Currency/number keywords for smart formatting
+const MONEY_FIELDS = ['budget', 'actual', 'variance', 'cost', 'amount', 'total', 'jtd', 'job to date', 'price', 'value', 'subtotal', 'proposed', 'approved amount', 'labor', 'material', 'ohp', 'revenue', 'expense'];
+const PERCENT_FIELDS = ['percent', 'complete', 'pct', 'rate', 'ratio', 'ohp rate'];
+
+function formatFieldValue(fieldName: string, value: string | number | null): string {
+  if (value == null) return '';
+  const str = String(value);
+  const lower = fieldName.toLowerCase();
+
+  // Check if it's a money field
+  const isMoney = MONEY_FIELDS.some((kw) => lower.includes(kw));
+  if (isMoney) {
+    const num = parseFloat(str.replace(/[,$\s]/g, ''));
+    if (!isNaN(num)) {
+      const isNegative = num < 0;
+      const abs = Math.abs(num);
+      const formatted = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return isNegative ? `-$${formatted}` : `$${formatted}`;
+    }
+  }
+
+  // Check if it's a percent field
+  const isPercent = PERCENT_FIELDS.some((kw) => lower.includes(kw));
+  if (isPercent) {
+    const num = parseFloat(str);
+    if (!isNaN(num)) return `${num}%`;
+  }
+
+  return str;
+}
+
+// Format values for display in the line items table
+function formatCellValue(fieldName: string, value: string | number | null): string {
+  if (value == null) return '—';
+  return formatFieldValue(fieldName, value) || String(value);
+}
+
 interface PipelineStats {
   total: number;
   pendingReview: number;
@@ -48,6 +85,12 @@ export default function PipelineReview() {
   // Drive scan state
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+
+  // Delete state
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Mark as pushed state
+  const [markingPushedId, setMarkingPushedId] = useState<string | null>(null);
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
@@ -133,6 +176,54 @@ export default function PipelineReview() {
     }
   };
 
+  const handleDelete = async (recordId: string, fileName: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Don't open review view
+    if (!confirm(`Delete "${fileName}" from the pipeline?`)) return;
+    setDeletingId(recordId);
+    try {
+      const res = await fetch('/api/pipeline/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordId }),
+      });
+      if (res.ok) {
+        await fetchItems();
+      } else {
+        const err = await res.json();
+        alert(`Delete failed: ${err.error}`);
+      }
+    } catch (err) {
+      console.error('Delete error:', err);
+      alert('Failed to delete');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleMarkAsPushed = async (recordId: string, fileName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Mark "${fileName}" as already pushed to Airtable?\n\nThis means the data from this file is already in your database — no new records will be created.`)) return;
+    setMarkingPushedId(recordId);
+    try {
+      const res = await fetch('/api/pipeline/mark-pushed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordId }),
+      });
+      if (res.ok) {
+        await fetchItems();
+      } else {
+        const err = await res.json();
+        alert(`Failed: ${err.error}`);
+      }
+    } catch (err) {
+      console.error('Mark pushed error:', err);
+      alert('Failed to update');
+    } finally {
+      setMarkingPushedId(null);
+    }
+  };
+
   const handleReview = async () => {
     if (!selectedItem || !reviewAction) return;
     setSubmittingReview(true);
@@ -162,6 +253,10 @@ export default function PipelineReview() {
       });
 
       if (res.ok) {
+        const result = await res.json();
+        if (result.alreadyPushed) {
+          alert('⚠️ This file was already pushed to Airtable. Marked as approved but no duplicate data was created.');
+        }
         setViewMode('list');
         setSelectedItem(null);
         setReviewAction('');
@@ -183,11 +278,11 @@ export default function PipelineReview() {
     setReviewAction('');
     setReviewNotes('');
     setRejectionReason('');
-    // Pre-populate editable fields
+    // Pre-populate editable fields with formatting
     if (item.extractedData) {
       const fields: Record<string, string> = {};
       for (const [key, val] of Object.entries(item.extractedData.fields)) {
-        fields[key] = val.value != null ? String(val.value) : '';
+        fields[key] = val.value != null ? formatFieldValue(key, val.value) : '';
       }
       setEditedFields(fields);
     }
@@ -235,9 +330,11 @@ export default function PipelineReview() {
               <h3 className="text-[13px] font-semibold text-[#37352f]">Source Document</h3>
             </div>
             <div className="flex-1 overflow-y-auto p-4">
-              <pre className="text-[13px] leading-relaxed text-[#37352f] whitespace-pre-wrap font-mono">
-                {selectedItem.sourceText || 'No source text available'}
-              </pre>
+              <SourceDocumentView
+                text={selectedItem.sourceText || ''}
+                fileName={selectedItem.fileName}
+                fileUrl={selectedItem.fileUrl}
+              />
             </div>
           </div>
 
@@ -323,6 +420,78 @@ export default function PipelineReview() {
                   </div>
                 </div>
               )}
+
+              {/* Multi-record line items */}
+              {extraction?.records && extraction.records.length > 0 && (
+                <div className="mb-4">
+                  <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider mb-2">
+                    Line Items ({extraction.records.length} records → {extraction.documentType === 'Change Order' ? 'CHANGE_ORDERS' : 'JOB_COSTS'})
+                  </p>
+                  <div className="overflow-x-auto rounded-lg border border-[#e0e0e0]">
+                    <table className="w-full text-[11px]">
+                      <thead>
+                        <tr className="bg-[#f7f7f5]">
+                          <th className="px-2 py-1.5 text-left font-semibold text-[#555] border-b border-[#e0e0e0]">#</th>
+                          {Object.keys(extraction.records[0]).map((key) => (
+                            <th key={key} className="px-2 py-1.5 text-left font-semibold text-[#555] border-b border-[#e0e0e0] whitespace-nowrap">{key}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {extraction.records.map((rec, idx) => (
+                          <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-[#fafafa]'}>
+                            <td className="px-2 py-1 text-[#999] border-b border-[#f0f0f0]">{idx + 1}</td>
+                            {Object.entries(rec).map(([key, val]) => (
+                              <td key={key} className="px-2 py-1 border-b border-[#f0f0f0] whitespace-nowrap">
+                                <span className={val.confidence < 0.7 ? 'text-red-600' : val.confidence < 0.9 ? 'text-amber-600' : 'text-[#1a1a1a]'}>
+                                  {formatCellValue(key, val.value)}
+                                </span>
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Additional target table records (e.g., PRODUCTION) */}
+              {extraction?.targetTables && extraction.targetTables.map((tt, ttIdx) => (
+                tt.records && tt.records.length > 0 && (
+                  <div key={ttIdx} className="mb-4">
+                    <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider mb-2">
+                      {tt.table} ({tt.records.length} records)
+                    </p>
+                    <div className="overflow-x-auto rounded-lg border border-[#e0e0e0]">
+                      <table className="w-full text-[11px]">
+                        <thead>
+                          <tr className="bg-[#f7f7f5]">
+                            <th className="px-2 py-1.5 text-left font-semibold text-[#555] border-b border-[#e0e0e0]">#</th>
+                            {Object.keys(tt.records[0]).map((key) => (
+                              <th key={key} className="px-2 py-1.5 text-left font-semibold text-[#555] border-b border-[#e0e0e0] whitespace-nowrap">{key}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tt.records.map((rec, idx) => (
+                            <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-[#fafafa]'}>
+                              <td className="px-2 py-1 text-[#999] border-b border-[#f0f0f0]">{idx + 1}</td>
+                              {Object.entries(rec).map(([key, val]) => (
+                                <td key={key} className="px-2 py-1 border-b border-[#f0f0f0] whitespace-nowrap">
+                                  <span className={val.confidence < 0.7 ? 'text-red-600' : val.confidence < 0.9 ? 'text-amber-600' : 'text-[#1a1a1a]'}>
+                                    {formatCellValue(key, val.value)}
+                                  </span>
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )
+              ))}
 
               {/* Review actions */}
               <div className="border-t border-[#e8e8e8] pt-4 mt-4">
@@ -636,25 +805,13 @@ export default function PipelineReview() {
                 onClick={() => openReview(item)}
                 className="w-full text-left px-6 py-4 hover:bg-[#fafafa] transition-colors flex items-center gap-4"
               >
-                {/* Doc icon */}
-                <div className="w-10 h-10 rounded-xl bg-[#f7f7f5] flex items-center justify-center flex-shrink-0">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.5" strokeLinecap="round">
-                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                    <path d="M14 2v6h6" />
-                  </svg>
-                </div>
+                {/* Color-coded document type badge (left side) */}
+                <DocTypeBadge type={item.documentType} />
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[14px] font-medium text-[#1a1a1a] truncate">
-                      {item.fileName}
-                    </span>
-                    {item.documentType && (
-                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#f0f0f0] text-[#666] font-medium flex-shrink-0">
-                        {item.documentType}
-                      </span>
-                    )}
+                  <div className="text-[14px] font-medium text-[#1a1a1a] truncate">
+                    {item.fileName}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <span className="text-[12px] text-[#999]">{item.pipelineId}</span>
@@ -683,6 +840,47 @@ export default function PipelineReview() {
                 {/* Status */}
                 <StatusBadge status={item.status} />
 
+                {/* Mark as Pushed button — for items not yet pushed */}
+                {item.status !== 'pushed' && item.status !== 'rejected' && (
+                  <button
+                    onClick={(e) => handleMarkAsPushed(item.id, item.fileName, e)}
+                    disabled={markingPushedId === item.id}
+                    className="p-1.5 rounded-lg text-[#ccc] hover:text-green-600 hover:bg-green-50 transition-colors flex-shrink-0 disabled:opacity-50"
+                    title="Mark as already pushed (data already in Airtable)"
+                  >
+                    {markingPushedId === item.id ? (
+                      <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                        <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 12l2 2 4-4" />
+                        <circle cx="12" cy="12" r="10" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+
+                {/* Delete button */}
+                <button
+                  onClick={(e) => handleDelete(item.id, item.fileName, e)}
+                  disabled={deletingId === item.id}
+                  className="p-1.5 rounded-lg text-[#ccc] hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0 disabled:opacity-50"
+                  title="Delete from pipeline"
+                >
+                  {deletingId === item.id ? (
+                    <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                    </svg>
+                  )}
+                </button>
+
                 {/* Arrow */}
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round" className="flex-shrink-0">
                   <path d="M9 18l6-6-6-6" />
@@ -697,6 +895,44 @@ export default function PipelineReview() {
 }
 
 // ─── Sub-components ──────────────────────────────────────────
+
+// Color-coded document type badge with icon
+function DocTypeBadge({ type }: { type: string | null }) {
+  const config = getDocTypeConfig(type);
+  return (
+    <div className={`w-10 h-10 rounded-xl flex flex-col items-center justify-center flex-shrink-0 ${config.bg}`}>
+      <span className="text-[14px] leading-none">{config.icon}</span>
+      <span className={`text-[8px] font-bold mt-0.5 leading-none tracking-tight ${config.text}`}>
+        {config.abbrev}
+      </span>
+    </div>
+  );
+}
+
+function getDocTypeConfig(type: string | null): { bg: string; text: string; icon: string; abbrev: string } {
+  switch (type) {
+    case 'Change Order':
+      return { bg: 'bg-orange-100', text: 'text-orange-700', icon: '📋', abbrev: 'CO' };
+    case 'ASI':
+      return { bg: 'bg-violet-100', text: 'text-violet-700', icon: '📐', abbrev: 'ASI' };
+    case 'RFI':
+      return { bg: 'bg-yellow-100', text: 'text-yellow-700', icon: '❓', abbrev: 'RFI' };
+    case 'Invoice':
+      return { bg: 'bg-green-100', text: 'text-green-700', icon: '💰', abbrev: 'INV' };
+    case 'Daily Report':
+      return { bg: 'bg-cyan-100', text: 'text-cyan-700', icon: '📝', abbrev: 'DR' };
+    case 'Submittal':
+      return { bg: 'bg-blue-100', text: 'text-blue-700', icon: '📦', abbrev: 'SUB' };
+    case 'Job Cost Report':
+      return { bg: 'bg-red-100', text: 'text-red-700', icon: '📊', abbrev: 'JCR' };
+    case 'Contract':
+      return { bg: 'bg-amber-100', text: 'text-amber-700', icon: '📃', abbrev: 'CON' };
+    case 'Schedule':
+      return { bg: 'bg-rose-100', text: 'text-rose-700', icon: '📅', abbrev: 'SCH' };
+    default:
+      return { bg: 'bg-gray-100', text: 'text-gray-600', icon: '📄', abbrev: 'OTH' };
+  }
+}
 
 function StatusBadge({ status }: { status: string }) {
   const display = getStatusDisplay(status as PipelineItem['status']);
@@ -741,4 +977,226 @@ function StatPill({
       {label}
     </button>
   );
+}
+
+/**
+ * Smart source document viewer.
+ * Detects CSV/spreadsheet data and renders it as a proper table.
+ * Falls back to plain text for non-tabular content.
+ */
+function SourceDocumentView({ text, fileName, fileUrl }: { text: string; fileName: string; fileUrl?: string | null }) {
+  const [viewMode, setViewMode] = useState<'pdf' | 'text'>('pdf');
+
+  // Check if this is a PDF from Google Drive
+  const isPdf = fileName.match(/\.pdf$/i);
+  const driveFileId = fileUrl?.startsWith('gdrive://') ? fileUrl.replace('gdrive://', '') : null;
+  const canShowPdf = isPdf && driveFileId;
+
+  if (!text && !canShowPdf) {
+    return <p className="text-[13px] text-[#999] italic">No source text available</p>;
+  }
+
+  // PDF viewer with toggle to extracted text
+  if (canShowPdf) {
+    return (
+      <div className="flex flex-col h-full -m-4">
+        {/* Toggle bar */}
+        <div className="flex items-center gap-1 px-4 py-2 bg-[#fafafa] border-b border-[#e8e8e8]">
+          <button
+            onClick={() => setViewMode('pdf')}
+            className={`px-3 py-1 text-[12px] rounded-md transition-colors ${
+              viewMode === 'pdf'
+                ? 'bg-white text-[#37352f] font-medium shadow-sm border border-[#e0e0e0]'
+                : 'text-[#999] hover:text-[#666]'
+            }`}
+          >
+            PDF View
+          </button>
+          <button
+            onClick={() => setViewMode('text')}
+            className={`px-3 py-1 text-[12px] rounded-md transition-colors ${
+              viewMode === 'text'
+                ? 'bg-white text-[#37352f] font-medium shadow-sm border border-[#e0e0e0]'
+                : 'text-[#999] hover:text-[#666]'
+            }`}
+          >
+            Extracted Text
+          </button>
+        </div>
+
+        {viewMode === 'pdf' ? (
+          <iframe
+            src={`/api/pipeline/pdf?fileId=${driveFileId}`}
+            className="flex-1 w-full border-0"
+            title={fileName}
+          />
+        ) : (
+          <div className="flex-1 overflow-y-auto p-4">
+            <pre className="text-[13px] leading-relaxed text-[#37352f] whitespace-pre-wrap font-mono">
+              {text}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Detect if this is CSV/spreadsheet data
+  const isSpreadsheet = fileName.match(/\.(xlsx?|csv|ods)$/i) || text.startsWith('=== Sheet:');
+
+  if (!isSpreadsheet) {
+    return (
+      <pre className="text-[13px] leading-relaxed text-[#37352f] whitespace-pre-wrap font-mono">
+        {text}
+      </pre>
+    );
+  }
+
+  // Parse CSV sections (may have multiple sheets: "=== Sheet: Name ===")
+  const sections = text.split(/^(=== Sheet: .+ ===)$/m).filter(Boolean);
+  const sheets: { name: string; rows: string[][] }[] = [];
+
+  let currentName = 'Sheet 1';
+  for (const section of sections) {
+    const sheetMatch = section.match(/^=== Sheet: (.+) ===$/);
+    if (sheetMatch) {
+      currentName = sheetMatch[1];
+      continue;
+    }
+    // Parse CSV rows
+    const rows = parseCSVRows(section.trim());
+    if (rows.length > 0) {
+      sheets.push({ name: currentName, rows });
+    }
+  }
+
+  // If no sheet headers found, treat entire text as one sheet
+  if (sheets.length === 0) {
+    const rows = parseCSVRows(text.trim());
+    if (rows.length > 0) {
+      sheets.push({ name: 'Data', rows });
+    }
+  }
+
+  if (sheets.length === 0) {
+    return (
+      <pre className="text-[13px] leading-relaxed text-[#37352f] whitespace-pre-wrap font-mono">
+        {text}
+      </pre>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {sheets.map((sheet, si) => {
+        // Find rows with actual data (skip all-empty rows)
+        const dataRows = sheet.rows.filter(row => row.some(cell => cell.trim() !== ''));
+        if (dataRows.length === 0) return null;
+
+        // Find the max number of columns
+        const maxCols = Math.max(...dataRows.map(r => r.length));
+
+        // Try to detect header row (first row with multiple non-empty cells)
+        const headerIdx = dataRows.findIndex(row =>
+          row.filter(c => c.trim() !== '').length >= Math.min(3, maxCols / 2)
+        );
+
+        return (
+          <div key={si}>
+            {sheets.length > 1 && (
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-semibold text-[#999] uppercase tracking-wider">
+                  {sheet.name}
+                </span>
+                <span className="text-[11px] text-[#ccc]">
+                  {dataRows.length} rows
+                </span>
+              </div>
+            )}
+            <div className="overflow-x-auto rounded-lg border border-[#e8e8e8]">
+              <table className="w-full text-[12px] border-collapse">
+                <tbody>
+                  {dataRows.map((row, ri) => {
+                    const isHeader = ri === headerIdx;
+                    // Pad row to maxCols
+                    const cells = [...row];
+                    while (cells.length < maxCols) cells.push('');
+
+                    return (
+                      <tr
+                        key={ri}
+                        className={
+                          isHeader
+                            ? 'bg-[#f7f7f5] border-b-2 border-[#e0e0e0]'
+                            : ri % 2 === 0
+                            ? 'bg-white'
+                            : 'bg-[#fafafa]'
+                        }
+                      >
+                        {cells.map((cell, ci) => {
+                          const Tag = isHeader ? 'th' : 'td';
+                          const trimmed = cell.trim();
+                          // Right-align numbers and currency
+                          const isNumber = /^-?[\$]?[\d,]+\.?\d*%?$/.test(trimmed.replace(/[",]/g, ''));
+                          return (
+                            <Tag
+                              key={ci}
+                              className={`px-2.5 py-1.5 border-r border-[#f0f0f0] last:border-r-0 ${
+                                isHeader
+                                  ? 'font-semibold text-[#37352f] text-left'
+                                  : `text-[#555] ${isNumber ? 'text-right font-mono' : 'text-left'}`
+                              } ${trimmed === '' ? 'text-[#e0e0e0]' : ''}`}
+                              style={{ minWidth: '40px', maxWidth: '250px' }}
+                            >
+                              {trimmed || '\u00A0'}
+                            </Tag>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Parse CSV text into rows of cells.
+ * Handles quoted fields with commas inside them.
+ */
+function parseCSVRows(csvText: string): string[][] {
+  const rows: string[][] = [];
+  const lines = csvText.split('\n');
+
+  for (const line of lines) {
+    const cells: string[] = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++; // Skip escaped quote
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        cells.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    cells.push(current); // Push last cell
+    rows.push(cells);
+  }
+
+  return rows;
 }

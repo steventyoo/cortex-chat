@@ -65,7 +65,17 @@ When asked about specific topics (not a general summary):
 - **Design changes**: Trace ASI → COR → CO chains, show cost impact
 - **Document chains**: Use CROSS_REFS to trace cause-and-effect
 
-Still use tables with emoji indicators for all responses. Be concise — data first, brief analysis after.`;
+Still use tables with emoji indicators for all responses. Be concise — data first, brief analysis after.
+
+## Cross-Project / Portfolio Questions
+When the user asks about multiple projects, portfolio health, or cross-project patterns:
+- Show a comparison table with all projects: Project | Contract | JTD | % Complete | EAC | Risk | Flags
+- EAC (Estimate at Completion) = JTD / (% Complete / 100)
+- Budget at Risk = EAC - Revised Budget
+- Burn Multiplier = (JTD / % Complete) / (Budget / 100) — if >1, spending faster than planned
+- Identify cross-project PATTERNS: same cost codes overrunning across projects, labor trends, CO exposure
+- Lead with the scariest number — what's the total $ at risk across the portfolio
+- End with 2-3 specific ACTIONS the PM should take this week`;
 
 export function assembleContext(data: ProjectData): string {
   const lines: string[] = [];
@@ -203,6 +213,94 @@ export function assembleContext(data: ProjectData): string {
   lines.push(`- Cross References: ${counts.crossRefs} records`);
   lines.push(`- Documents: ${counts.documents} records`);
   lines.push(`- Staffing: ${counts.staffing || 0} records`);
+
+  return lines.join('\n');
+}
+
+import { ProjectHealth } from './types';
+
+export function assemblePortfolioContext(
+  allProjectData: ProjectData[],
+  healthData: ProjectHealth[],
+): string {
+  const lines: string[] = [];
+
+  lines.push('## PORTFOLIO OVERVIEW');
+  lines.push(`Active projects: ${allProjectData.length}`);
+  lines.push('');
+
+  let totalContract = 0;
+  let totalJTD = 0;
+  let totalBudget = 0;
+
+  for (const data of allProjectData) {
+    if (!data.project) continue;
+    const p = data.project;
+    const name = String(p['Project Name'] || p['Project ID']);
+    const contractValue = Number(p['Contract Value'] || 0);
+    const revisedBudget = Number(p['Revised Budget'] || contractValue);
+    const jobToDate = Number(p['Job to Date'] || 0);
+    const rawPct = Number(p['Percent Complete Cost'] || 0);
+    const pctComplete = rawPct > 0 && rawPct <= 1 ? rawPct * 100 : rawPct;
+    const eac = pctComplete > 5 ? (jobToDate / pctComplete) * 100 : revisedBudget;
+    const eacVariance = eac - revisedBudget;
+
+    totalContract += contractValue;
+    totalJTD += jobToDate;
+    totalBudget += revisedBudget;
+
+    lines.push(`### ${name}`);
+    lines.push(`- Contract: $${contractValue.toLocaleString()} | Budget: $${revisedBudget.toLocaleString()}`);
+    lines.push(`- JTD: $${jobToDate.toLocaleString()} | ${pctComplete.toFixed(0)}% complete`);
+    lines.push(`- EAC: $${Math.round(eac).toLocaleString()} | Variance: $${Math.round(eacVariance).toLocaleString()}`);
+
+    const totalBudgetHrs = data.production.reduce((s, pr) => s + Number(pr['Budget Labor Hours'] || 0), 0);
+    const totalActualHrs = data.production.reduce((s, pr) => s + Number(pr['Actual Labor Hours'] || 0), 0);
+    const laborRatio = totalBudgetHrs > 0 ? totalActualHrs / totalBudgetHrs : 0;
+    lines.push(`- Labor: ${totalActualHrs.toLocaleString()} / ${totalBudgetHrs.toLocaleString()} hrs (ratio: ${laborRatio.toFixed(2)})`);
+
+    const worstCodes = data.jobCosts
+      .map((jc) => ({
+        code: String(jc['Item Code'] || ''),
+        desc: String(jc['Item Description'] || ''),
+        budget: Number(jc['Revised Budget'] || jc['Budget'] || 0),
+        actual: Number(jc['Job to Date'] || jc['Actual'] || 0),
+      }))
+      .filter((x) => x.budget > 0 && x.actual > x.budget)
+      .sort((a, b) => (b.actual - b.budget) - (a.actual - a.budget))
+      .slice(0, 3);
+
+    if (worstCodes.length > 0) {
+      lines.push('- Over-budget codes:');
+      for (const wc of worstCodes) {
+        const pct = ((wc.actual - wc.budget) / wc.budget * 100).toFixed(0);
+        lines.push(`  - ${wc.code} ${wc.desc}: $${(wc.actual - wc.budget).toLocaleString()} over (${pct}%)`);
+      }
+    }
+
+    if (data.changeOrders.length > 0) {
+      const totalCO = data.changeOrders.reduce((s, co) => s + Number(co['GC Proposed Amount'] || 0), 0);
+      const pending = data.changeOrders.filter((co) => {
+        const status = String(co['Approval Status'] || '').toLowerCase();
+        return status.includes('pending') || status.includes('submitted');
+      });
+      lines.push(`- COs: ${data.changeOrders.length} total ($${totalCO.toLocaleString()}), ${pending.length} pending`);
+    }
+    lines.push('');
+  }
+
+  if (healthData.length > 0) {
+    lines.push('## PROJECT HEALTH SUMMARY');
+    for (const h of healthData) {
+      lines.push(`- ${h.projectName}: ${h.overallHealth.toUpperCase()} | Budget: ${h.budgetHealth} | Labor: ${h.laborHealth} | Pending COs: ${h.pendingCOs} ($${h.pendingCOAmount.toLocaleString()})`);
+    }
+    lines.push('');
+  }
+
+  lines.push('## PORTFOLIO TOTALS');
+  lines.push(`- Total contract value: $${totalContract.toLocaleString()}`);
+  lines.push(`- Total JTD spend: $${totalJTD.toLocaleString()}`);
+  lines.push(`- Total budget: $${totalBudget.toLocaleString()}`);
 
   return lines.join('\n');
 }

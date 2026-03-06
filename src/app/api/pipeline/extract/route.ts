@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
-import { validateToken, SESSION_COOKIE } from '@/lib/auth';
+import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import {
   EXTRACTION_SYSTEM_PROMPT,
   buildExtractionPrompt,
@@ -29,7 +29,7 @@ export const maxDuration = 60;
 export async function POST(request: NextRequest) {
   // 1. Auth check
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateToken(token))) {
+  if (!token || !(await validateUserSession(token))) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -90,7 +90,7 @@ export async function POST(request: NextRequest) {
 
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
+      max_tokens: 8192,
       system: EXTRACTION_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: extractionPrompt }],
     });

@@ -11,29 +11,83 @@ interface DashboardProps {
   onSendMessage: (message: string) => void;
 }
 
+interface Insight {
+  type: string;
+  severity: string;
+  title: string;
+  detail: string;
+  projects: string[];
+  action: string;
+}
+
+interface PortfolioIntelligence {
+  portfolio?: {
+    totalBudgetAtRisk: number;
+    averageRiskScore: number;
+    portfolioRisk: string;
+  };
+  projects?: Array<{
+    projectName: string;
+    riskScore: number;
+    riskLevel: string;
+    eacVariancePercent: number;
+    budgetAtRisk: number;
+    burnMultiplier: number;
+  }>;
+  insights?: Array<{
+    type: string;
+    severity: string;
+    message: string;
+    projects: string[];
+  }>;
+}
+
 const QUICK_ACTIONS = [
-  { label: 'Full project summary', icon: '📋', query: 'Give me a full project summary' },
-  { label: 'Budget breakdown', icon: '💰', query: 'How is the budget tracking by category?' },
-  { label: 'Labor performance', icon: '👷', query: 'Show me production metrics and labor performance' },
-  { label: 'Change order status', icon: '📝', query: 'What are the biggest change orders?' },
+  { label: 'Portfolio overview', icon: '🧠', query: 'How are all projects doing? Show me a cross-project comparison with risk levels.' },
+  { label: 'Budget risks', icon: '💰', query: 'Which projects are trending over budget? Show projected cost at completion.' },
+  { label: 'Labor anomalies', icon: '👷', query: 'Are there any labor performance anomalies across projects?' },
+  { label: 'Pending exposure', icon: '📝', query: 'What is our total pending change order exposure across all projects?' },
 ];
 
 export default function Dashboard({ onSelectProject, onSendMessage }: DashboardProps) {
   const [healthData, setHealthData] = useState<ProjectHealth[]>([]);
+  const [intelligence, setIntelligence] = useState<PortfolioIntelligence | null>(null);
+  const [aiInsights, setAiInsights] = useState<Insight[]>([]);
+  const [aiSummary, setAiSummary] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function fetchHealth() {
+    async function fetchAll() {
       try {
-        const res = await fetch('/api/project-health');
-        if (res.status === 401) {
+        // Fetch health data + portfolio intelligence in parallel
+        const [healthRes, intelRes] = await Promise.all([
+          fetch('/api/project-health'),
+          fetch('/api/intelligence').catch(() => null),
+        ]);
+
+        if (healthRes.status === 401) {
           window.location.href = '/login';
           return;
         }
-        if (!res.ok) throw new Error('Failed to fetch');
-        const data = await res.json();
-        setHealthData(data);
+        if (!healthRes.ok) throw new Error('Failed to fetch');
+        const healthJson = await healthRes.json();
+        setHealthData(healthJson);
+
+        if (intelRes?.ok) {
+          const intelJson = await intelRes.json();
+          setIntelligence(intelJson);
+        }
+
+        // Fetch AI insights in background (slower call)
+        fetch('/api/insights')
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            if (data?.insights) setAiInsights(data.insights);
+            if (data?.portfolioSummary) setAiSummary(data.portfolioSummary);
+          })
+          .catch(() => {});
+
       } catch (err) {
         console.error('Dashboard fetch error:', err);
         setError('Unable to load project health data');
@@ -41,7 +95,7 @@ export default function Dashboard({ onSelectProject, onSendMessage }: DashboardP
         setLoading(false);
       }
     }
-    fetchHealth();
+    fetchAll();
   }, []);
 
   // Separate active vs completed projects
@@ -152,6 +206,92 @@ export default function Dashboard({ onSelectProject, onSendMessage }: DashboardP
           className="w-full max-w-2xl mb-5"
         >
           <AlertsBanner alerts={allAlerts} onAlertClick={handleAlertClick} />
+        </motion.div>
+      )}
+
+      {/* Portfolio Intelligence */}
+      {(intelligence?.portfolio || aiInsights.length > 0 || aiSummary) && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.27 }}
+          className="w-full max-w-2xl mb-5"
+        >
+          <p className="text-[11px] font-medium uppercase tracking-wider text-[#aeaeb2] mb-2.5 px-1">
+            Cortex Intelligence
+          </p>
+
+          {/* Portfolio risk metrics */}
+          {intelligence?.portfolio && (
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className={`rounded-xl p-3 ring-1 ${intelligence.portfolio.totalBudgetAtRisk > 50000 ? 'ring-red-200 bg-red-50' : 'ring-emerald-200 bg-emerald-50'}`}>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#999]">Budget at Risk</p>
+                <p className={`text-[18px] font-bold ${intelligence.portfolio.totalBudgetAtRisk > 50000 ? 'text-red-600' : 'text-emerald-600'}`}>
+                  {intelligence.portfolio.totalBudgetAtRisk >= 1000
+                    ? `$${Math.round(intelligence.portfolio.totalBudgetAtRisk / 1000)}K`
+                    : `$${Math.round(intelligence.portfolio.totalBudgetAtRisk)}`}
+                </p>
+              </div>
+              <div className={`rounded-xl p-3 ring-1 ${intelligence.portfolio.averageRiskScore >= 40 ? 'ring-amber-200 bg-amber-50' : 'ring-emerald-200 bg-emerald-50'}`}>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#999]">Avg Risk</p>
+                <p className={`text-[18px] font-bold ${intelligence.portfolio.averageRiskScore >= 40 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                  {Math.round(intelligence.portfolio.averageRiskScore)}/100
+                </p>
+              </div>
+              <div className={`rounded-xl p-3 ring-1 ${intelligence.portfolio.portfolioRisk === 'critical' ? 'ring-red-200 bg-red-50' : intelligence.portfolio.portfolioRisk === 'high' ? 'ring-amber-200 bg-amber-50' : 'ring-emerald-200 bg-emerald-50'}`}>
+                <p className="text-[10px] font-medium uppercase tracking-wider text-[#999]">Portfolio</p>
+                <p className={`text-[14px] font-bold capitalize ${intelligence.portfolio.portfolioRisk === 'critical' ? 'text-red-600' : intelligence.portfolio.portfolioRisk === 'high' ? 'text-amber-600' : 'text-emerald-600'}`}>
+                  {intelligence.portfolio.portfolioRisk}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Pattern insights from intelligence API */}
+          {intelligence?.insights && intelligence.insights.length > 0 && (
+            <div className="rounded-xl ring-1 ring-[#e8e8e8] bg-white p-4 mb-3">
+              <div className="space-y-2">
+                {intelligence.insights.map((insight, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="text-[11px] mt-0.5">
+                      {insight.severity === 'critical' ? '🔴' : insight.severity === 'warning' ? '🟡' : '🔵'}
+                    </span>
+                    <p className="text-[12px] text-[#37352f]">{insight.message}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* AI-generated insights */}
+          {aiSummary && (
+            <div className="rounded-xl ring-1 ring-[#e8e8e8] bg-white p-4 mb-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[13px]">&#129504;</span>
+                <span className="text-[12px] font-semibold text-[#1a1a1a]">AI Analysis</span>
+              </div>
+              <p className="text-[12px] text-[#6b6b6b]">{aiSummary}</p>
+            </div>
+          )}
+
+          {aiInsights.length > 0 && (
+            <div className="space-y-2">
+              {aiInsights.slice(0, 4).map((insight, i) => (
+                <div key={i} className="rounded-xl ring-1 ring-[#e8e8e8] bg-white p-3">
+                  <div className="flex items-start gap-2 mb-1">
+                    <span className="text-[11px] mt-0.5">
+                      {insight.severity === 'critical' ? '🔴' : insight.severity === 'warning' ? '🟡' : '🔵'}
+                    </span>
+                    <p className="text-[12px] font-medium text-[#1a1a1a]">{insight.title}</p>
+                  </div>
+                  <p className="text-[11px] text-[#6b6b6b] ml-5">{insight.detail}</p>
+                  {insight.action && (
+                    <p className="text-[11px] text-[#007aff] ml-5 mt-1">→ {insight.action}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </motion.div>
       )}
 
