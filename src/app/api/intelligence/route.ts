@@ -4,6 +4,7 @@
 import { NextRequest } from 'next/server';
 import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData } from '@/lib/airtable';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
+import { computeDriftMetrics } from '@/lib/drift-engine';
 
 export const maxDuration = 30;
 
@@ -192,6 +193,14 @@ async function computeProjectPrediction(projectId: string) {
 
   const riskLevel = riskScore >= 70 ? 'critical' : riskScore >= 40 ? 'high' : riskScore >= 20 ? 'medium' : 'low';
 
+  // ─── Drift Metrics (Palantir-style predictors) ──
+  const drift = computeDriftMetrics(
+    p,
+    data.jobCosts,
+    data.production,
+    null, // TODO: fetch previous snapshot for week-over-week
+  );
+
   return {
     projectId,
     projectName: String(p['Project Name'] || projectId),
@@ -231,6 +240,26 @@ async function computeProjectPrediction(projectId: string) {
     costCodeRisks: costCodeRisks.slice(0, 10),
     productionAnomalies: productionAnomalies.filter((p) => p.isAnomaly),
     topRisks: generateRiskNarrative(riskScore, eacVariancePercent, laborOverPct, pendingCOExposure, criticalCodes.length, contractValue),
+
+    // Drift Intelligence (Palantir-style)
+    drift: {
+      productivityDrift: drift.productivityDrift,
+      productivitySignal: drift.productivitySignal,
+      burnGap: drift.burnGap,
+      burnGapSignal: drift.burnGapSignal,
+      costBurn: drift.costBurn,
+      progressPercent: drift.progressPercent,
+      rateDrift: drift.rateDrift,
+      rateDriftSignal: drift.rateDriftSignal,
+      actualLaborRate: drift.actualLaborRate,
+      estimatedLaborRate: drift.estimatedLaborRate,
+      driftRiskScore: drift.riskScore,
+      driftRiskLevel: drift.riskLevel,
+      projectedMarginImpact: drift.projectedMarginImpact,
+      projectedLaborOverrun: drift.projectedLaborOverrun,
+      drivers: drift.drivers,
+      recommendations: drift.recommendations,
+    },
   };
 }
 

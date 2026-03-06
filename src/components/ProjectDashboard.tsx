@@ -45,6 +45,32 @@ interface StaffMember {
   role: string;
 }
 
+interface DriftDriver {
+  metric: string;
+  value: string;
+  impact: string;
+  severity: 'info' | 'warning' | 'critical';
+}
+
+interface DriftData {
+  productivityDrift: number;
+  productivitySignal: string;
+  burnGap: number;
+  burnGapSignal: string;
+  costBurn: number;
+  progressPercent: number;
+  rateDrift: number;
+  rateDriftSignal: string;
+  actualLaborRate: number;
+  estimatedLaborRate: number;
+  driftRiskScore: number;
+  driftRiskLevel: string;
+  projectedMarginImpact: number;
+  projectedLaborOverrun: number;
+  drivers: DriftDriver[];
+  recommendations: string[];
+}
+
 interface PredictionData {
   estimateAtCompletion: number;
   eacVariance: number;
@@ -57,6 +83,7 @@ interface PredictionData {
   laborVariance: number;
   pendingCOExposure: number;
   topRisks: string[];
+  drift?: DriftData;
 }
 
 interface DashboardData {
@@ -349,6 +376,172 @@ export default function ProjectDashboard({ projectId, projectName, onStartChat }
               </div>
             </div>
           )}
+        </motion.div>
+      )}
+
+      {/* ─── Drift Intelligence ──────────────────────── */}
+      {prediction?.drift && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.09 }}
+          className="mb-6"
+        >
+          <div className="rounded-2xl ring-1 ring-[#e8e8e8] overflow-hidden">
+            {/* Dark header bar */}
+            <div className="px-5 py-3 bg-[#1a1a1a] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+                    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                  </svg>
+                </div>
+                <h3 className="text-[13px] font-semibold text-white">Drift Intelligence</h3>
+              </div>
+              <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                prediction.drift.driftRiskLevel === 'critical' ? 'bg-red-500/20 text-red-300' :
+                prediction.drift.driftRiskLevel === 'high' ? 'bg-orange-500/20 text-orange-300' :
+                prediction.drift.driftRiskLevel === 'medium' ? 'bg-amber-500/20 text-amber-300' :
+                'bg-emerald-500/20 text-emerald-300'
+              }`}>
+                {prediction.drift.driftRiskLevel} drift
+              </div>
+            </div>
+
+            {/* 3 Predictors + Composite Score */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-[#e8e8e8]">
+              {/* Productivity Drift */}
+              <div className="bg-white p-4">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    prediction.drift.productivitySignal === 'high' ? 'bg-red-500' :
+                    prediction.drift.productivitySignal === 'watch' ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`} />
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#999]">Productivity</span>
+                </div>
+                <span className={`text-[24px] font-bold leading-none tracking-tight ${
+                  prediction.drift.productivityDrift > 10 ? 'text-red-600' :
+                  prediction.drift.productivityDrift > 5 ? 'text-amber-600' : 'text-emerald-600'
+                }`}>
+                  {prediction.drift.productivityDrift > 0 ? '+' : ''}{prediction.drift.productivityDrift.toFixed(1)}%
+                </span>
+                <p className="text-[10px] text-[#999] mt-1">hrs actual vs estimated</p>
+              </div>
+
+              {/* Burn Gap */}
+              <div className="bg-white p-4">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    prediction.drift.burnGapSignal === 'high' ? 'bg-red-500' :
+                    prediction.drift.burnGapSignal === 'watch' ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`} />
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#999]">Burn Gap</span>
+                </div>
+                <span className={`text-[24px] font-bold leading-none tracking-tight ${
+                  prediction.drift.burnGap > 10 ? 'text-red-600' :
+                  prediction.drift.burnGap > 5 ? 'text-amber-600' : 'text-emerald-600'
+                }`}>
+                  {prediction.drift.burnGap > 0 ? '+' : ''}{prediction.drift.burnGap.toFixed(1)}%
+                </span>
+                <p className="text-[10px] text-[#999] mt-1">
+                  {prediction.drift.costBurn.toFixed(0)}% spent · {prediction.drift.progressPercent.toFixed(0)}% done
+                </p>
+              </div>
+
+              {/* Rate Creep */}
+              <div className="bg-white p-4">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    prediction.drift.rateDriftSignal === 'high' ? 'bg-red-500' :
+                    prediction.drift.rateDriftSignal === 'watch' ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`} />
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[#999]">Rate Creep</span>
+                </div>
+                <span className={`text-[24px] font-bold leading-none tracking-tight ${
+                  prediction.drift.rateDrift > 10 ? 'text-red-600' :
+                  prediction.drift.rateDrift > 5 ? 'text-amber-600' : 'text-emerald-600'
+                }`}>
+                  {prediction.drift.rateDrift > 0 ? '+' : ''}{prediction.drift.rateDrift.toFixed(1)}%
+                </span>
+                <p className="text-[10px] text-[#999] mt-1">
+                  ${prediction.drift.actualLaborRate.toFixed(0)}/hr vs ${prediction.drift.estimatedLaborRate.toFixed(0)}/hr est
+                </p>
+              </div>
+
+              {/* Composite Drift Risk Score */}
+              <div className={`p-4 ${
+                prediction.drift.driftRiskLevel === 'critical' ? 'bg-red-50' :
+                prediction.drift.driftRiskLevel === 'high' ? 'bg-orange-50' :
+                prediction.drift.driftRiskLevel === 'medium' ? 'bg-amber-50' : 'bg-emerald-50'
+              }`}>
+                <span className="text-[10px] font-medium uppercase tracking-wider text-[#999]">Drift Score</span>
+                <div className="flex items-end gap-1.5 mt-2">
+                  <span className={`text-[36px] font-bold leading-none tracking-tight ${
+                    prediction.drift.driftRiskScore >= 75 ? 'text-red-600' :
+                    prediction.drift.driftRiskScore >= 50 ? 'text-orange-600' :
+                    prediction.drift.driftRiskScore >= 25 ? 'text-amber-600' : 'text-emerald-600'
+                  }`}>
+                    {prediction.drift.driftRiskScore}
+                  </span>
+                  <span className="text-[14px] text-[#999] mb-1">/100</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Drivers + Recommendations */}
+            {prediction.drift.drivers.length > 0 && prediction.drift.drivers[0].metric !== 'All metrics' && (
+              <div className="border-t border-[#e8e8e8] bg-white">
+                <div className="px-5 py-3 border-b border-[#f5f5f5]">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-[#999] mb-2">Risk Drivers</p>
+                  <div className="space-y-2">
+                    {prediction.drift.drivers.map((d, i) => (
+                      <div key={i} className="flex items-center gap-2 flex-wrap">
+                        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                          d.severity === 'critical' ? 'bg-red-500' : d.severity === 'warning' ? 'bg-amber-500' : 'bg-blue-400'
+                        }`} />
+                        <span className="text-[12px] font-medium text-[#1a1a1a]">{d.metric}</span>
+                        <span className={`text-[11px] font-mono px-1.5 py-0.5 rounded ${
+                          d.severity === 'critical' ? 'bg-red-50 text-red-600' :
+                          d.severity === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'
+                        }`}>{d.value}</span>
+                        <span className="text-[11px] text-[#999]">{d.impact}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {prediction.drift.recommendations.length > 0 && (
+                  <div className="px-5 py-3">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-[#999] mb-2">Recommended Actions</p>
+                    <div className="space-y-1.5">
+                      {prediction.drift.recommendations.map((rec, i) => (
+                        <p key={i} className="text-[12px] text-[#6b6b6b] flex items-start gap-2">
+                          <span className="text-[10px] text-amber-500 mt-0.5">&#x25B6;</span>
+                          {rec}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Projected Impact Footer */}
+            {(prediction.drift.projectedMarginImpact > 0 || prediction.drift.projectedLaborOverrun > 0) && (
+              <div className="border-t border-[#e8e8e8] px-5 py-2.5 bg-[#fafafa] flex items-center gap-4 flex-wrap">
+                {prediction.drift.projectedMarginImpact > 0 && (
+                  <span className="text-[11px] text-[#999]">
+                    Projected margin impact: <span className="font-semibold text-red-600">{fmt(prediction.drift.projectedMarginImpact)}</span>
+                  </span>
+                )}
+                {prediction.drift.projectedLaborOverrun > 0 && (
+                  <span className="text-[11px] text-[#999]">
+                    Labor overrun: <span className="font-semibold text-red-600">{fmt(prediction.drift.projectedLaborOverrun)}</span>
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
         </motion.div>
       )}
 
