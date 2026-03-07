@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   PipelineItem,
@@ -8,7 +9,9 @@ import {
   getConfidenceIndicator,
   getConfidenceColor,
 } from '@/lib/pipeline';
-import PdfViewer from './PdfViewer';
+
+// Lazy-load PdfViewer to avoid SSR issues with DOMMatrix (react-pdf needs browser APIs)
+const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false });
 
 type ViewMode = 'list' | 'review';
 
@@ -325,8 +328,8 @@ export default function PipelineReview() {
 
         {/* Review content — two panels */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Left: Source text */}
-          <div className="w-1/2 border-r border-[#e8e8e8] flex flex-col">
+          {/* Left: Source document (wider) */}
+          <div className="flex-[3] min-w-0 border-r border-[#e8e8e8] flex flex-col">
             <div className="px-4 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8]">
               <h3 className="text-[13px] font-semibold text-[#37352f]">Source Document</h3>
             </div>
@@ -339,8 +342,8 @@ export default function PipelineReview() {
             </div>
           </div>
 
-          {/* Right: Extracted data + review actions */}
-          <div className="w-1/2 flex flex-col">
+          {/* Right: Extracted data + review actions (narrower) */}
+          <div className="flex-[2] min-w-[320px] max-w-[420px] flex flex-col">
             <div className="px-4 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-2">
               <h3 className="text-[13px] font-semibold text-[#37352f]">Extracted Data</h3>
               {selectedItem.overallConfidence != null && (
