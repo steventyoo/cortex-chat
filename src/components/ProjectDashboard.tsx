@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
+import DailyNoteCard from './DailyNoteCard';
 
 // ─── Types ────────────────────────────────────────────────
 interface CostCode {
@@ -211,6 +212,43 @@ export default function ProjectDashboard({ projectId, projectName }: ProjectDash
       .finally(() => setDocsLoading(false));
   }, [projectId]);
 
+  /* ── Smart prompts for Daily Note (must be before early returns) ── */
+  const smartPrompts = useMemo(() => {
+    if (!data) return [];
+    const prompts: string[] = [];
+    const prod = data.production;
+    const b = data.budgetOverview;
+
+    // Context-aware: worst production item over hours
+    const worstProd = prod.items
+      .filter((p) => p.performanceRatio > 1.1)
+      .sort((a, b) => b.performanceRatio - a.performanceRatio)[0];
+
+    if (worstProd) {
+      const overPct = ((worstProd.performanceRatio - 1) * 100).toFixed(0);
+      prompts.push(`${worstProd.description} is ${overPct}% over on hours — what's driving it?`);
+    }
+
+    // Context-aware: pending change orders
+    if (data.changeOrders.pendingCount > 0) {
+      prompts.push(
+        `${data.changeOrders.pendingCount} CO${data.changeOrders.pendingCount > 1 ? 's' : ''} pending (${fmt(data.changeOrders.pendingAmount)}) — any GC updates?`
+      );
+    }
+
+    // Context-aware: drift score elevated
+    if (prediction?.drift && prediction.drift.driftRiskScore > 30) {
+      prompts.push(`Drift score at ${prediction.drift.driftRiskScore}/100 — anything unusual on site?`);
+    }
+
+    // Context-aware: budget over
+    if (b.budgetVariancePercent > 5) {
+      prompts.push(`Budget is ${b.budgetVariancePercent.toFixed(0)}% over — any scope or efficiency changes?`);
+    }
+
+    return prompts;
+  }, [data, prediction]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -328,6 +366,9 @@ export default function ProjectDashboard({ projectId, projectName }: ProjectDash
           )}
         </div>
       </motion.div>
+
+      {/* ─── Daily Note ─────────────────────────────── */}
+      <DailyNoteCard projectId={projectId} smartPrompts={smartPrompts} />
 
       {/* ─── Predictive Intelligence ────────────────── */}
       {prediction && (

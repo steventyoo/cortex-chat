@@ -13,7 +13,7 @@ function getBaseId() {
   return process.env.AIRTABLE_BASE_ID || '';
 }
 
-async function fetchTable(
+export async function fetchTable(
   tableName: string,
   filterFormula?: string
 ): Promise<AirtableRecord[]> {
@@ -53,6 +53,71 @@ async function fetchTable(
   } while (offset);
 
   return records;
+}
+
+export async function createRecord(
+  tableName: string,
+  fields: Record<string, unknown>
+): Promise<AirtableRecord | null> {
+  const url = `${BASE_URL}/${getBaseId()}/${encodeURIComponent(tableName)}`;
+
+  let response: Response;
+  let retries = 0;
+
+  while (true) {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ fields }),
+    });
+
+    if (response.status === 429 && retries < 3) {
+      retries++;
+      await new Promise((r) => setTimeout(r, 1000 * retries));
+      continue;
+    }
+    break;
+  }
+
+  if (!response.ok) {
+    console.error(`Airtable create error for ${tableName}: ${response.status}`, await response.text());
+    return null;
+  }
+
+  return response.json();
+}
+
+export async function updateRecord(
+  tableName: string,
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<AirtableRecord | null> {
+  const url = `${BASE_URL}/${getBaseId()}/${encodeURIComponent(tableName)}/${recordId}`;
+
+  let response: Response;
+  let retries = 0;
+
+  while (true) {
+    response = await fetch(url, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ fields }),
+    });
+
+    if (response.status === 429 && retries < 3) {
+      retries++;
+      await new Promise((r) => setTimeout(r, 1000 * retries));
+      continue;
+    }
+    break;
+  }
+
+  if (!response.ok) {
+    console.error(`Airtable update error for ${tableName}/${recordId}: ${response.status}`, await response.text());
+    return null;
+  }
+
+  return response.json();
 }
 
 export async function fetchAllProjectData(
