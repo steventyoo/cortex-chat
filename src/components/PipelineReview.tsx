@@ -8,6 +8,7 @@ import {
   getConfidenceIndicator,
   getConfidenceColor,
 } from '@/lib/pipeline';
+import PdfViewer from './PdfViewer';
 
 type ViewMode = 'list' | 'review';
 
@@ -1025,11 +1026,12 @@ function SourceDocumentView({ text, fileName, fileUrl }: { text: string; fileNam
         </div>
 
         {viewMode === 'pdf' ? (
-          <iframe
-            src={`/api/pipeline/pdf?fileId=${driveFileId}`}
-            className="flex-1 w-full border-0"
-            title={fileName}
-          />
+          <div className="flex-1 w-full">
+            <PdfViewer
+              url={`/api/pipeline/pdf?fileId=${driveFileId}`}
+              fileName={fileName}
+            />
+          </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-4">
             <pre className="text-[13px] leading-relaxed text-[#37352f] whitespace-pre-wrap font-mono">
