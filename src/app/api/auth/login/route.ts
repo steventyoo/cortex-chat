@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPassword, createUserSession, SESSION_COOKIE, sessionCookieOptions } from '@/lib/auth-v2';
-import { getUserByEmail, updateUserLastLogin } from '@/lib/organizations';
+import { getUserByEmail, updateUserLastLogin } from '@/lib/supabase';
 
 export async function POST(req: NextRequest) {
   try {

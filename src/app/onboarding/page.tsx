@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getOrganization } from '@/lib/organizations';
+import { getOrganization } from '@/lib/supabase';
 import OnboardingWizard from '@/components/OnboardingWizard';
 
 export default async function OnboardingPage() {

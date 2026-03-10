@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { hashPassword, createUserSession, SESSION_COOKIE, sessionCookieOptions } from '@/lib/auth-v2';
-import { getUserByEmail, createUser, createOrganization } from '@/lib/organizations';
+import { getUserByEmail, createUser, createOrganization } from '@/lib/supabase';
 
 export async function POST(req: NextRequest) {
   try {

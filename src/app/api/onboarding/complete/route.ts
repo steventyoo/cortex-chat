@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getOrganization, updateOrganization } from '@/lib/organizations';
+import { getOrganization, updateOrganization } from '@/lib/supabase';
 
 export async function POST(req: NextRequest) {
   const token = req.cookies.get(SESSION_COOKIE)?.value;

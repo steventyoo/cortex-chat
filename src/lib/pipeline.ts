@@ -210,18 +210,18 @@ export const MULTI_RECORD_FIELDS: Record<string, string[]> = {
   ],
 };
 
-// Map extracted document types to Airtable tables
+// Map extracted document types to Supabase tables
 export const DOC_TYPE_TO_TABLE: Record<string, string> = {
-  'Change Order': 'CHANGE_ORDERS',
-  'ASI': 'DESIGN_CHANGES',
-  'RFI': 'DESIGN_CHANGES',
-  'Invoice': 'JOB_COSTS',
-  'Daily Report': 'DOCUMENTS',
-  'Submittal': 'DOCUMENTS',
-  'Job Cost Report': 'JOB_COSTS',
-  'Contract': 'DOCUMENTS',
-  'Schedule': 'DOCUMENTS',
-  'Other': 'DOCUMENTS',
+  'Change Order': 'change_orders',
+  'ASI': 'design_changes',
+  'RFI': 'design_changes',
+  'Invoice': 'job_costs',
+  'Daily Report': 'documents',
+  'Submittal': 'documents',
+  'Job Cost Report': 'job_costs',
+  'Contract': 'documents',
+  'Schedule': 'documents',
+  'Other': 'documents',
 };
 
 // Build extraction prompt for a specific document

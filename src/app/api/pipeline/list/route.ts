@@ -1,71 +1,60 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { parsePipelineItem } from '@/lib/pipeline';
-
-const BASE_URL = 'https://api.airtable.com/v0';
-
-function getHeaders() {
-  return {
-    Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
-    'Content-Type': 'application/json',
-  };
-}
-
-function getBaseId() {
-  return process.env.AIRTABLE_BASE_ID || '';
-}
+import { getSupabase } from '@/lib/supabase';
 
 export async function GET(request: NextRequest) {
-  // Auth check
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   if (!token || !(await validateUserSession(token))) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Optional filters from query params
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('projectId');
   const status = searchParams.get('status');
 
-  // Build filter formula — always exclude soft-deleted items
-  const filters: string[] = [`{Status}!='deleted'`];
-  if (projectId) {
-    filters.push(`{Project ID}='${projectId}'`);
-  }
-  if (status) {
-    filters.push(`{Status}='${status}'`);
-  }
-
-  let filterFormula: string;
-  if (filters.length === 1) {
-    filterFormula = filters[0];
-  } else {
-    filterFormula = `AND(${filters.join(',')})`;
-  }
-
   try {
-    const params = new URLSearchParams({
-      pageSize: '100',
-      'sort[0][field]': 'Created At',
-      'sort[0][direction]': 'desc',
-    });
-    params.set('filterByFormula', filterFormula);
+    const sb = getSupabase();
+    let query = sb.from('pipeline_log').select('*').neq('status', 'deleted').order('created_at', { ascending: false }).limit(100);
 
-    const url = `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?${params}`;
-    const response = await fetch(url, { headers: getHeaders(), cache: 'no-store' });
+    if (projectId) query = query.eq('project_id', projectId);
+    if (status) query = query.eq('status', status);
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('Airtable error:', errText);
+    const { data, error } = await query;
+    if (error) {
+      console.error('Supabase error:', error.message);
       return Response.json({ error: 'Failed to fetch pipeline data' }, { status: 500 });
     }
 
-    const data = await response.json();
-    const items = (data.records || []).map((record: { id: string; fields: Record<string, unknown> }) =>
-      parsePipelineItem(record)
-    );
+    // Map Supabase rows to the Airtable-shaped records that parsePipelineItem expects
+    const items = (data || []).map((row: Record<string, unknown>) => {
+      const fields: Record<string, unknown> = {};
+      // Map snake_case columns to Title Case field names for parsePipelineItem
+      fields['Pipeline ID'] = row.pipeline_id;
+      fields['Project ID'] = row.project_id;
+      fields['File Name'] = row.file_name;
+      fields['File URL'] = row.file_url;
+      fields['Document Type'] = row.document_type;
+      fields['Status'] = row.status;
+      fields['Overall Confidence'] = row.overall_confidence;
+      fields['Source Text'] = row.source_text;
+      fields['Extracted Data'] = row.extracted_data ? JSON.stringify(row.extracted_data) : null;
+      fields['Validation Flags'] = row.validation_flags ? JSON.stringify(row.validation_flags) : null;
+      fields['AI Model'] = row.ai_model;
+      fields['Reviewer'] = row.reviewer;
+      fields['Review Action'] = row.review_action;
+      fields['Review Notes'] = row.review_notes;
+      fields['Review Edits'] = row.review_edits ? JSON.stringify(row.review_edits) : null;
+      fields['Rejection Reason'] = row.rejection_reason;
+      fields['Airtable Record IDs'] = row.pushed_record_ids;
+      fields['Created At'] = row.created_at;
+      fields['Tier1 Completed At'] = row.tier1_completed_at;
+      fields['Tier2 Completed At'] = row.tier2_completed_at;
+      fields['Reviewed At'] = row.reviewed_at;
+      fields['Pushed At'] = row.pushed_at;
+      return parsePipelineItem({ id: String(row.id), fields });
+    });
 
-    // Compute stats
     const stats = {
       total: items.length,
       pendingReview: items.filter((i: { status: string }) => i.status === 'pending_review').length,

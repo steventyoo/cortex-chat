@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { fetchProjectHealthData } from '@/lib/airtable';
+import { fetchProjectHealthData } from '@/lib/supabase';
 
 export const maxDuration = 30;
 

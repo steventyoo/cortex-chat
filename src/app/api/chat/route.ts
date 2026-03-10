@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData, resolveProjectId, verifyProjectAccess } from '@/lib/airtable';
+import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData, resolveProjectId, verifyProjectAccess } from '@/lib/supabase';
 import { CORTEX_SYSTEM_PROMPT, assembleContext, assemblePortfolioContext } from '@/lib/prompts';
 import { streamChatResponse } from '@/lib/claude';
 import { ChatMessage } from '@/lib/types';

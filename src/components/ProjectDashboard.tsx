@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import DailyNoteCard from './DailyNoteCard';
+import StaffingPanel from './StaffingPanel';
 
 // ─── Types ────────────────────────────────────────────────
 interface CostCode {
@@ -133,6 +134,8 @@ interface ProjectDoc {
 interface ProjectDashboardProps {
   projectId: string;
   projectName?: string;
+  projectAddress?: string;
+  projectTrade?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────
@@ -158,8 +161,12 @@ function alertIcon(severity: string) {
   return '🔵';
 }
 
+// ─── Tab type ─────────────────────────────────────────────
+type DashboardTab = 'overview' | 'notes' | 'staffing';
+
 // ─── Main Component ───────────────────────────────────────
-export default function ProjectDashboard({ projectId, projectName }: ProjectDashboardProps) {
+export default function ProjectDashboard({ projectId, projectName, projectAddress, projectTrade }: ProjectDashboardProps) {
+  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [data, setData] = useState<DashboardData | null>(null);
   const [prediction, setPrediction] = useState<PredictionData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -284,7 +291,7 @@ export default function ProjectDashboard({ projectId, projectName }: ProjectDash
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 pb-20">
       {/* ─── Header ─────────────────────────────────── */}
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mb-6">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mb-4">
         <div>
           <h1 className="text-[22px] font-bold text-[#1a1a1a] tracking-[-0.02em]">
             {data.projectName}
@@ -293,6 +300,46 @@ export default function ProjectDashboard({ projectId, projectName }: ProjectDash
         </div>
       </motion.div>
 
+      {/* ─── Tab Bar ──────────────────────────────────── */}
+      <div className="flex gap-1 mb-6 border-b border-[#e8e8e8]">
+        {([
+          { key: 'overview' as DashboardTab, label: 'Overview' },
+          { key: 'notes' as DashboardTab, label: 'Daily Notes' },
+          { key: 'staffing' as DashboardTab, label: 'Staffing' },
+        ]).map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`px-4 py-2 text-[13px] font-medium transition-colors relative ${
+              activeTab === tab.key
+                ? 'text-[#1a1a1a]'
+                : 'text-[#999] hover:text-[#6b6b6b]'
+            }`}
+          >
+            {tab.label}
+            {activeTab === tab.key && (
+              <motion.div
+                layoutId="dashboardTab"
+                className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#1a1a1a] rounded-full"
+              />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ─── Daily Notes Tab ──────────────────────────── */}
+      {activeTab === 'notes' && (
+        <DailyNoteCard projectId={projectId} projectAddress={projectAddress} projectTrade={projectTrade} smartPrompts={smartPrompts} />
+      )}
+
+      {/* ─── Staffing Tab ─────────────────────────────── */}
+      {activeTab === 'staffing' && (
+        <StaffingPanel projectId={projectId} />
+      )}
+
+      {/* ─── Overview Tab ─────────────────────────────── */}
+      {activeTab === 'overview' && (
+      <>
       {/* ─── KPI Cards ──────────────────────────────── */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
@@ -366,9 +413,6 @@ export default function ProjectDashboard({ projectId, projectName }: ProjectDash
           )}
         </div>
       </motion.div>
-
-      {/* ─── Daily Note ─────────────────────────────── */}
-      <DailyNoteCard projectId={projectId} smartPrompts={smartPrompts} />
 
       {/* ─── Predictive Intelligence ────────────────── */}
       {prediction && (
@@ -778,29 +822,7 @@ export default function ProjectDashboard({ projectId, projectName }: ProjectDash
         )}
       </motion.div>
 
-      {/* ─── Staffing ───────────────────────────────── */}
-      {data.staffing.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="rounded-2xl ring-1 ring-[#e8e8e8] bg-white p-5"
-        >
-          <h3 className="text-[13px] font-semibold text-[#1a1a1a] mb-3">Team</h3>
-          <div className="flex flex-wrap gap-2">
-            {data.staffing.map((s, i) => (
-              <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#f7f7f5] text-[12px]">
-                <div className="w-6 h-6 rounded-full bg-[#e8e8e8] flex items-center justify-center text-[10px] font-bold text-[#666]">
-                  {s.name.charAt(0)}
-                </div>
-                <div>
-                  <span className="font-medium text-[#1a1a1a]">{s.name}</span>
-                  <span className="text-[#999] ml-1">{s.role}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </motion.div>
+      </>
       )}
     </div>
   );

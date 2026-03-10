@@ -1,19 +1,6 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getOrganization } from '@/lib/organizations';
-
-const BASE_URL = 'https://api.airtable.com/v0';
-
-function getHeaders() {
-  return {
-    Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
-    'Content-Type': 'application/json',
-  };
-}
-
-function getBaseId() {
-  return process.env.AIRTABLE_BASE_ID || '';
-}
+import { getOrganization, getSupabase } from '@/lib/supabase';
 
 export const maxDuration = 30;
 
@@ -29,55 +16,33 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'projects array required' }, { status: 400 });
   }
 
-  // Verify org exists
   const org = await getOrganization(session.orgId);
   if (!org) {
     return Response.json({ error: 'Organization not found' }, { status: 404 });
   }
 
-  // Create PROJECTS records in Airtable (batch of 10 per Airtable limit)
-  const created: string[] = [];
-  const batches = [];
+  const sb = getSupabase();
+  const rows = projects.map(
+    (p: { name: string; projectId?: string; driveFolderId?: string }) => ({
+      project_id: p.projectId || p.name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase(),
+      project_name: p.name,
+      org_id: session.orgId,
+      project_status: 'active',
+      contract_value: 0,
+      revised_budget: 0,
+      job_to_date: 0,
+      percent_complete_cost: 0,
+      total_cos: 0,
+    })
+  );
 
-  for (let i = 0; i < projects.length; i += 10) {
-    batches.push(projects.slice(i, i + 10));
+  const { data, error } = await sb.from('projects').insert(rows).select('project_id');
+  if (error) {
+    console.error('Failed to create projects:', error.message);
+    return Response.json({ error: 'Failed to create projects' }, { status: 500 });
   }
 
-  for (const batch of batches) {
-    const records = batch.map(
-      (p: { name: string; projectId?: string; driveFolderId?: string }) => ({
-        fields: {
-          'Project ID': p.projectId || p.name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase(),
-          'Project Name': p.name,
-          'Organization ID': session.orgId,
-          'Project Status': 'Active',
-          'Contract Value': 0,
-          'Revised Budget': 0,
-          'Job to Date': 0,
-          'Percent Complete Cost': 0,
-          'Total COs': 0,
-        },
-      })
-    );
-
-    const url = `${BASE_URL}/${getBaseId()}/${encodeURIComponent('PROJECTS')}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ records }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      console.error('Failed to create projects:', err);
-      continue;
-    }
-
-    const data = await res.json();
-    for (const rec of data.records || []) {
-      created.push(rec.fields['Project ID']);
-    }
-  }
+  const created = (data || []).map((r: { project_id: string }) => r.project_id);
 
   return Response.json({
     success: true,

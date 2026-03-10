@@ -2,7 +2,7 @@
 // Uses Claude to analyze patterns across all projects and generate intelligence
 
 import { NextRequest } from 'next/server';
-import { fetchProjectHealthData, fetchAllProjectData } from '@/lib/airtable';
+import { fetchProjectHealthData, fetchAllProjectData } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import Anthropic from '@anthropic-ai/sdk';
 

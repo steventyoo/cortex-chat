@@ -1,5 +1,5 @@
 import { cookies } from 'next/headers';
-import { fetchProjectList } from '@/lib/airtable';
+import { fetchProjectList } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { ProjectSummary } from '@/lib/types';
 import ChatContainer from '@/components/ChatContainer';

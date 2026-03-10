@@ -187,6 +187,8 @@ export async function fetchProjectList(orgId?: string): Promise<ProjectSummary[]
       projectName: String(rec.fields['Project Name'] || ''),
       status: String(rec.fields['Project Status'] || ''),
       contractValue: Number(rec.fields['Contract Value'] || 0),
+      address: String(rec.fields['Address'] || ''),
+      trade: String(rec.fields['Trade'] || ''),
     }))
     .filter((p) => p.projectId.length > 0); // Skip empty records
 }

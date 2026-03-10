@@ -5,12 +5,12 @@
 //
 // Flow:
 //   1. List all files across project folders in Drive
-//   2. Check PIPELINE_LOG for already-processed files (by Drive file ID)
+//   2. Check pipeline_log for already-processed files (by Drive file ID)
 //   3. For new files (up to 3 per run):
 //      a. Download content
 //      b. Extract text (text files) or prepare base64 (PDF/images)
 //      c. Run AI extraction + validation via Claude
-//      d. Create PIPELINE_LOG entry
+//      d. Create pipeline_log entry
 //   4. Return summary
 
 import { NextRequest } from 'next/server';
@@ -31,31 +31,18 @@ import {
   ValidationFlag,
   DOCUMENT_TYPE_FIELDS,
 } from '@/lib/pipeline';
-import { fetchProjectList } from '@/lib/airtable';
+import { fetchProjectList, getSupabase } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 
-const BASE_URL = 'https://api.airtable.com/v0';
 const MAX_FILES_PER_RUN = 3; // Stay within 60s timeout
-
-function getHeaders() {
-  return {
-    Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
-    'Content-Type': 'application/json',
-  };
-}
-
-function getBaseId() {
-  return process.env.AIRTABLE_BASE_ID || '';
-}
 
 export const maxDuration = 60;
 
 /**
  * GET handler — triggered by Vercel Cron or manual admin call.
- * Vercel Cron sends an Authorization header with CRON_SECRET.
  */
 export async function GET(request: NextRequest) {
-  // Auth: accept CRON_SECRET, admin cookie, or valid session (for logged-in users on Pipeline page)
+  // Auth: accept CRON_SECRET, admin cookie, or valid session
   const authHeader = request.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
 
@@ -81,14 +68,12 @@ export async function GET(request: NextRequest) {
     const allDriveFiles = await listAllDriveFiles();
     const supportedFiles = allDriveFiles.filter((f) => isSupportedFileType(f.mimeType));
 
-    // 2. Get already-processed files from PIPELINE_LOG (by URL and by name+project)
+    // 2. Get already-processed files from pipeline_log
     const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles();
 
-    // 3. Find new files (not yet in pipeline) — check both URL and name dedup
+    // 3. Find new files (not yet in pipeline)
     const newFiles = supportedFiles.filter((f) => {
-      // Primary dedup: exact Drive file ID
       if (processedFileUrls.has(buildDriveFileUrl(f.id))) return false;
-      // Secondary dedup: same file name + same project folder (catches re-scans)
       const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
       if (processedNameKeys.has(nameKey)) return false;
       return true;
@@ -104,19 +89,12 @@ export async function GET(request: NextRequest) {
     }
 
     // 4. Map Drive folder names to project IDs
-    //    Matches on: Project Name, Project ID, or normalized versions of both.
-    //    e.g., folder "2103-NORTHGATE-M2" matches projectId "2103-NORTHGATE-M2"
-    //    e.g., folder "Compass Northgate M2" matches projectName "Compass Northgate M2"
     const projects = await fetchProjectList();
-    const folderLookup = new Map<string, string>(); // normalized key → projectId
+    const folderLookup = new Map<string, string>();
     for (const p of projects) {
-      // Match on project name (lowercase)
       folderLookup.set(p.projectName.toLowerCase(), p.projectId);
-      // Match on project ID (lowercase)
       folderLookup.set(p.projectId.toLowerCase(), p.projectId);
-      // Match on project ID with spaces instead of dashes/underscores
       folderLookup.set(p.projectId.toLowerCase().replace(/[-_]/g, ' '), p.projectId);
-      // Match on project name with dashes instead of spaces
       folderLookup.set(p.projectName.toLowerCase().replace(/\s+/g, '-'), p.projectId);
     }
 
@@ -155,7 +133,6 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.error('Drive scan error:', err);
     const detail = err instanceof Error ? err.message : 'Unknown';
-    // Include more context for debugging
     const hint = detail.includes('invalid_grant') || detail.includes('private key')
       ? 'Check that GOOGLE_PRIVATE_KEY is correctly formatted with real newlines'
       : detail.includes('notFound') || detail.includes('404')
@@ -173,60 +150,22 @@ export async function GET(request: NextRequest) {
 // ─── Helper Functions ────────────────────────────────────────────
 
 /**
- * Get all Drive file URLs AND file names already in PIPELINE_LOG to avoid reprocessing.
- * Returns a Set of gdrive:// URLs for deduplication.
- * Also returns a Set of "fileName|projectId" keys as a secondary check.
+ * Get all Drive file URLs and file names already in pipeline_log to avoid reprocessing.
  */
 async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: Set<string> }> {
   const urls = new Set<string>();
   const nameKeys = new Set<string>();
-
-  function addRecord(record: { fields: Record<string, unknown> }) {
-    const fileUrl = record.fields['File URL'];
-    if (fileUrl) urls.add(String(fileUrl));
-    const fileName = record.fields['File Name'];
-    const projectId = record.fields['Project ID'];
-    if (fileName) {
-      nameKeys.add(`${String(fileName).toLowerCase()}|${String(projectId || '').toLowerCase()}`);
-    }
-  }
+  const sb = getSupabase();
 
   try {
-    // Fetch ALL PIPELINE_LOG records to catch duplicates by URL and name.
-    // Use fields[] array format for Airtable REST API (NOT JSON.stringify).
-    const params = new URLSearchParams({ pageSize: '100' });
-    params.append('fields[]', 'File URL');
-    params.append('fields[]', 'File Name');
-    params.append('fields[]', 'Project ID');
+    const { data } = await sb
+      .from('pipeline_log')
+      .select('file_url, file_name, project_id');
 
-    const res = await fetch(
-      `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?${params}`,
-      { headers: getHeaders() }
-    );
-
-    if (res.ok) {
-      const data = await res.json();
-      for (const record of data.records || []) addRecord(record);
-
-      // Handle pagination
-      let offset = data.offset;
-      while (offset) {
-        const nextParams = new URLSearchParams({ pageSize: '100', offset });
-        nextParams.append('fields[]', 'File URL');
-        nextParams.append('fields[]', 'File Name');
-        nextParams.append('fields[]', 'Project ID');
-
-        const nextRes = await fetch(
-          `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?${nextParams}`,
-          { headers: getHeaders() }
-        );
-        if (nextRes.ok) {
-          const nextData = await nextRes.json();
-          for (const record of nextData.records || []) addRecord(record);
-          offset = nextData.offset;
-        } else {
-          break;
-        }
+    for (const row of data || []) {
+      if (row.file_url) urls.add(String(row.file_url));
+      if (row.file_name) {
+        nameKeys.add(`${String(row.file_name).toLowerCase()}|${String(row.project_id || '').toLowerCase()}`);
       }
     }
   } catch (err) {
@@ -254,25 +193,15 @@ async function processFile(
   const pipelineId = generatePipelineId();
   const driveFileUrl = buildDriveFileUrl(file.id);
   const now = new Date().toISOString();
+  const sb = getSupabase();
 
   // Resolve project ID from folder name
-  // Tries: exact match on name/ID, then normalized (dashes↔spaces), then fuzzy substring
   let projectId = '';
   if (file.parentFolderName && file.parentFolderName !== '_Root') {
     const folderLower = file.parentFolderName.toLowerCase();
-
-    // 1. Direct lookup (matches project name, project ID, or normalized variants)
     projectId = folderLookup.get(folderLower) || '';
-
-    // 2. Try with dashes replaced by spaces and vice versa
-    if (!projectId) {
-      projectId = folderLookup.get(folderLower.replace(/[-_]/g, ' ')) || '';
-    }
-    if (!projectId) {
-      projectId = folderLookup.get(folderLower.replace(/\s+/g, '-')) || '';
-    }
-
-    // 3. Fuzzy substring match (folder contains project name/ID or vice versa)
+    if (!projectId) projectId = folderLookup.get(folderLower.replace(/[-_]/g, ' ')) || '';
+    if (!projectId) projectId = folderLookup.get(folderLower.replace(/\s+/g, '-')) || '';
     if (!projectId) {
       for (const [key, id] of folderLookup) {
         if (folderLower.includes(key) || key.includes(folderLower)) {
@@ -283,69 +212,55 @@ async function processFile(
     }
   }
 
-  // 0. Final dedup check — right before inserting, verify this file URL doesn't exist yet
-  //    This catches race conditions where two scans run concurrently.
-  const dupParams = new URLSearchParams({
-    filterByFormula: `{File URL}='${driveFileUrl}'`,
-    pageSize: '1',
-  });
-  dupParams.append('fields[]', 'Pipeline ID');
-  const dupCheck = await fetch(
-    `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?${dupParams}`,
-    { headers: getHeaders() }
-  );
-  if (dupCheck.ok) {
-    const dupData = await dupCheck.json();
-    if (dupData.records && dupData.records.length > 0) {
-      return {
-        fileName: file.name,
-        driveId: file.id,
-        status: 'already_exists',
-        pipelineId: dupData.records[0].fields['Pipeline ID'],
-      };
-    }
+  // Final dedup check — right before inserting
+  const { count: dupCount } = await sb
+    .from('pipeline_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('file_url', driveFileUrl);
+
+  if ((dupCount || 0) > 0) {
+    return {
+      fileName: file.name,
+      driveId: file.id,
+      status: 'already_exists',
+      pipelineId,
+    };
   }
 
-  // 1. Create initial PIPELINE_LOG record
-  const createRes = await fetch(`${BASE_URL}/${getBaseId()}/PIPELINE_LOG`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({
-      records: [{
-        fields: {
-          'Pipeline ID': pipelineId,
-          'Project ID': projectId,
-          'File Name': file.name,
-          'File URL': driveFileUrl,
-          'Status': 'tier1_extracting',
-          'Created At': now,
-          'AI Model': 'claude-sonnet-4-20250514',
-        },
-      }],
-    }),
-  });
+  // 1. Create initial pipeline_log record
+  const { data: createData, error: createError } = await sb
+    .from('pipeline_log')
+    .insert({
+      pipeline_id: pipelineId,
+      project_id: projectId,
+      file_name: file.name,
+      file_url: driveFileUrl,
+      status: 'tier1_extracting',
+      created_at: now,
+      ai_model: 'claude-sonnet-4-20250514',
+    })
+    .select('id')
+    .single();
 
-  if (!createRes.ok) {
-    throw new Error(`Failed to create pipeline record: ${createRes.status}`);
+  if (createError) {
+    throw new Error(`Failed to create pipeline record: ${createError.message}`);
   }
 
-  const createData = await createRes.json();
-  const recordId = createData.records?.[0]?.id;
+  const recordId = createData?.id ? String(createData.id) : null;
 
   // 2. Download file content from Drive
   const content = await downloadFileContent(file.id, file.mimeType);
 
   if (content.method === 'unsupported') {
-    // Update record with error
     if (recordId) {
-      await updatePipelineRecord(recordId, {
-        'Status': 'intake',
-        'Validation Flags': JSON.stringify([{
+      await sb.from('pipeline_log').update({
+        status: 'intake',
+        validation_flags: [{
           field: 'file_type',
           issue: `Unsupported file type: ${file.mimeType}`,
           severity: 'error',
-        }]),
-      });
+        }],
+      }).eq('id', recordId);
     }
     return { fileName: file.name, driveId: file.id, status: 'unsupported_type', pipelineId };
   }
@@ -354,34 +269,31 @@ async function processFile(
   let sourceText: string;
 
   if (content.text) {
-    // Already have text (text files, Google Docs, Excel, Word, PPT, emails)
     sourceText = content.text;
   } else if (content.base64 && (content.method === 'pdf' || content.method === 'image')) {
-    // Use Claude to OCR/read the document (PDFs, images)
     sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
   } else {
-    // No usable content
     if (recordId) {
-      await updatePipelineRecord(recordId, {
-        'Status': 'intake',
-        'Validation Flags': JSON.stringify([{
+      await sb.from('pipeline_log').update({
+        status: 'intake',
+        validation_flags: [{
           field: 'extraction',
           issue: 'Could not extract text from file',
           severity: 'error',
-        }]),
-      });
+        }],
+      }).eq('id', recordId);
     }
     return { fileName: file.name, driveId: file.id, status: 'extraction_failed', pipelineId };
   }
 
   // Store source text
   if (recordId) {
-    await updatePipelineRecord(recordId, {
-      'Source Text': sourceText.substring(0, 99000),
-    });
+    await sb.from('pipeline_log').update({
+      source_text: sourceText.substring(0, 500000),
+    }).eq('id', recordId);
   }
 
-  // 4. Run AI extraction (same logic as extract/route.ts)
+  // 4. Run AI extraction
   let extraction: ExtractionResult;
 
   try {
@@ -408,14 +320,14 @@ async function processFile(
   } catch (err) {
     console.error('AI extraction failed for Drive file:', file.name, err);
     if (recordId) {
-      await updatePipelineRecord(recordId, {
-        'Status': 'intake',
-        'Validation Flags': JSON.stringify([{
+      await sb.from('pipeline_log').update({
+        status: 'intake',
+        validation_flags: [{
           field: 'extraction',
           issue: `AI extraction failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
           severity: 'error',
-        }]),
-      });
+        }],
+      }).eq('id', recordId);
     }
     return { fileName: file.name, driveId: file.id, status: 'ai_extraction_failed', pipelineId };
   }
@@ -453,24 +365,19 @@ async function processFile(
   }
 
   const hasErrors = flags.some((f) => f.severity === 'error');
-  const hasWarnings = flags.some((f) => f.severity === 'warning');
-  const finalStatus = hasErrors
-    ? 'tier2_flagged'
-    : hasWarnings
-    ? 'pending_review'
-    : 'pending_review'; // Always queue for human review from Drive intake
+  const finalStatus = hasErrors ? 'tier2_flagged' : 'pending_review';
 
   // 6. Update pipeline record
   if (recordId) {
-    await updatePipelineRecord(recordId, {
-      'Document Type': extraction.documentType,
-      'Status': finalStatus,
-      'Overall Confidence': overallConfidence,
-      'Extracted Data': JSON.stringify(extraction),
-      'Validation Flags': flags.length > 0 ? JSON.stringify(flags) : undefined,
-      'Tier1 Completed At': new Date().toISOString(),
-      'Tier2 Completed At': new Date().toISOString(),
-    });
+    await sb.from('pipeline_log').update({
+      document_type: extraction.documentType,
+      status: finalStatus,
+      overall_confidence: overallConfidence,
+      extracted_data: extraction,
+      validation_flags: flags.length > 0 ? flags : null,
+      tier1_completed_at: new Date().toISOString(),
+      tier2_completed_at: new Date().toISOString(),
+    }).eq('id', recordId);
   }
 
   return {
@@ -533,18 +440,4 @@ async function extractTextWithClaude(
     .filter((block) => block.type === 'text')
     .map((block) => (block.type === 'text' ? block.text : ''))
     .join('');
-}
-
-/**
- * Update a PIPELINE_LOG record in Airtable.
- */
-async function updatePipelineRecord(
-  recordId: string,
-  fields: Record<string, unknown>
-): Promise<void> {
-  await fetch(`${BASE_URL}/${getBaseId()}/PIPELINE_LOG/${recordId}`, {
-    method: 'PATCH',
-    headers: getHeaders(),
-    body: JSON.stringify({ fields }),
-  });
 }

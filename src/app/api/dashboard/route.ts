@@ -2,7 +2,7 @@
 // for the visual analytics dashboard.
 
 import { NextRequest } from 'next/server';
-import { fetchAllProjectData, verifyProjectAccess } from '@/lib/airtable';
+import { fetchAllProjectData, verifyProjectAccess } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 
 export const maxDuration = 30;

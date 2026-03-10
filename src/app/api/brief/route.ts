@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { fetchAllProjectData } from '@/lib/airtable';
+import { fetchAllProjectData } from '@/lib/supabase';
 import { generateProjectBrief } from '@/lib/pdf-brief';
 
 export const maxDuration = 30;

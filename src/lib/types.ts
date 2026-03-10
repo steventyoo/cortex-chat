@@ -33,6 +33,8 @@ export interface ProjectSummary {
   projectName: string;
   status: string;
   contractValue: number;
+  address: string;
+  trade: string;
 }
 
 export interface StreamEvent {

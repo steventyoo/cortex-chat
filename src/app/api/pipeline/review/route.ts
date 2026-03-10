@@ -1,19 +1,7 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
+import { getSupabase, pushRecordsToTable, checkDuplicatePipeline } from '@/lib/supabase';
 import { DOC_TYPE_TO_TABLE, ExtractionResult, ReviewAction } from '@/lib/pipeline';
-
-const BASE_URL = 'https://api.airtable.com/v0';
-
-function getHeaders() {
-  return {
-    Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
-    'Content-Type': 'application/json',
-  };
-}
-
-function getBaseId() {
-  return process.env.AIRTABLE_BASE_ID || '';
-}
 
 export const maxDuration = 60;
 
@@ -35,7 +23,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     recordId = body.recordId;
-    action = body.action; // 'approved' | 'rejected' | 'edited'
+    action = body.action;
     reviewer = body.reviewer || 'Admin';
     notes = body.notes || '';
     rejectionReason = body.rejectionReason || '';
@@ -50,45 +38,46 @@ export async function POST(request: NextRequest) {
   }
 
   const now = new Date().toISOString();
+  const sb = getSupabase();
 
   try {
     // 1. Get the current pipeline record
-    const getRes = await fetch(
-      `${BASE_URL}/${getBaseId()}/PIPELINE_LOG/${recordId}`,
-      { headers: getHeaders() }
-    );
+    const { data: record, error: getError } = await sb
+      .from('pipeline_log')
+      .select('*')
+      .eq('id', recordId)
+      .single();
 
-    if (!getRes.ok) {
+    if (getError || !record) {
       return Response.json({ error: 'Pipeline record not found' }, { status: 404 });
     }
 
-    const record = await getRes.json();
-    const fields = record.fields;
-
     // 2. Update pipeline record with review action
     const updateFields: Record<string, unknown> = {
-      'Status': action === 'rejected' ? 'rejected' : 'approved',
-      'Reviewer': reviewer,
-      'Review Action': action,
-      'Reviewed At': now,
+      status: action === 'rejected' ? 'rejected' : 'approved',
+      reviewer,
+      review_action: action,
+      reviewed_at: now,
     };
 
-    if (notes) updateFields['Review Notes'] = notes;
-    if (rejectionReason) updateFields['Rejection Reason'] = rejectionReason;
+    if (notes) updateFields.review_notes = notes;
+    if (rejectionReason) updateFields.rejection_reason = rejectionReason;
 
     // If edited, store the edits and update extracted data
     if (action === 'edited' && editedFields) {
-      updateFields['Review Edits'] = JSON.stringify(editedFields);
-      updateFields['Status'] = 'approved'; // edited = approved with changes
+      updateFields.review_edits = editedFields;
+      updateFields.status = 'approved';
 
-      // Merge edits into extracted data
       try {
-        const extractedData: ExtractionResult = JSON.parse(fields['Extracted Data']);
+        const extractedData: ExtractionResult = typeof record.extracted_data === 'string'
+          ? JSON.parse(record.extracted_data)
+          : record.extracted_data;
+
         for (const [key, value] of Object.entries(editedFields)) {
           if (extractedData.fields[key]) {
             extractedData.fields[key] = {
               value: value as string | number | null,
-              confidence: 1.0, // Human-verified = 100% confidence
+              confidence: 1.0,
             };
           } else {
             extractedData.fields[key] = {
@@ -97,195 +86,96 @@ export async function POST(request: NextRequest) {
             };
           }
         }
-        updateFields['Extracted Data'] = JSON.stringify(extractedData);
+        updateFields.extracted_data = extractedData;
       } catch { /* keep existing extracted data */ }
     }
 
-    await fetch(`${BASE_URL}/${getBaseId()}/PIPELINE_LOG/${recordId}`, {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ fields: updateFields }),
-    });
+    await sb.from('pipeline_log').update(updateFields).eq('id', recordId);
 
-    // 3. If approved, push data to the appropriate Airtable table
-    //    UNLESS testMode is on — then skip the push and just keep status as 'approved'
+    // 3. If approved, push data to the appropriate Supabase table
     let pushedRecordId: string | null = null;
     let alreadyPushed = false;
 
     if ((action === 'approved' || action === 'edited') && !testMode) {
       try {
         // ── DUPLICATE PUSH SAFEGUARD ──
-        // Check 1: Was THIS record already pushed? (has Airtable Record IDs)
-        if (fields['Airtable Record IDs']) {
+
+        // Check 1: Was THIS record already pushed?
+        if (record.pushed_record_ids) {
           alreadyPushed = true;
-          console.warn(`Pipeline ${recordId} already pushed (record: ${fields['Airtable Record IDs']}). Skipping push.`);
+          console.warn(`Pipeline ${recordId} already pushed (record: ${record.pushed_record_ids}). Skipping push.`);
         }
 
-        // Check 2: Is there another PIPELINE_LOG entry for the same file that was already pushed?
-        if (!alreadyPushed && fields['File URL']) {
-          const dupCheckRes = await fetch(
-            `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?` +
-              new URLSearchParams({
-                filterByFormula: `AND({File URL}='${String(fields['File URL']).replace(/'/g, "\\'")}',{Status}='pushed',RECORD_ID()!='${recordId}')`,
-                pageSize: '1',
-              }),
-            { headers: getHeaders() }
+        // Check 2 & 3: Is there another pipeline entry for the same file that was already pushed?
+        if (!alreadyPushed) {
+          const isDuplicate = await checkDuplicatePipeline(
+            record.file_url || null,
+            record.file_name || null,
+            record.project_id || null,
+            recordId
           );
-          if (dupCheckRes.ok) {
-            const dupData = await dupCheckRes.json();
-            if (dupData.records && dupData.records.length > 0) {
-              alreadyPushed = true;
-              console.warn(`File "${fields['File Name']}" was already pushed by pipeline ${dupData.records[0].fields['Pipeline ID']}. Skipping push.`);
-            }
+          if (isDuplicate) {
+            alreadyPushed = true;
+            console.warn(`File "${record.file_name}" was already pushed. Skipping push.`);
           }
         }
 
-        // Check 3: Is there another PIPELINE_LOG entry for the same filename + project that was pushed?
-        if (!alreadyPushed && fields['File Name'] && fields['Project ID']) {
-          const nameCheckRes = await fetch(
-            `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?` +
-              new URLSearchParams({
-                filterByFormula: `AND({File Name}='${String(fields['File Name']).replace(/'/g, "\\'")}',{Project ID}='${String(fields['Project ID']).replace(/'/g, "\\'")}',{Status}='pushed',RECORD_ID()!='${recordId}')`,
-                pageSize: '1',
-              }),
-            { headers: getHeaders() }
-          );
-          if (nameCheckRes.ok) {
-            const nameData = await nameCheckRes.json();
-            if (nameData.records && nameData.records.length > 0) {
-              alreadyPushed = true;
-              console.warn(`File "${fields['File Name']}" for project "${fields['Project ID']}" was already pushed. Skipping push.`);
-            }
-          }
-        }
-
-        if (alreadyPushed) {
-          // Mark as approved but DON'T push — data already exists
-          // The status was already set to 'approved' in step 2
-        } else {
-          const extractedData: ExtractionResult = JSON.parse(
-            action === 'edited' && updateFields['Extracted Data']
-              ? String(updateFields['Extracted Data'])
-              : fields['Extracted Data']
-          );
+        if (!alreadyPushed) {
+          const extractedData: ExtractionResult = action === 'edited' && updateFields.extracted_data
+            ? updateFields.extracted_data as ExtractionResult
+            : (typeof record.extracted_data === 'string'
+              ? JSON.parse(record.extracted_data)
+              : record.extracted_data);
 
           const targetTable = DOC_TYPE_TO_TABLE[extractedData.documentType] || 'DOCUMENTS';
-          const projectId = fields['Project ID'];
+          const projectId = record.project_id || '';
+          const orgId = record.org_id || '';
           const allPushedIds: string[] = [];
 
-          // ── HELPER: Push batch of records to a table (max 10 per Airtable API call) ──
-          async function pushRecordsToTable(
-            table: string,
-            records: Array<Record<string, { value: string | number | null; confidence: number }>>
-          ): Promise<string[]> {
-            const ids: string[] = [];
-            // Airtable allows max 10 records per POST
-            for (let i = 0; i < records.length; i += 10) {
-              const batch = records.slice(i, i + 10);
-              const airtableRecords = batch.map((rec) => {
-                const recFields: Record<string, unknown> = { 'Project ID': projectId };
-                for (const [fieldName, fieldData] of Object.entries(rec)) {
-                  if (fieldData.value !== null) {
-                    recFields[fieldName] = fieldData.value;
-                  }
-                }
-                return { fields: recFields };
-              });
-
-              const pushRes = await fetch(
-                `${BASE_URL}/${getBaseId()}/${encodeURIComponent(table)}`,
-                {
-                  method: 'POST',
-                  headers: getHeaders(),
-                  body: JSON.stringify({ records: airtableRecords }),
-                }
-              );
-
-              if (pushRes.ok) {
-                const pushData = await pushRes.json();
-                for (const r of pushData.records || []) {
-                  if (r.id) ids.push(r.id);
-                }
-              } else {
-                const errText = await pushRes.text();
-                console.error(`Failed to push batch to ${table}:`, errText);
-              }
-
-              // Small delay between batches to avoid rate limits
-              if (i + 10 < records.length) {
-                await new Promise((resolve) => setTimeout(resolve, 200));
-              }
-            }
-            return ids;
-          }
-
-          // ── Push multi-record extraction (records array → primary target table) ──
+          // Push multi-record extraction
           if (extractedData.records && extractedData.records.length > 0) {
             console.log(`Pushing ${extractedData.records.length} records to ${targetTable}`);
-            const ids = await pushRecordsToTable(targetTable, extractedData.records);
+            const ids = await pushRecordsToTable(targetTable, projectId, orgId, extractedData.records);
             allPushedIds.push(...ids);
           }
 
-          // ── Push to additional target tables (e.g., PRODUCTION from a Job Cost Report) ──
+          // Push to additional target tables
           if (extractedData.targetTables && extractedData.targetTables.length > 0) {
             for (const tt of extractedData.targetTables) {
               if (tt.records && tt.records.length > 0) {
                 console.log(`Pushing ${tt.records.length} records to ${tt.table}`);
-                const ids = await pushRecordsToTable(tt.table, tt.records);
+                const ids = await pushRecordsToTable(tt.table, projectId, orgId, tt.records);
                 allPushedIds.push(...ids);
               }
             }
           }
 
-          // ── Push single-record summary fields (if no multi-record, or as supplement) ──
+          // Push single-record summary fields (if no multi-record)
           if (!extractedData.records || extractedData.records.length === 0) {
-            // Traditional single-record push
-            const targetFields: Record<string, unknown> = {
-              'Project ID': projectId,
-            };
+            const singleRecord: Record<string, { value: string | number | null; confidence: number }> = {};
             for (const [fieldName, fieldData] of Object.entries(extractedData.fields)) {
               if (fieldData.value !== null) {
-                targetFields[fieldName] = fieldData.value;
+                singleRecord[fieldName] = fieldData;
               }
             }
-            const pushRes = await fetch(
-              `${BASE_URL}/${getBaseId()}/${encodeURIComponent(targetTable)}`,
-              {
-                method: 'POST',
-                headers: getHeaders(),
-                body: JSON.stringify({ records: [{ fields: targetFields }] }),
-              }
-            );
-            if (pushRes.ok) {
-              const pushData = await pushRes.json();
-              const id = pushData.records?.[0]?.id;
-              if (id) allPushedIds.push(id);
-            } else {
-              const errText = await pushRes.text();
-              console.error('Failed to push to target table:', errText);
-            }
+            const ids = await pushRecordsToTable(targetTable, projectId, orgId, [singleRecord]);
+            allPushedIds.push(...ids);
           }
 
-          // ── Update pipeline record with all pushed record IDs ──
+          // Update pipeline record with all pushed record IDs
           if (allPushedIds.length > 0) {
             pushedRecordId = allPushedIds.join(',');
-            await fetch(`${BASE_URL}/${getBaseId()}/PIPELINE_LOG/${recordId}`, {
-              method: 'PATCH',
-              headers: getHeaders(),
-              body: JSON.stringify({
-                fields: {
-                  'Status': 'pushed',
-                  'Airtable Record IDs': pushedRecordId,
-                  'Pushed At': new Date().toISOString(),
-                  'Review Notes': (notes ? notes + '\n' : '') +
-                    `Pushed ${allPushedIds.length} record(s) to Airtable.`,
-                },
-              }),
-            });
+            await sb.from('pipeline_log').update({
+              status: 'pushed',
+              pushed_record_ids: pushedRecordId,
+              pushed_at: new Date().toISOString(),
+              review_notes: (notes ? notes + '\n' : '') +
+                `Pushed ${allPushedIds.length} record(s) to database.`,
+            }).eq('id', recordId);
           }
         }
       } catch (err) {
-        console.error('Error pushing data to Airtable:', err);
+        console.error('Error pushing data:', err);
       }
     }
 

@@ -2,7 +2,7 @@
 // Returns projected-at-completion, burn rates, risk scores, and anomalies
 
 import { NextRequest } from 'next/server';
-import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData } from '@/lib/airtable';
+import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { computeDriftMetrics } from '@/lib/drift-engine';
 

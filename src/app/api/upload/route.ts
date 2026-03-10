@@ -1,58 +1,73 @@
-// CSV Upload API — parse job cost reports and write to Airtable
+// CSV Upload API — parse job cost reports and write to Supabase
 // POST /api/upload
 // Body: { text: string, fileName: string, projectId?: string, orgId: string, action: 'preview' | 'import' }
 
 import { NextRequest, NextResponse } from 'next/server';
 import { parseJobCostReport, computeFingerprint, ParsedJobCostReport } from '@/lib/job-cost-parser';
+import { getSupabase } from '@/lib/supabase';
 
-const BASE_URL = 'https://api.airtable.com/v0';
-
-function getHeaders() {
-  return {
-    Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
-    'Content-Type': 'application/json',
-  };
-}
-
-function getBaseId() {
-  return process.env.AIRTABLE_BASE_ID || '';
-}
-
-// Fetch existing JOB_COSTS for a project to compute diff
+// Fetch existing job_costs for a project to compute diff
 async function fetchExistingJobCosts(projectId: string) {
-  const filter = encodeURIComponent(`{Project ID}='${projectId}'`);
-  const url = `${BASE_URL}/${getBaseId()}/JOB_COSTS?filterByFormula=${filter}&pageSize=100`;
-  const res = await fetch(url, { headers: getHeaders(), cache: 'no-store' });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.records || [];
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('job_costs')
+    .select('*')
+    .eq('project_id', projectId);
+  if (error) return [];
+  return (data || []).map((row: Record<string, unknown>) => ({
+    id: String(row.id),
+    fields: {
+      'Item Code': row.item_code,
+      'Item Description': row.item_description,
+      'Revised Budget': row.revised_budget,
+      'Budget': row.revised_budget,
+      'Job to Date': row.job_to_date,
+      'Actual': row.job_to_date,
+    },
+  }));
 }
 
 // Fetch projects for matching
 async function fetchProjects(orgId: string): Promise<Array<{ id: string; fields: Record<string, unknown> }>> {
-  const filter = encodeURIComponent(`{Organization ID}='${orgId}'`);
-  const url = `${BASE_URL}/${getBaseId()}/PROJECTS?filterByFormula=${filter}&pageSize=100`;
-  const res = await fetch(url, { headers: getHeaders(), cache: 'no-store' });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.records || [];
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('projects')
+    .select('*')
+    .eq('org_id', orgId);
+  if (error) return [];
+  return (data || []).map((row: Record<string, unknown>) => ({
+    id: String(row.id),
+    fields: {
+      'Project ID': row.project_id,
+      'Project Name': row.project_name,
+      'Job Number': row.job_number,
+    },
+  }));
 }
 
-// Check for duplicate uploads via PIPELINE_LOG
+// Check for duplicate uploads via pipeline_log fingerprint
 async function checkDuplicate(fingerprint: string) {
-  const filter = encodeURIComponent(`{Fingerprint}='${fingerprint}'`);
-  const url = `${BASE_URL}/${getBaseId()}/PIPELINE_LOG?filterByFormula=${filter}&pageSize=1`;
-  const res = await fetch(url, { headers: getHeaders(), cache: 'no-store' });
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.records?.[0] || null;
+  const sb = getSupabase();
+  const { data } = await sb
+    .from('pipeline_log')
+    .select('pipeline_id, created_at')
+    .eq('fingerprint', fingerprint)
+    .limit(1);
+  if (data && data.length > 0) {
+    return {
+      fields: {
+        'Pipeline ID': data[0].pipeline_id,
+        'Created At': data[0].created_at,
+      },
+    };
+  }
+  return null;
 }
 
 // Match parsed project to existing projects
 function matchProject(parsed: ParsedJobCostReport, projects: Array<{ id: string; fields: Record<string, unknown> }>) {
   if (projects.length === 0) return null;
 
-  // Try exact job number match
   if (parsed.projectInfo.jobNumber) {
     const match = projects.find(p =>
       String(p.fields['Job Number'] || '').toLowerCase() === parsed.projectInfo.jobNumber!.toLowerCase()
@@ -60,7 +75,6 @@ function matchProject(parsed: ParsedJobCostReport, projects: Array<{ id: string;
     if (match) return match;
   }
 
-  // Try project name match
   if (parsed.projectInfo.projectName) {
     const parsedName = parsed.projectInfo.projectName.toLowerCase();
     const match = projects.find(p => {
@@ -70,9 +84,7 @@ function matchProject(parsed: ParsedJobCostReport, projects: Array<{ id: string;
     if (match) return match;
   }
 
-  // If only one project, default to it
   if (projects.length === 1) return projects[0];
-
   return null;
 }
 
@@ -137,12 +149,14 @@ function computeDiff(
   return { changes, newCostCodes, removedCostCodes };
 }
 
-// Write job cost data to Airtable (upsert: update existing, create new)
+// Write job cost data to Supabase (upsert: update existing, create new)
 async function writeJobCosts(
   projectId: string,
+  orgId: string,
   parsed: ParsedJobCostReport,
   existing: Array<{ id: string; fields: Record<string, unknown> }>
 ) {
+  const sb = getSupabase();
   const results = { updated: 0, created: 0, errors: [] as string[] };
 
   for (const item of parsed.lineItems) {
@@ -150,50 +164,36 @@ async function writeJobCosts(
       String(r.fields['Item Code'] || '') === item.costCode
     );
 
-    const fields: Record<string, unknown> = {
-      'Project ID': projectId,
-      'Item Code': item.costCode,
-      'Item Description': item.description,
-      'Category': item.category === 'L' ? 'Labor' : item.category === 'M' ? 'Material' : item.category === 'S' ? 'Subcontractor' : item.category === 'E' ? 'Equipment' : 'Other',
-      'Revised Budget': item.revisedBudget,
-      'Job to Date': item.jobToDate,
-      'Change Orders': item.changeOrders,
-      'Over Under': item.overUnder,
-      'Pct of Budget': item.percentOfBudget,
-      'Variance Status': item.overUnder > 0 ? 'over' : 'under',
+    const row: Record<string, unknown> = {
+      project_id: projectId,
+      org_id: orgId,
+      item_code: item.costCode,
+      item_description: item.description,
+      category: item.category === 'L' ? 'Labor' : item.category === 'M' ? 'Material' : item.category === 'S' ? 'Subcontractor' : item.category === 'E' ? 'Equipment' : 'Other',
+      revised_budget: item.revisedBudget,
+      job_to_date: item.jobToDate,
+      change_orders: item.changeOrders,
+      over_under: item.overUnder,
+      pct_of_budget: item.percentOfBudget,
+      variance_status: item.overUnder > 0 ? 'over' : 'under',
     };
 
     try {
       if (existingRecord) {
-        // Update existing record
-        const url = `${BASE_URL}/${getBaseId()}/JOB_COSTS/${existingRecord.id}`;
-        const res = await fetch(url, {
-          method: 'PATCH',
-          headers: getHeaders(),
-          body: JSON.stringify({ fields }),
-        });
-        if (res.ok) {
+        const { error } = await sb.from('job_costs').update(row).eq('id', existingRecord.id);
+        if (!error) {
           results.updated++;
         } else {
-          results.errors.push(`Failed to update ${item.costCode}: ${res.status}`);
+          results.errors.push(`Failed to update ${item.costCode}: ${error.message}`);
         }
       } else {
-        // Create new record
-        const url = `${BASE_URL}/${getBaseId()}/JOB_COSTS`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: getHeaders(),
-          body: JSON.stringify({ fields }),
-        });
-        if (res.ok) {
+        const { error } = await sb.from('job_costs').insert(row);
+        if (!error) {
           results.created++;
         } else {
-          results.errors.push(`Failed to create ${item.costCode}: ${res.status}`);
+          results.errors.push(`Failed to create ${item.costCode}: ${error.message}`);
         }
       }
-
-      // Rate limit protection: small delay between writes
-      await new Promise(r => setTimeout(r, 100));
     } catch (err) {
       results.errors.push(`Error for ${item.costCode}: ${err instanceof Error ? err.message : 'Unknown'}`);
     }
@@ -202,31 +202,23 @@ async function writeJobCosts(
   return results;
 }
 
-// Update PROJECTS table summary fields
+// Update projects table summary fields
 async function updateProjectSummary(
   projectId: string,
-  parsed: ParsedJobCostReport,
-  projects: Array<{ id: string; fields: Record<string, unknown> }>
+  parsed: ParsedJobCostReport
 ) {
-  const project = projects.find(p => String(p.fields['Project ID'] || '') === projectId);
-  if (!project) return;
-
-  const fields: Record<string, unknown> = {
-    'Revised Budget': parsed.summary.totalBudget,
-    'Job to Date': parsed.summary.totalActual,
-    'Total COs': parsed.summary.totalChangeOrders,
+  const sb = getSupabase();
+  const update: Record<string, unknown> = {
+    revised_budget: parsed.summary.totalBudget,
+    job_to_date: parsed.summary.totalActual,
+    total_cos: parsed.summary.totalChangeOrders,
   };
 
   if (parsed.summary.percentComplete != null) {
-    fields['Percent Complete Cost'] = parsed.summary.percentComplete;
+    update.percent_complete_cost = parsed.summary.percentComplete;
   }
 
-  const url = `${BASE_URL}/${getBaseId()}/PROJECTS/${project.id}`;
-  await fetch(url, {
-    method: 'PATCH',
-    headers: getHeaders(),
-    body: JSON.stringify({ fields }),
-  });
+  await sb.from('projects').update(update).eq('project_id', projectId);
 }
 
 export async function POST(req: NextRequest) {
@@ -317,9 +309,9 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 6. Import mode — write to Airtable
-    const writeResults = await writeJobCosts(projectId, parsed, existing);
-    await updateProjectSummary(projectId, parsed, projects);
+    // 6. Import mode — write to Supabase
+    const writeResults = await writeJobCosts(projectId, orgId, parsed, existing);
+    await updateProjectSummary(projectId, parsed);
 
     return NextResponse.json({
       status: 'imported',

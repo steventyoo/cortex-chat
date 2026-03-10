@@ -313,6 +313,8 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
               <ProjectDashboard
                 projectId={currentProjectId}
                 projectName={currentProject?.projectName}
+                projectAddress={currentProject?.address}
+                projectTrade={currentProject?.trade}
               />
             </div>
             <ChatInput

@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { fetchAllProjectData } from '@/lib/airtable';
+import { fetchAllProjectData } from '@/lib/supabase';
 import { generateProjectCsv } from '@/lib/csv-export';
 
 export const maxDuration = 30;

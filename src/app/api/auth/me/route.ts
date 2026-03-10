@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getOrganization } from '@/lib/organizations';
+import { getOrganization } from '@/lib/supabase';
 
 export async function GET(req: NextRequest) {
   try {
