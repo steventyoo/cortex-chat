@@ -587,7 +587,7 @@ export async function fetchAllProjectData(projectId: string): Promise<ProjectDat
 
 export async function fetchProjectList(orgId?: string): Promise<ProjectSummary[]> {
   const sb = getSupabase();
-  let query = sb.from('projects').select('project_id, project_name, project_status, contract_value, address, trade');
+  let query = sb.from('projects').select('*');
   if (orgId) query = query.eq('org_id', orgId);
 
   const { data } = await query;
