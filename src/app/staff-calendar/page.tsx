@@ -102,12 +102,6 @@ export default function StaffCalendarPage() {
   /* Filter */
   const [roleFilter, setRoleFilter] = useState<string>('all');
 
-  /* Smart command */
-  const [cmdText, setCmdText] = useState('');
-  const [cmdLoading, setCmdLoading] = useState(false);
-  const [cmdResult, setCmdResult] = useState<string | null>(null);
-  const [isListening, setIsListening] = useState(false);
-
   const todayStr = fmt(new Date());
 
   /* ── Auth ───────────────────────────────────────────── */
@@ -229,66 +223,6 @@ export default function StaffCalendarPage() {
     } catch { /* ignore */ }
   }
 
-  /* ── Smart command (LLM) ──────────────────────────────── */
-  async function handleCommand() {
-    if (!cmdText.trim()) return;
-    setCmdLoading(true);
-    setCmdResult(null);
-    try {
-      const vDates = viewMode === 'week'
-        ? Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
-        : Array.from({ length: getDaysInMonth(monthDate) }, (_, i) => new Date(monthDate.getFullYear(), monthDate.getMonth(), i + 1));
-      const dates = vDates.map((d) => fmt(d));
-      const res = await fetch('/api/staffing/calendar-command', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmdText, roster, dates }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.actions?.length) {
-        setCmdResult(data.error || 'No changes to make.');
-        setCmdLoading(false);
-        return;
-      }
-      // Apply all actions
-      const entries = data.actions.map((a: { rosterId: string; date: string; status: string }) => ({
-        rosterId: a.rosterId, date: a.date, status: a.status,
-      }));
-      await fetch('/api/staffing/availability', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries }),
-      });
-      await fetchAvailability();
-      setCmdResult(data.summary);
-      setCmdText('');
-    } catch {
-      setCmdResult('Failed to process command.');
-    } finally {
-      setCmdLoading(false);
-    }
-  }
-
-  /* ── Voice input ─────────────────────────────────────── */
-  function startVoice() {
-    const SR = (window as unknown as Record<string, unknown>).SpeechRecognition || (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
-    if (!SR) { setCmdResult('Voice not supported in this browser.'); return; }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const recognition = new (SR as any)();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recognition.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
-      setCmdText(transcript);
-      setIsListening(false);
-    };
-    recognition.onerror = () => setIsListening(false);
-    recognition.onend = () => setIsListening(false);
-    setIsListening(true);
-    recognition.start();
-  }
-
   /* ── Loading / Auth ─────────────────────────────────── */
   if (authLoading) {
     return <div className="min-h-screen bg-[#f7f7f5] flex items-center justify-center"><p className="text-[13px] text-[#999]">Loading...</p></div>;
@@ -401,42 +335,6 @@ export default function StaffCalendarPage() {
           </div>
         </div>
 
-        {/* ── Smart Command Bar ──────────────────────── */}
-        <div className="mb-4 rounded-xl ring-1 ring-[#e0e0e0] bg-white p-3">
-          <div className="flex items-center gap-2">
-            <div className="flex-1 relative">
-              <input
-                type="text"
-                value={cmdText}
-                onChange={(e) => { setCmdText(e.target.value); setCmdResult(null); }}
-                onKeyDown={(e) => e.key === 'Enter' && !cmdLoading && handleCommand()}
-                placeholder="Try: &quot;All foremen off this week&quot; or &quot;Mike is sick Tuesday&quot;..."
-                className="w-full pl-9 pr-3 py-2 rounded-lg ring-1 ring-[#e0e0e0] bg-[#f7f7f5] text-[13px] focus:ring-[#1a1a1a] focus:bg-white focus:outline-none transition-colors"
-                disabled={cmdLoading}
-              />
-              <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-[#999]" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M12 2a4 4 0 014 4v4a4 4 0 01-8 0V6a4 4 0 014-4z" /><path d="M19 10v1a7 7 0 01-14 0v-1" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" />
-              </svg>
-            </div>
-            <button onClick={startVoice} disabled={cmdLoading}
-              className={`p-2 rounded-lg ring-1 transition-colors flex-shrink-0 ${isListening ? 'ring-red-400 bg-red-50 text-red-600 animate-pulse' : 'ring-[#e0e0e0] text-[#999] hover:text-[#1a1a1a] hover:bg-[#f0f0f0]'}`}
-              title="Voice input">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M12 2a4 4 0 014 4v4a4 4 0 01-8 0V6a4 4 0 014-4z" /><path d="M19 10v1a7 7 0 01-14 0v-1" /><line x1="12" y1="19" x2="12" y2="23" /><line x1="8" y1="23" x2="16" y2="23" />
-              </svg>
-            </button>
-            <button onClick={handleCommand} disabled={cmdLoading || !cmdText.trim()}
-              className="px-4 py-2 rounded-lg bg-[#1a1a1a] text-white text-[12px] font-medium hover:bg-[#333] disabled:opacity-40 transition-colors flex-shrink-0">
-              {cmdLoading ? 'Processing...' : 'Apply'}
-            </button>
-          </div>
-          {cmdResult && (
-            <p className={`text-[12px] mt-2 px-1 ${cmdResult.startsWith('Failed') || cmdResult.startsWith('No ') || cmdResult.startsWith('Voice') || cmdResult.startsWith('Could') ? 'text-red-500' : 'text-emerald-600'}`}>
-              {cmdResult}
-            </p>
-          )}
-        </div>
-
         {/* ── Legend ──────────────────────────────────── */}
         <div className="flex flex-wrap items-center gap-3 mb-4">
           <span className="text-[11px] text-[#999] font-medium">Status legend:</span>
@@ -513,7 +411,7 @@ export default function StaffCalendarPage() {
                               <div className="flex items-center gap-2">
                                 <div className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold flex-shrink-0"
                                   style={{ backgroundColor: getRoleStyle(entry.role).avatarBg, color: getRoleStyle(entry.role).avatarText }}>
-                                  {entry.workerName.charAt(0).toUpperCase()}
+                                  {entry.workerName.split(/\s+/).map(w => w.charAt(0).toUpperCase()).join('')}
                                 </div>
                                 <span className="font-medium text-[#1a1a1a] text-[11px] truncate max-w-[110px]">{entry.workerName}</span>
                               </div>

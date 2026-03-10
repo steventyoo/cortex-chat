@@ -149,7 +149,8 @@ export async function POST(req: NextRequest) {
       }).eq('id', noteId);
 
       if (error) {
-        return Response.json({ error: 'Failed to update note' }, { status: 500 });
+        console.error('Daily note UPDATE error:', error?.message, error?.details, error?.hint);
+        return Response.json({ error: error?.message || 'Failed to update note' }, { status: 500 });
       }
 
       return Response.json({
@@ -202,7 +203,8 @@ export async function POST(req: NextRequest) {
     }).select('id').single();
 
     if (error || !record) {
-      return Response.json({ error: 'Failed to save note.' }, { status: 500 });
+      console.error('Daily note INSERT error:', error?.message, error?.details, error?.hint);
+      return Response.json({ error: error?.message || 'Failed to save note.' }, { status: 500 });
     }
 
     return Response.json({
