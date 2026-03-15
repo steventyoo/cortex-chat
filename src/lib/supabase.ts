@@ -291,6 +291,9 @@ const COLUMN_TO_FIELD: Record<string, string> = {
   change_reason: 'Change Reason',
   schedule_impact: 'Schedule Impact',
   approval_status: 'Approval Status',
+  root_cause: 'Root Cause',
+  preventability: 'Preventability',
+  document_id: 'Document ID Ref',
   // Job Costs
   item_code: 'Item Code',
   item_description: 'Item Description',
@@ -392,7 +395,7 @@ const TABLE_MAP: Record<string, string> = {
   PRODUCTION: 'production',
   JOB_COSTS: 'job_costs',
   DESIGN_CHANGES: 'design_changes',
-  CROSS_REFS: 'cross_refs',
+  DOCUMENT_LINKS: 'document_links',
   LABELING_LOG: 'labeling_log',
   STAFFING: 'staffing',
   PIPELINE_LOG: 'pipeline_log',
@@ -544,7 +547,7 @@ export async function fetchAllProjectData(projectId: string): Promise<ProjectDat
 
   const tables = [
     'projects', 'documents', 'change_orders', 'production',
-    'job_costs', 'design_changes', 'cross_refs', 'labeling_log', 'staffing',
+    'job_costs', 'design_changes', 'document_links', 'labeling_log', 'staffing',
   ];
 
   const results = await Promise.allSettled(
@@ -565,7 +568,7 @@ export async function fetchAllProjectData(projectId: string): Promise<ProjectDat
     production: extract(results[3]),
     jobCosts: extract(results[4]),
     designChanges: extract(results[5]),
-    crossRefs: extract(results[6]),
+    documentLinks: extract(results[6]),
     labelingLog: extract(results[7]),
     staffing: extract(results[8]),
     meta: {
@@ -577,7 +580,7 @@ export async function fetchAllProjectData(projectId: string): Promise<ProjectDat
         production: extract(results[3]).length,
         jobCosts: extract(results[4]).length,
         designChanges: extract(results[5]).length,
-        crossRefs: extract(results[6]).length,
+        documentLinks: extract(results[6]).length,
         labelingLog: extract(results[7]).length,
         staffing: extract(results[8]).length,
       },

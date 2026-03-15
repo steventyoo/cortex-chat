@@ -158,7 +158,7 @@ export const DOCUMENT_TYPE_FIELDS: Record<string, string[]> = {
     'GC Proposed Amount', 'Owner Approved Amount',
     'CSI Division Primary', 'Building System',
     'Initiating Party', 'Change Reason', 'Schedule Impact',
-    'Approval Status',
+    'Approval Status', 'Root Cause', 'Preventability',
   ],
   'ASI': [
     'Design Doc ID', 'Document Type', 'Description',

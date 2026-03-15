@@ -34,6 +34,8 @@ interface ChangeOrder {
   approvalStatus: string;
   dateSubmitted: string;
   isPending: boolean;
+  rootCause: string;
+  preventability: string;
 }
 
 interface DashboardAlert {
@@ -759,6 +761,28 @@ export default function ProjectDashboard({ projectId, projectName, projectAddres
                     <span className="text-[13px] font-semibold text-[#1a1a1a]">{fmt(co.proposedAmount)}</span>
                   </div>
                   <p className="text-[11px] text-[#6b6b6b] line-clamp-2">{co.scope}</p>
+                  {(co.rootCause || co.preventability) && (
+                    <div className="flex items-center gap-2 mt-1">
+                      {co.rootCause && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-medium">
+                          {co.rootCause}
+                        </span>
+                      )}
+                      {co.preventability && (
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                          co.preventability === 'Preventable'
+                            ? 'bg-red-50 text-red-700'
+                            : co.preventability === 'Not Preventable'
+                            ? 'bg-gray-100 text-gray-600'
+                            : co.preventability === 'Partially Preventable'
+                            ? 'bg-amber-50 text-amber-700'
+                            : 'bg-purple-50 text-purple-700'
+                        }`}>
+                          {co.preventability}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

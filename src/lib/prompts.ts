@@ -54,7 +54,7 @@ Bullet list showing:
 - **JOB_COSTS**: X records
 - **PRODUCTION**: X records
 - **DESIGN_CHANGES**: X records (list doc IDs)
-- **CROSS_REFS**: X records (show chain like ASI-04 → COR-06)
+- **DOCUMENT_LINKS**: X records (show chain like ASI-04 → COR-06)
 - **LABELING_LOG**: X records
 
 ## For Non-Summary Questions
@@ -63,7 +63,7 @@ When asked about specific topics (not a general summary):
 - **Budget/costs**: Compare budget vs actuals, show variance by category with 🔴/✅ flags
 - **Production/labor**: Show performance ratios, identify problem areas with emoji indicators
 - **Design changes**: Trace ASI → COR → CO chains, show cost impact
-- **Document chains**: Use CROSS_REFS to trace cause-and-effect
+- **Document chains**: Use DOCUMENT_LINKS to trace cause-and-effect
 
 Still use tables with emoji indicators for all responses. Be concise — data first, brief analysis after.
 
@@ -126,6 +126,7 @@ export function assembleContext(data: ProjectData): string {
       lines.push(`- Building System: ${co['Building System']}`);
       lines.push(`- Initiating Party: ${co['Initiating Party'] || 'Not labeled'}`);
       lines.push(`- Change Reason: ${co['Change Reason'] || 'Not labeled'}`);
+      lines.push(`- Root Cause: ${co['Root Cause'] || 'Not labeled'}`);
       lines.push(`- Schedule Impact: ${co['Schedule Impact'] || 'Not labeled'}`);
       lines.push(`- Preventability: ${co['Preventability'] || 'Not labeled'}`);
       lines.push(`- Responsibility: ${co['Responsibility Attribution'] || 'Not labeled'}`);
@@ -169,12 +170,12 @@ export function assembleContext(data: ProjectData): string {
     lines.push('');
   }
 
-  // Cross Refs
-  lines.push(`\n## DOCUMENT RELATIONSHIPS (${data.crossRefs.length} links)`);
-  if (data.crossRefs.length > 0) {
-    data.crossRefs.forEach((cr) => {
+  // Document Links (causal chains)
+  lines.push(`\n## DOCUMENT RELATIONSHIPS (${data.documentLinks.length} links)`);
+  if (data.documentLinks.length > 0) {
+    data.documentLinks.forEach((dl) => {
       lines.push(
-        `- ${cr['From Document']} -> ${cr['To Document']} | Type: ${cr['Relationship Type']} | Position: ${cr['Causal Chain Position']} | $${cr['Dollar Value Carried']}`
+        `- ${dl['source_doc_ref'] || dl['source_table']}:${dl['source_id']} → ${dl['target_doc_ref'] || dl['target_table']}:${dl['target_id']} | Type: ${dl['link_type']} | Cost Impact: $${dl['cost_impact'] || 0} | ${dl['description'] || ''}`
       );
     });
     lines.push('');
@@ -210,7 +211,7 @@ export function assembleContext(data: ProjectData): string {
   lines.push(`- Job Cost Items: ${counts.jobCosts} records`);
   lines.push(`- Production Codes: ${counts.production} records`);
   lines.push(`- Design Changes: ${counts.designChanges} records`);
-  lines.push(`- Cross References: ${counts.crossRefs} records`);
+  lines.push(`- Document Links: ${counts.documentLinks} records`);
   lines.push(`- Documents: ${counts.documents} records`);
   lines.push(`- Staffing: ${counts.staffing || 0} records`);
 

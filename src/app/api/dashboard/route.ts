@@ -112,6 +112,8 @@ export async function GET(req: NextRequest) {
         isPending: approvalStatus.toLowerCase().includes('pending') ||
                    approvalStatus.toLowerCase().includes('submitted') ||
                    approvalStatus.toLowerCase().includes('review'),
+        rootCause: String(co['root_cause'] || co['Root Cause'] || ''),
+        preventability: String(co['preventability'] || co['Preventability'] || ''),
       };
     });
 

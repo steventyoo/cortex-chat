@@ -19,6 +19,18 @@ type ViewMode = 'list' | 'review';
 const MONEY_FIELDS = ['budget', 'actual', 'variance', 'cost', 'amount', 'total', 'jtd', 'job to date', 'price', 'value', 'subtotal', 'proposed', 'approved amount', 'labor', 'material', 'ohp', 'revenue', 'expense'];
 const PERCENT_FIELDS = ['percent', 'complete', 'pct', 'rate', 'ratio', 'ohp rate'];
 
+// Enum dropdown fields — enforced at DB level
+const DROPDOWN_FIELDS: Record<string, string[]> = {
+  'Root Cause': [
+    '', 'Design Error', 'Design Omission', 'Owner Request', 'Field Condition',
+    'Unforeseen Condition', 'Code/Regulation Change', 'Coordination Issue',
+    'Scope Change', 'Material Substitution', 'Vendor/Supplier Issue',
+  ],
+  'Preventability': [
+    '', 'Preventable', 'Partially Preventable', 'Not Preventable', 'Under Review',
+  ],
+};
+
 function formatFieldValue(fieldName: string, value: string | number | null): string {
   if (value == null) return '';
   const str = String(value);
@@ -404,20 +416,42 @@ export default function PipelineReview() {
                               {getConfidenceIndicator(fieldData.confidence)}
                             </span>
                           </label>
-                          <input
-                            type="text"
-                            value={editedFields[fieldName] ?? ''}
-                            onChange={(e) =>
-                              setEditedFields({ ...editedFields, [fieldName]: e.target.value })
-                            }
-                            className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
-                              fieldData.confidence < 0.7
-                                ? 'border-red-200 bg-red-50/50'
-                                : fieldData.confidence < 0.9
-                                ? 'border-amber-200 bg-amber-50/50'
-                                : 'border-[#e0e0e0] bg-white'
-                            } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
-                          />
+                          {DROPDOWN_FIELDS[fieldName] ? (
+                            <select
+                              value={editedFields[fieldName] ?? ''}
+                              onChange={(e) =>
+                                setEditedFields({ ...editedFields, [fieldName]: e.target.value })
+                              }
+                              className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
+                                fieldData.confidence < 0.7
+                                  ? 'border-red-200 bg-red-50/50'
+                                  : fieldData.confidence < 0.9
+                                  ? 'border-amber-200 bg-amber-50/50'
+                                  : 'border-[#e0e0e0] bg-white'
+                              } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
+                            >
+                              {DROPDOWN_FIELDS[fieldName].map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt || '— Select —'}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={editedFields[fieldName] ?? ''}
+                              onChange={(e) =>
+                                setEditedFields({ ...editedFields, [fieldName]: e.target.value })
+                              }
+                              className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
+                                fieldData.confidence < 0.7
+                                  ? 'border-red-200 bg-red-50/50'
+                                  : fieldData.confidence < 0.9
+                                  ? 'border-amber-200 bg-amber-50/50'
+                                  : 'border-[#e0e0e0] bg-white'
+                              } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
+                            />
+                          )}
                         </div>
                       </div>
                     ))}

@@ -12,7 +12,7 @@ export interface ProjectData {
   production: Record<string, unknown>[];
   jobCosts: Record<string, unknown>[];
   designChanges: Record<string, unknown>[];
-  crossRefs: Record<string, unknown>[];
+  documentLinks: Record<string, unknown>[];
   labelingLog: Record<string, unknown>[];
   staffing: Record<string, unknown>[];
   meta: {

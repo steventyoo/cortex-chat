@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 /* ── Types ────────────────────────────────────────────── */
 interface RosterEntry {
@@ -29,6 +30,7 @@ interface StaffingSummary {
   totalOtHours: number;
   workDays: number;
   otPercent: number;
+  byDate?: Record<string, { regHours: number; otHours: number; headcount: number }>;
 }
 
 interface StaffingPanelProps {
@@ -60,6 +62,110 @@ const AVAIL_STYLES: Record<string, { label: string; color: string; bg: string }>
 /* ── Helpers ──────────────────────────────────────────── */
 function todayStr() { return new Date().toISOString().split('T')[0]; }
 function splitHours(total: number) { return { reg: Math.min(total, 8), ot: Math.max(total - 8, 0) }; }
+
+/* ── Custom Tooltip ───────────────────────────────────── */
+function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; dataKey: string; color: string }>; label?: string }) {
+  if (!active || !payload?.length) return null;
+  const reg = payload.find((p) => p.dataKey === 'reg')?.value || 0;
+  const ot = payload.find((p) => p.dataKey === 'ot')?.value || 0;
+  const crew = payload.find((p) => p.dataKey === 'crew')?.value || 0;
+  return (
+    <div className="bg-white/95 backdrop-blur-sm rounded-lg ring-1 ring-[#e0e0e0] shadow-lg px-3 py-2.5 text-[12px]">
+      <p className="font-semibold text-[#1a1a1a] mb-1.5">{label}</p>
+      <div className="space-y-0.5">
+        <p className="text-[#6b6b6b]"><span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#1a1a1a' }} />Reg: <span className="font-semibold text-[#1a1a1a]">{reg}h</span></p>
+        {ot > 0 && <p className="text-[#6b6b6b]"><span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: '#f59e0b' }} />OT: <span className="font-semibold text-amber-600">{ot}h</span></p>}
+        <p className="text-[#6b6b6b]">Total: <span className="font-semibold text-[#1a1a1a]">{reg + ot}h</span></p>
+        {crew > 0 && <p className="text-[#999] text-[11px] mt-1 pt-1 border-t border-[#f0f0f0]">{crew} crew</p>}
+      </div>
+    </div>
+  );
+}
+
+/* ── Hours Trend Chart ───────────────────────────────── */
+function HoursTrendChart({ byDate }: { byDate: Record<string, { regHours: number; otHours: number; headcount: number }> }) {
+  const [range, setRange] = useState<7 | 14>(7);
+
+  const chartData = useMemo(() => {
+    const today = new Date();
+    const days: { date: string; label: string; reg: number; ot: number; crew: number }[] = [];
+
+    for (let i = range - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().split('T')[0];
+      const dayData = byDate[key];
+
+      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const label = range <= 7
+        ? `${dayNames[d.getDay()]} ${d.getDate()}`
+        : `${monthNames[d.getMonth()]} ${d.getDate()}`;
+
+      days.push({
+        date: key,
+        label,
+        reg: dayData?.regHours || 0,
+        ot: dayData?.otHours || 0,
+        crew: dayData?.headcount || 0,
+      });
+    }
+    return days;
+  }, [byDate, range]);
+
+  const hasData = chartData.some((d) => d.reg > 0 || d.ot > 0);
+  if (!hasData) return null;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+      className="rounded-xl ring-1 ring-[#e8e8e8] bg-white p-5 mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-[14px] font-semibold text-[#1a1a1a]">Hours Trend</h3>
+          <p className="text-[11px] text-[#999] mt-0.5">Daily regular & overtime hours</p>
+        </div>
+        <div className="flex items-center rounded-lg ring-1 ring-[#e0e0e0] overflow-hidden">
+          {([7, 14] as const).map((r) => (
+            <button key={r} onClick={() => setRange(r)}
+              className={`px-3 py-1 text-[11px] font-medium transition-colors ${range === r ? 'bg-[#1a1a1a] text-white' : 'bg-white text-[#999] hover:text-[#1a1a1a]'}`}>
+              {r}D
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="h-[200px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+            <defs>
+              <linearGradient id="gradReg" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#1a1a1a" stopOpacity={0.15} />
+                <stop offset="100%" stopColor="#1a1a1a" stopOpacity={0.02} />
+              </linearGradient>
+              <linearGradient id="gradOT" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.25} />
+                <stop offset="100%" stopColor="#f59e0b" stopOpacity={0.02} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#999' }} tickLine={false} axisLine={{ stroke: '#e0e0e0' }} />
+            <YAxis tick={{ fontSize: 11, fill: '#999' }} tickLine={false} axisLine={false} />
+            <Tooltip content={<ChartTooltip />} cursor={{ stroke: '#e0e0e0', strokeDasharray: '3 3' }} />
+            <Area type="monotone" dataKey="reg" stackId="1" stroke="#1a1a1a" strokeWidth={2} fill="url(#gradReg)" />
+            <Area type="monotone" dataKey="ot" stackId="1" stroke="#f59e0b" strokeWidth={2} fill="url(#gradOT)" />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="flex items-center justify-center gap-5 mt-3 pt-2 border-t border-[#f5f5f3]">
+        <div className="flex items-center gap-1.5 text-[11px] text-[#6b6b6b]">
+          <span className="w-3 h-[3px] rounded-full bg-[#1a1a1a]" />Regular
+        </div>
+        <div className="flex items-center gap-1.5 text-[11px] text-[#6b6b6b]">
+          <span className="w-3 h-[3px] rounded-full bg-[#f59e0b]" />Overtime
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 /* ── Component ────────────────────────────────────────── */
 export default function StaffingPanel({ projectId }: StaffingPanelProps) {
@@ -575,6 +681,11 @@ export default function StaffingPanel({ projectId }: StaffingPanelProps) {
                 <span className="text-[20px] font-bold text-[#1a1a1a]">{summary.workDays}</span>
               </div>
             </motion.div>
+          )}
+
+          {/* ── Hours Trend Chart ────────────────────── */}
+          {summary && summary.byDate && Object.keys(summary.byDate).length > 1 && (
+            <HoursTrendChart byDate={summary.byDate} />
           )}
 
           {/* ── CSV Export ────────────────────────────── */}

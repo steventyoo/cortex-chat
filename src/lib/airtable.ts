@@ -133,7 +133,7 @@ export async function fetchAllProjectData(
     fetchTable('PRODUCTION', filter),
     fetchTable('JOB_COSTS', filter),
     fetchTable('DESIGN_CHANGES', filter),
-    fetchTable('CROSS_REFS', filter),
+    fetchTable('CROSS_REFS', filter), // legacy — maps to documentLinks
     fetchTable('LABELING_LOG', filter),
     fetchTable('STAFFING', filter),
   ]);
@@ -147,7 +147,7 @@ export async function fetchAllProjectData(
   const production = extract(results[3]);
   const jobCosts = extract(results[4]);
   const designChanges = extract(results[5]);
-  const crossRefs = extract(results[6]);
+  const documentLinks = extract(results[6]);
   const labelingLog = extract(results[7]);
   const staffing = extract(results[8]);
 
@@ -158,7 +158,7 @@ export async function fetchAllProjectData(
     production,
     jobCosts,
     designChanges,
-    crossRefs,
+    documentLinks,
     labelingLog,
     staffing,
     meta: {
@@ -170,7 +170,7 @@ export async function fetchAllProjectData(
         production: production.length,
         jobCosts: jobCosts.length,
         designChanges: designChanges.length,
-        crossRefs: crossRefs.length,
+        documentLinks: documentLinks.length,
         labelingLog: labelingLog.length,
         staffing: staffing.length,
       },
