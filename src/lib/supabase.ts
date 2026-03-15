@@ -293,7 +293,6 @@ const COLUMN_TO_FIELD: Record<string, string> = {
   approval_status: 'Approval Status',
   root_cause: 'Root Cause',
   preventability: 'Preventability',
-  document_id: 'Document ID Ref',
   // Job Costs
   item_code: 'Item Code',
   item_description: 'Item Description',
