@@ -4,13 +4,10 @@ import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { ProjectSummary } from '@/lib/types';
 import ChatContainer from '@/components/ChatContainer';
 
-export const dynamic = 'force-dynamic';
-
 export default async function Home() {
   let projects: ProjectSummary[] = [];
 
   try {
-    // Read org from JWT session
     const cookieStore = await cookies();
     const token = cookieStore.get(SESSION_COOKIE)?.value;
     let orgId: string | undefined;

@@ -33,9 +33,12 @@ export default function AlertsBanner({ alerts, onAlertClick }: AlertsBannerProps
       className="rounded-2xl border border-[#e8e8e8] bg-white overflow-hidden"
     >
       {/* Header */}
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-[#fafafa] transition-colors"
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(!expanded); } }}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-[#fafafa] transition-colors cursor-pointer"
       >
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-[#1a1a1a] flex items-center justify-center">
@@ -88,9 +91,7 @@ export default function AlertsBanner({ alerts, onAlertClick }: AlertsBannerProps
             </svg>
           </motion.div>
         </div>
-      </button>
-
-      {/* Alerts List */}
+      </div>
       <AnimatePresence>
         {expanded && (
           <motion.div

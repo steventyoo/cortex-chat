@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
+import { useSession } from '@/hooks/useSession';
 
 /* ── Types ────────────────────────────────────────────── */
 interface RosterEntry {
@@ -17,8 +18,6 @@ interface AvailEntry {
   status: string;
   note: string;
 }
-
-interface UserInfo { name: string; email: string; role: string; }
 
 const ROLES = ['Foreman', 'Journeyman', 'Apprentice', 'Laborer', 'Helper'];
 
@@ -84,8 +83,7 @@ const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 /* ── Page ─────────────────────────────────────────────── */
 export default function StaffCalendarPage() {
-  const [user, setUser] = useState<UserInfo | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const { user, isAdmin, isLoading: authLoading } = useSession();
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [availability, setAvailability] = useState<AvailEntry[]>([]);
   const [calLoading, setCalLoading] = useState(false);
@@ -104,23 +102,9 @@ export default function StaffCalendarPage() {
 
   const todayStr = fmt(new Date());
 
-  /* ── Auth ───────────────────────────────────────────── */
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch('/api/auth/me');
-        if (!res.ok) { window.location.href = '/login'; return; }
-        const data = await res.json();
-        if (data.role !== 'admin') { window.location.href = '/'; return; }
-        setUser(data);
-      } catch { window.location.href = '/login'; }
-      finally { setAuthLoading(false); }
-    })();
-  }, []);
-
   /* ── Fetch roster ───────────────────────────────────── */
   useEffect(() => {
-    if (!user) return;
+    if (!user || !isAdmin) return;
     (async () => {
       try {
         const res = await fetch('/api/staffing/roster?scope=org');
@@ -225,9 +209,9 @@ export default function StaffCalendarPage() {
 
   /* ── Loading / Auth ─────────────────────────────────── */
   if (authLoading) {
-    return <div className="min-h-screen bg-[#f7f7f5] flex items-center justify-center"><p className="text-[13px] text-[#999]">Loading...</p></div>;
+    return <div className="flex-1 flex items-center justify-center"><p className="text-[13px] text-[#999]">Loading...</p></div>;
   }
-  if (!user) return null;
+  if (!user || !isAdmin) return null;
 
   /* ── Filter roster ──────────────────────────────────── */
   const filteredRoster = roleFilter === 'all' ? roster : roster.filter((r) => r.role === roleFilter);
@@ -253,20 +237,13 @@ export default function StaffCalendarPage() {
   const weekOffCount = availability.filter((a) => a.status !== 'available').length;
 
   return (
-    <div className="min-h-screen bg-[#f7f7f5]">
+    <div className="flex-1 flex flex-col overflow-hidden bg-[#f7f7f5]">
       {/* ── Top Bar ──────────────────────────────────── */}
-      <div className="bg-white border-b border-[#e8e8e8] px-6 py-4">
+      <div className="bg-white border-b border-[#e8e8e8] px-6 py-4 flex-shrink-0">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <a href="/" className="p-1.5 rounded-lg hover:bg-[#f0f0f0] text-[#999] hover:text-[#1a1a1a] transition-colors">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M19 12H5M12 19l-7-7 7-7" />
-              </svg>
-            </a>
-            <div>
-              <h1 className="text-[18px] font-bold text-[#1a1a1a] tracking-[-0.01em]">Crew Availability</h1>
-              <p className="text-[12px] text-[#999]">Manage schedules, PTO, holidays & time off</p>
-            </div>
+          <div>
+            <h1 className="text-[18px] font-bold text-[#1a1a1a] tracking-[-0.01em]">Crew Availability</h1>
+            <p className="text-[12px] text-[#999]">Manage schedules, PTO, holidays & time off</p>
           </div>
 
           <div className="flex items-center gap-2">
@@ -298,6 +275,7 @@ export default function StaffCalendarPage() {
         </div>
       </div>
 
+      <div className="flex-1 overflow-y-auto">
       <div className="max-w-[1400px] mx-auto px-6 py-6">
         {/* ── Navigation + Summary ───────────────────── */}
         <div className="flex items-center justify-between mb-4">
@@ -476,6 +454,7 @@ export default function StaffCalendarPage() {
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
