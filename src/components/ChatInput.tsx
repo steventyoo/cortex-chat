@@ -160,7 +160,7 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
 
   return (
     <div className="border-t border-[#f0f0f0] bg-white/80 backdrop-blur-xl px-4 py-3">
-      <div className="max-w-3xl mx-auto relative flex items-end gap-2">
+      <div className="max-w-3xl mx-auto relative flex items-center gap-2">
         {/* ── Mic button ──────────────────────────────── */}
         {speechSupported && (
           <motion.button
@@ -168,7 +168,7 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
             onClick={toggleListening}
             disabled={disabled}
             title={isListening ? 'Stop recording' : 'Voice input'}
-            className={`relative flex-shrink-0 w-[42px] h-[42px] rounded-full flex items-center justify-center transition-all mb-0.5 disabled:opacity-50 ${
+            className={`relative flex-shrink-0 w-[42px] h-[42px] rounded-full flex items-center justify-center transition-all disabled:opacity-50 ${
               isListening
                 ? 'bg-[#ff3b30] text-white shadow-lg shadow-[#ff3b30]/25'
                 : 'bg-[#f0f0f0] hover:bg-[#e5e5e5] text-[#6b6b6b] hover:text-[#1a1a1a]'
@@ -266,7 +266,7 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
           whileTap={{ scale: 0.92 }}
           onClick={handleSend}
           disabled={disabled || !value.trim()}
-          className="flex-shrink-0 w-[42px] h-[42px] rounded-full bg-[#007aff] hover:bg-[#0066d6] disabled:bg-[#e5e5e5] flex items-center justify-center transition-colors mb-0.5"
+          className="flex-shrink-0 w-[42px] h-[42px] rounded-full bg-[#007aff] hover:bg-[#0066d6] disabled:bg-[#e5e5e5] flex items-center justify-center transition-colors"
         >
           <svg
             width="16"

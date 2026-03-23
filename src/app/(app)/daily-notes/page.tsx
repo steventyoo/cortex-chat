@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSession } from '@/hooks/useSession';
 
 /* ── Types ────────────────────────────────────────────── */
 interface Project {
@@ -29,12 +30,6 @@ interface NoteEntry {
   date: string;
   createdAt: string;
   updatedAt: string;
-}
-
-interface UserInfo {
-  name: string;
-  email: string;
-  role: string;
 }
 
 interface RosterEntry {
@@ -117,8 +112,7 @@ function formatHeaderDate(): string {
 /* ── Page Component ───────────────────────────────────── */
 export default function DailyNotesPage() {
   /* Auth + user */
-  const [user, setUser] = useState<UserInfo | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const { user, isLoading: authLoading } = useSession();
 
   /* Projects */
   const [projects, setProjects] = useState<Project[]>([]);
@@ -168,24 +162,9 @@ export default function DailyNotesPage() {
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  /* ── Init: check auth ───────────────────────────────── */
+  /* ── Init ──────────────────────────────────────────── */
   useEffect(() => {
     setSpeechSupported(!!getSpeechRecognition());
-    (async () => {
-      try {
-        const res = await fetch('/api/auth/me');
-        if (!res.ok) {
-          window.location.href = '/login';
-          return;
-        }
-        const data = await res.json();
-        setUser(data);
-      } catch {
-        window.location.href = '/login';
-      } finally {
-        setAuthLoading(false);
-      }
-    })();
     return () => {
       if (recognitionRef.current) recognitionRef.current.abort();
     };
@@ -557,7 +536,7 @@ export default function DailyNotesPage() {
   /* ── Loading state ──────────────────────────────────── */
   if (authLoading) {
     return (
-      <div className="min-h-dvh flex items-center justify-center bg-[#f7f7f5]">
+      <div className="flex-1 flex items-center justify-center bg-[#f7f7f5]">
         <div className="flex items-center gap-3">
           <svg className="animate-spin w-5 h-5 text-[#999]" viewBox="0 0 24 24" fill="none">
             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
@@ -574,18 +553,10 @@ export default function DailyNotesPage() {
 
   /* ── Render ─────────────────────────────────────────── */
   return (
-    <div className="min-h-dvh bg-[#f7f7f5]">
+    <div className="flex-1 flex flex-col overflow-hidden bg-[#f7f7f5]">
       {/* ── Top bar ─────────────────────────────────────── */}
-      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-xl border-b border-[#e8e8e8]">
+      <header className="bg-white/80 backdrop-blur-xl border-b border-[#e8e8e8] flex-shrink-0">
         <div className="max-w-2xl mx-auto px-4 h-[56px] flex items-center gap-3">
-          <a
-            href="/"
-            className="p-1.5 rounded-lg hover:bg-[#f0f0f0] text-[#999] hover:text-[#1a1a1a] transition-colors"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M19 12H5M12 19l-7-7 7-7" />
-            </svg>
-          </a>
           <div className="flex-1">
             <h1 className="text-[15px] font-semibold text-[#1a1a1a]">Daily Notes</h1>
             <p className="text-[11px] text-[#999]">{formatHeaderDate()}</p>
@@ -602,6 +573,7 @@ export default function DailyNotesPage() {
         </div>
       </header>
 
+      <div className="flex-1 overflow-y-auto">
       <main className="max-w-2xl mx-auto px-4 py-5 pb-20">
         {/* ── Project selector ──────────────────────────── */}
         {projects.length > 1 && (
@@ -1370,6 +1342,7 @@ export default function DailyNotesPage() {
           </div>
         )}
       </main>
+      </div>
     </div>
   );
 }

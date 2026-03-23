@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ProjectSummary, ConversationSummary } from '@/lib/types';
 import { formatCurrency } from '@/lib/utils';
@@ -23,6 +25,52 @@ interface SidebarProps {
   userName?: string;
   userEmail?: string;
   onLogout?: () => void;
+  hideFooter?: boolean;
+}
+
+export interface SidebarFooterProps {
+  userName?: string;
+  userEmail?: string;
+  onLogout?: () => void;
+}
+
+export function SidebarFooter({ userName, userEmail, onLogout }: SidebarFooterProps) {
+  return (
+    <div className="w-full px-4 border-t border-[#f0f0f0] flex items-center py-3 bg-[#f7f7f5]">
+      {userEmail ? (
+        <div className="flex items-center gap-2 px-2">
+          <div className="w-7 h-7 rounded-full bg-[#1a1a1a] flex items-center justify-center flex-shrink-0">
+            <span className="text-[11px] font-medium text-white">
+              {(userName || userEmail).charAt(0).toUpperCase()}
+            </span>
+          </div>
+          <div className="flex-1 min-w-0">
+            {userName && (
+              <p className="text-[12px] font-medium text-[#37352f] truncate">{userName}</p>
+            )}
+            <p className="text-[11px] text-[#999] truncate">{userEmail}</p>
+          </div>
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="p-1.5 rounded-md hover:bg-[#ebebea] text-[#999] hover:text-[#666] transition-colors flex-shrink-0"
+              title="Sign out"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
+          )}
+        </div>
+      ) : (
+        <p className="text-[11px] text-[#b4b4b4] text-center">
+          Powered by Claude AI
+        </p>
+      )}
+    </div>
+  );
 }
 
 function timeAgo(timestamp: number): string {
@@ -55,8 +103,10 @@ export default function Sidebar({
   userName,
   userEmail,
   onLogout,
+  hideFooter = false,
 }: SidebarProps) {
   const [dailyStatus, setDailyStatus] = useState<Record<string, { hasNotes: boolean; hasStaffing: boolean }>>({});
+  const pathname = usePathname();
 
   useEffect(() => {
     if (projects.length === 0) return;
@@ -82,7 +132,7 @@ export default function Sidebar({
         initial={{ x: -260 }}
         animate={{ x: isOpen ? 0 : -260 }}
         transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-        className="fixed left-0 top-0 bottom-0 w-[260px] bg-[#f7f7f5] border-r border-[#e8e8e8] z-50 flex flex-col lg:relative lg:translate-x-0"
+        className="fixed left-0 top-0 bottom-0 w-[260px] bg-[#f7f7f5] border-r border-[#e8e8e8] z-50 flex flex-col lg:static lg:w-full lg:h-full lg:border-r-0 lg:translate-x-0"
         style={{ transform: undefined }}
       >
         {/* Header */}
@@ -135,9 +185,11 @@ export default function Sidebar({
           </motion.button>
 
           {isAdmin && (
-            <a
+            <Link
               href="/staff-roster"
-              className="w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 text-[#6b6b6b] hover:text-[#37352f]"
+              className={`w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 ${
+                pathname === '/staff-roster' ? 'bg-[#ebebea] text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
+              }`}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2" />
@@ -146,13 +198,15 @@ export default function Sidebar({
                 <path d="M16 3.13a4 4 0 010 7.75" />
               </svg>
               Staff Roster
-            </a>
+            </Link>
           )}
 
           {isAdmin && (
-            <a
+            <Link
               href="/staff-calendar"
-              className="w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 text-[#6b6b6b] hover:text-[#37352f]"
+              className={`w-full px-3 py-2 rounded-lg hover:bg-[#ebebea] text-[13px] transition-colors flex items-center gap-2 ${
+                pathname === '/staff-calendar' ? 'bg-[#ebebea] text-[#37352f] font-medium' : 'text-[#6b6b6b] hover:text-[#37352f]'
+              }`}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
@@ -161,7 +215,7 @@ export default function Sidebar({
                 <line x1="3" y1="10" x2="21" y2="10" />
               </svg>
               Crew Calendar
-            </a>
+            </Link>
           )}
 
           {isAdmin && (
@@ -317,41 +371,9 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* Footer — user info + logout */}
-        <div className="p-3 border-t border-[#e8e8e8]">
-          {userEmail ? (
-            <div className="flex items-center gap-2 px-2">
-              <div className="w-7 h-7 rounded-full bg-[#1a1a1a] flex items-center justify-center flex-shrink-0">
-                <span className="text-[11px] font-medium text-white">
-                  {(userName || userEmail).charAt(0).toUpperCase()}
-                </span>
-              </div>
-              <div className="flex-1 min-w-0">
-                {userName && (
-                  <p className="text-[12px] font-medium text-[#37352f] truncate">{userName}</p>
-                )}
-                <p className="text-[11px] text-[#999] truncate">{userEmail}</p>
-              </div>
-              {onLogout && (
-                <button
-                  onClick={onLogout}
-                  className="p-1.5 rounded-md hover:bg-[#ebebea] text-[#999] hover:text-[#666] transition-colors flex-shrink-0"
-                  title="Sign out"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
-                    <polyline points="16 17 21 12 16 7" />
-                    <line x1="21" y1="12" x2="9" y2="12" />
-                  </svg>
-                </button>
-              )}
-            </div>
-          ) : (
-            <p className="text-[11px] text-[#b4b4b4] text-center">
-              Powered by Claude AI
-            </p>
-          )}
-        </div>
+        {!hideFooter && (
+          <SidebarFooter userName={userName} userEmail={userEmail} onLogout={onLogout} />
+        )}
       </motion.aside>
     </>
   );

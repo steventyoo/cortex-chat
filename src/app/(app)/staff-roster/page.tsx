@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useSession } from '@/hooks/useSession';
 
 /* ── Types ────────────────────────────────────────────── */
 interface RosterEntry {
@@ -10,12 +11,6 @@ interface RosterEntry {
   role: string;
   email: string;
   mobile: string;
-}
-
-interface UserInfo {
-  name: string;
-  email: string;
-  role: string;
 }
 
 const ROLES = ['Foreman', 'Journeyman', 'Apprentice', 'Laborer', 'Helper'];
@@ -52,8 +47,7 @@ function getRoleStyle(role: string) {
 
 /* ── Page ─────────────────────────────────────────────── */
 export default function StaffRosterPage() {
-  const [user, setUser] = useState<UserInfo | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const { user, isAdmin, isLoading: authLoading } = useSession();
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -81,28 +75,11 @@ export default function StaffRosterPage() {
   const [csvResult, setCsvResult] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  /* ── Auth ────────────────────────────────────────────── */
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch('/api/auth/me');
-        if (!res.ok) { window.location.href = '/login'; return; }
-        const data = await res.json();
-        if (data.role !== 'admin') { window.location.href = '/'; return; }
-        setUser(data);
-      } catch {
-        window.location.href = '/login';
-      } finally {
-        setAuthLoading(false);
-      }
-    })();
-  }, []);
-
   /* ── Fetch roster ───────────────────────────────────── */
   useEffect(() => {
-    if (!user) return;
+    if (!user || !isAdmin) return;
     fetchRoster();
-  }, [user]);
+  }, [user, isAdmin]);
 
   async function fetchRoster() {
     setLoading(true);
@@ -256,13 +233,13 @@ export default function StaffRosterPage() {
   /* ── Loading / Auth ─────────────────────────────────── */
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[#f7f7f5] flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center">
         <p className="text-[13px] text-[#999]">Loading...</p>
       </div>
     );
   }
 
-  if (!user) return null;
+  if (!user || !isAdmin) return null;
 
   /* ── Group roster by role ───────────────────────────── */
   const grouped: Record<string, RosterEntry[]> = {};
@@ -274,20 +251,13 @@ export default function StaffRosterPage() {
   const roleOrder = [...ROLES, ...Object.keys(grouped).filter((r) => !ROLES.includes(r))];
 
   return (
-    <div className="min-h-screen bg-[#f7f7f5]">
+    <div className="flex-1 flex flex-col overflow-hidden bg-[#f7f7f5]">
       {/* ── Top Bar ──────────────────────────────────── */}
-      <div className="bg-white border-b border-[#e8e8e8] px-6 py-4">
+      <div className="bg-white border-b border-[#e8e8e8] px-6 py-4 flex-shrink-0">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <a href="/" className="p-1.5 rounded-lg hover:bg-[#f0f0f0] text-[#999] hover:text-[#1a1a1a] transition-colors">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M19 12H5M12 19l-7-7 7-7" />
-              </svg>
-            </a>
-            <div>
-              <h1 className="text-[18px] font-bold text-[#1a1a1a] tracking-[-0.01em]">Staff Roster</h1>
-              <p className="text-[12px] text-[#999]">{roster.length} crew member{roster.length !== 1 ? 's' : ''}</p>
-            </div>
+          <div>
+            <h1 className="text-[18px] font-bold text-[#1a1a1a] tracking-[-0.01em]">Staff Roster</h1>
+            <p className="text-[12px] text-[#999]">{roster.length} crew member{roster.length !== 1 ? 's' : ''}</p>
           </div>
           <motion.button
             whileTap={{ scale: 0.97 }}
@@ -302,6 +272,7 @@ export default function StaffRosterPage() {
         </div>
       </div>
 
+      <div className="flex-1 overflow-y-auto">
       <div className="max-w-5xl mx-auto px-6 py-6">
         {/* ── Add Form ──────────────────────────────── */}
         <AnimatePresence>
@@ -465,6 +436,7 @@ export default function StaffRosterPage() {
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
