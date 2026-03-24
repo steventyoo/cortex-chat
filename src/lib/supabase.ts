@@ -860,7 +860,8 @@ export async function pushRecordsToTable(
   tableName: string,
   projectId: string,
   orgId: string,
-  records: Array<Record<string, { value: string | number | null; confidence: number }>>
+  records: Array<Record<string, { value: string | number | null; confidence: number }>>,
+  columnMapping?: Record<string, string>
 ): Promise<string[]> {
   const sb = getSupabase();
   const table = resolveTableName(tableName);
@@ -870,7 +871,7 @@ export async function pushRecordsToTable(
     const row: Record<string, unknown> = { project_id: projectId, org_id: orgId };
     for (const [fieldName, fieldData] of Object.entries(rec)) {
       if (fieldData.value !== null) {
-        const col = FIELD_TO_COLUMN[fieldName] || fieldName.toLowerCase().replace(/\s+/g, '_');
+        const col = columnMapping?.[fieldName] || FIELD_TO_COLUMN[fieldName] || fieldName.toLowerCase().replace(/\s+/g, '_');
         row[col] = fieldData.value;
       }
     }

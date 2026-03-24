@@ -1,31 +1,22 @@
 import { NextRequest } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { getSupabase } from '@/lib/supabase';
-import {
-  EXTRACTION_SYSTEM_PROMPT,
-  buildExtractionPrompt,
-  generatePipelineId,
-  computeOverallConfidence,
-  ExtractionResult,
-  ValidationFlag,
-  DOCUMENT_TYPE_FIELDS,
-} from '@/lib/pipeline';
+import { generatePipelineId } from '@/lib/pipeline';
+import { extractWithSkill } from '@/lib/skills';
 
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
-  // 1. Auth check
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   if (!token || !(await validateUserSession(token))) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // 2. Parse request
   let sourceText: string;
   let projectId: string;
   let fileName: string;
   let fileUrl: string | null;
+  let orgId: string | undefined;
 
   try {
     const body = await request.json();
@@ -33,6 +24,7 @@ export async function POST(request: NextRequest) {
     projectId = body.projectId || '';
     fileName = body.fileName || 'Untitled Document';
     fileUrl = body.fileUrl || null;
+    orgId = body.orgId || undefined;
 
     if (!sourceText || sourceText.trim().length === 0) {
       return Response.json({ error: 'sourceText is required' }, { status: 400 });
@@ -45,7 +37,6 @@ export async function POST(request: NextRequest) {
   const now = new Date().toISOString();
   const sb = getSupabase();
 
-  // 3. Create initial pipeline record (status: tier1_extracting)
   let recordId: string | null = null;
   try {
     const { data } = await sb.from('pipeline_log').insert({
@@ -56,48 +47,25 @@ export async function POST(request: NextRequest) {
       status: 'tier1_extracting',
       source_text: sourceText.substring(0, 500000),
       created_at: now,
-      ai_model: 'claude-sonnet-4-20250514',
+      ai_model: 'sonnet-classify+sonnet-extract',
     }).select('id').single();
     if (data) recordId = String(data.id);
   } catch (err) {
     console.error('Failed to create pipeline record:', err);
   }
 
-  // 4. Tier 1: AI Extraction using Claude
-  let extraction: ExtractionResult;
+  let extraction;
+  let overallConfidence: number;
+  let flags;
 
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const extractionPrompt = buildExtractionPrompt(sourceText, projectId || undefined);
-
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 8192,
-      system: EXTRACTION_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: extractionPrompt }],
-    });
-
-    // Parse Claude's response
-    const responseText = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => {
-        if (block.type === 'text') return block.text;
-        return '';
-      })
-      .join('');
-
-    // Try to extract JSON from the response
-    let jsonStr = responseText.trim();
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-
-    extraction = JSON.parse(jsonStr) as ExtractionResult;
+    const result = await extractWithSkill(sourceText, projectId, orgId);
+    extraction = result.extraction;
+    overallConfidence = result.overallConfidence;
+    flags = result.flags;
   } catch (err) {
     console.error('AI extraction failed:', err);
 
-    // Update pipeline record to show failure
     if (recordId) {
       await sb.from('pipeline_log').update({
         status: 'intake',
@@ -115,47 +83,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // 5. Compute confidence and update record
-  const overallConfidence = computeOverallConfidence(extraction);
-
-  // 6. Tier 2: Validation
-  const flags: ValidationFlag[] = [];
-
-  for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
-    if (fieldData.value !== null && fieldData.confidence < 0.7) {
-      flags.push({
-        field: fieldName,
-        issue: `Low confidence (${Math.round(fieldData.confidence * 100)}%)`,
-        severity: 'warning',
-      });
-    }
-    if (fieldData.value === null) {
-      const expectedFields = DOCUMENT_TYPE_FIELDS[extraction.documentType] || [];
-      if (expectedFields.includes(fieldName)) {
-        flags.push({
-          field: fieldName,
-          issue: 'Missing — not detected in document',
-          severity: 'info',
-        });
-      }
-    }
-  }
-
-  if (extraction.documentTypeConfidence < 0.8) {
-    flags.push({
-      field: 'Document Type',
-      issue: `Document type classification has low confidence (${Math.round(extraction.documentTypeConfidence * 100)}%)`,
-      severity: 'warning',
-    });
-  }
-
-  // Determine final status
   const hasErrors = flags.some((f) => f.severity === 'error');
   const hasWarnings = flags.some((f) => f.severity === 'warning');
   const autoApproveEligible = overallConfidence >= 0.95 && !hasErrors && !hasWarnings;
   const finalStatus = autoApproveEligible ? 'tier2_validated' : hasErrors ? 'tier2_flagged' : 'pending_review';
 
-  // 7. Update the pipeline record with results
   if (recordId) {
     try {
       await sb.from('pipeline_log').update({
@@ -172,7 +104,6 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // 8. Return the result
   return Response.json({
     pipelineId,
     recordId,
