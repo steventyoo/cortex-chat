@@ -4,6 +4,7 @@ import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData, resolveP
 import { CORTEX_SYSTEM_PROMPT, assembleContext, assemblePortfolioContext } from '@/lib/prompts';
 import { streamChatResponse } from '@/lib/claude';
 import { ChatMessage } from '@/lib/types';
+import { searchByEmbedding } from '@/lib/embeddings';
 
 export const maxDuration = 60;
 
@@ -122,6 +123,33 @@ export async function POST(request: NextRequest) {
   }
 
   // 5. Stream Claude response
+  // Augment context with vector-searched extracted records when available
+  let ragContext = '';
+  try {
+    const ragResults = await searchByEmbedding({
+      query: message,
+      projectId: projectId || undefined,
+      orgId: orgId,
+      matchCount: 15,
+      matchThreshold: 0.4,
+    });
+
+    if (ragResults.length > 0) {
+      const ragLines = ragResults.map((r, i) => {
+        const fieldSummary = Object.entries(r.fields as Record<string, { value: unknown }>)
+          .filter(([, v]) => v?.value != null)
+          .map(([k, v]) => `  ${k}: ${v.value}`)
+          .join('\n');
+        return `[${i + 1}] ${r.document_type} (${r.skill_id}) — similarity: ${(r.similarity * 100).toFixed(0)}%\n${fieldSummary}`;
+      });
+      ragContext = `\n\n[EXTRACTED DOCUMENT RECORDS — from vector search]\n${ragLines.join('\n\n')}`;
+    }
+  } catch (err) {
+    console.error('RAG search error (non-blocking):', err);
+  }
+
+  const fullContext = projectContext + ragContext;
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -138,7 +166,7 @@ export async function POST(request: NextRequest) {
         const generator = streamChatResponse(
           CORTEX_SYSTEM_PROMPT,
           messages,
-          projectContext
+          fullContext
         );
 
         for await (const chunk of generator) {

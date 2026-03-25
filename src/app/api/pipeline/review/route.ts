@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getSupabase, pushRecordsToTable, checkDuplicatePipeline } from '@/lib/supabase';
+import { getSupabase, pushRecordsToTable, pushToExtractedRecords, checkDuplicatePipeline } from '@/lib/supabase';
 import { ExtractionResult, ReviewAction } from '@/lib/pipeline';
 import { getSkill, recordCorrection } from '@/lib/skills';
+import { embedAndStoreForRecord } from '@/lib/embeddings';
 
 export const maxDuration = 60;
 
@@ -175,6 +176,38 @@ export async function POST(request: NextRequest) {
               review_notes: (notes ? notes + '\n' : '') +
                 `Pushed ${allPushedIds.length} record(s) to database.`,
             }).eq('id', recordId);
+          }
+
+          // Dual-write to extracted_records for unified storage
+          try {
+            const singleFields: Record<string, { value: string | number | null; confidence: number }> = {};
+            for (const [fieldName, fieldData] of Object.entries(extractedData.fields)) {
+              singleFields[fieldName] = fieldData;
+            }
+            await pushToExtractedRecords({
+              projectId,
+              orgId,
+              skillId,
+              skillVersion: skill?.version || 1,
+              pipelineLogId: recordId,
+              documentType: extractedData.documentType,
+              sourceFile: record.file_name || undefined,
+              fields: singleFields,
+              rawText: record.source_text || undefined,
+              overallConfidence: extractedData.documentTypeConfidence,
+              status: 'approved',
+            }).then(async (erRecordId) => {
+              if (erRecordId) {
+                embedAndStoreForRecord(
+                  erRecordId,
+                  extractedData.documentType,
+                  singleFields,
+                  record.source_text || undefined,
+                ).catch(err => console.error('Async embedding failed:', err));
+              }
+            });
+          } catch (erErr) {
+            console.error('Dual-write to extracted_records failed:', erErr);
           }
         }
       } catch (err) {

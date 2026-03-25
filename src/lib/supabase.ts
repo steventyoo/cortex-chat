@@ -386,14 +386,18 @@ for (const [col, field] of Object.entries(COLUMN_TO_FIELD)) {
 // Handle the change_orders numeric column name collision
 FIELD_TO_COLUMN['Change Orders'] = 'change_orders';
 
-/** Airtable table name → Supabase table name */
+/** Airtable table name → Supabase table name.
+ *  After running the backfill script (scripts/backfill-extracted-records.js),
+ *  swap the commented values below to read from extracted_records views
+ *  instead of the legacy typed tables. The views expose identical column names.
+ */
 const TABLE_MAP: Record<string, string> = {
   PROJECTS: 'projects',
-  DOCUMENTS: 'documents',
-  CHANGE_ORDERS: 'change_orders',
-  PRODUCTION: 'production',
+  DOCUMENTS: 'documents',              // swap to: 'documents_v'
+  CHANGE_ORDERS: 'change_orders',      // swap to: 'change_orders_v'
+  PRODUCTION: 'production',            // swap to: 'production_v'
   JOB_COSTS: 'job_costs',
-  DESIGN_CHANGES: 'design_changes',
+  DESIGN_CHANGES: 'design_changes',    // swap to: 'design_changes_v'
   DOCUMENT_LINKS: 'document_links',
   LABELING_LOG: 'labeling_log',
   STAFFING: 'staffing',
@@ -856,6 +860,53 @@ export async function checkDuplicatePipeline(
   return false;
 }
 
+export async function pushToExtractedRecords(opts: {
+  projectId: string;
+  orgId: string;
+  skillId: string;
+  skillVersion: number;
+  pipelineLogId?: string;
+  documentType?: string;
+  sourceFile?: string;
+  fields: Record<string, { value: string | number | null; confidence: number }>;
+  rawText?: string;
+  overallConfidence?: number;
+  status?: string;
+}): Promise<string | null> {
+  const sb = getSupabase();
+
+  const fieldsJson: Record<string, unknown> = {};
+  for (const [name, data] of Object.entries(opts.fields)) {
+    fieldsJson[name] = { value: data.value, confidence: data.confidence };
+  }
+
+  const row = {
+    project_id: opts.projectId,
+    org_id: opts.orgId,
+    skill_id: opts.skillId,
+    skill_version: opts.skillVersion,
+    pipeline_log_id: opts.pipelineLogId || null,
+    document_type: opts.documentType || opts.skillId,
+    source_file: opts.sourceFile || null,
+    fields: fieldsJson,
+    raw_text: opts.rawText || null,
+    overall_confidence: opts.overallConfidence ?? null,
+    status: opts.status || 'approved',
+  };
+
+  const { data, error } = await sb
+    .from('extracted_records')
+    .insert(row)
+    .select('id')
+    .single();
+
+  if (error) {
+    console.error('Failed to push to extracted_records:', error.message);
+    return null;
+  }
+  return data?.id ? String(data.id) : null;
+}
+
 export async function pushRecordsToTable(
   tableName: string,
   projectId: string,
@@ -885,6 +936,55 @@ export async function pushRecordsToTable(
   }
 
   return ids;
+}
+
+// ── Document Storage ──────────────────────────────────────────
+
+const DOCUMENTS_BUCKET = 'documents';
+
+/**
+ * Upload a file to Supabase Storage.
+ * Path convention: {orgId}/{projectId}/{pipelineLogId}/{fileName}
+ * Returns the storage path on success, or null on failure.
+ */
+export async function uploadToStorage(
+  storagePath: string,
+  buffer: Buffer,
+  mimeType: string
+): Promise<string | null> {
+  const sb = getSupabase();
+  const { error } = await sb.storage
+    .from(DOCUMENTS_BUCKET)
+    .upload(storagePath, buffer, {
+      contentType: mimeType,
+      upsert: false,
+    });
+
+  if (error) {
+    console.error('Storage upload failed:', error.message);
+    return null;
+  }
+  return storagePath;
+}
+
+/**
+ * Generate a time-limited signed URL for a stored document.
+ * Default expiry is 1 hour (3600 seconds).
+ */
+export async function getSignedUrl(
+  storagePath: string,
+  expiresIn = 3600
+): Promise<string | null> {
+  const sb = getSupabase();
+  const { data, error } = await sb.storage
+    .from(DOCUMENTS_BUCKET)
+    .createSignedUrl(storagePath, expiresIn);
+
+  if (error) {
+    console.error('Failed to create signed URL:', error.message);
+    return null;
+  }
+  return data?.signedUrl || null;
 }
 
 // ── Document Links (Causal Chains) ────────────────────────────

@@ -10,26 +10,33 @@ import {
   getConfidenceColor,
 } from '@/lib/pipeline';
 
-// Lazy-load PdfViewer to avoid SSR issues with DOMMatrix (react-pdf needs browser APIs)
 const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false });
 
 type ViewMode = 'list' | 'review';
 
-// Currency/number keywords for smart formatting
 const MONEY_FIELDS = ['budget', 'actual', 'variance', 'cost', 'amount', 'total', 'jtd', 'job to date', 'price', 'value', 'subtotal', 'proposed', 'approved amount', 'labor', 'material', 'ohp', 'revenue', 'expense'];
 const PERCENT_FIELDS = ['percent', 'complete', 'pct', 'rate', 'ratio', 'ohp rate'];
 
-// Enum dropdown fields — enforced at DB level
-const DROPDOWN_FIELDS: Record<string, string[]> = {
-  'Root Cause': [
-    '', 'Design Error', 'Design Omission', 'Owner Request', 'Field Condition',
-    'Unforeseen Condition', 'Code/Regulation Change', 'Coordination Issue',
-    'Scope Change', 'Material Substitution', 'Vendor/Supplier Issue',
-  ],
-  'Preventability': [
-    '', 'Preventable', 'Partially Preventable', 'Not Preventable', 'Under Review',
-  ],
-};
+interface SkillFieldDef {
+  name: string;
+  type: 'string' | 'number' | 'date' | 'enum' | 'boolean' | 'array';
+  tier: 1 | 2 | 3;
+  required: boolean;
+  description: string;
+  options?: string[];
+}
+
+interface SkillData {
+  skill_id: string;
+  display_name: string;
+  field_definitions: SkillFieldDef[];
+  version: number;
+}
+
+interface SkillListItem {
+  skill_id: string;
+  display_name: string;
+}
 
 function formatFieldValue(fieldName: string, value: string | number | null): string {
   if (value == null) return '';
@@ -64,6 +71,16 @@ function formatCellValue(fieldName: string, value: string | number | null): stri
   return formatFieldValue(fieldName, value) || String(value);
 }
 
+function inferFieldType(value: string | number | null): SkillFieldDef['type'] {
+  if (value == null) return 'string';
+  if (typeof value === 'number') return 'number';
+  const str = String(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return 'date';
+  const cleaned = str.replace(/[,$\s%]/g, '');
+  if (!isNaN(Number(cleaned)) && cleaned.length > 0) return 'number';
+  return 'string';
+}
+
 interface PipelineStats {
   total: number;
   pendingReview: number;
@@ -87,6 +104,9 @@ export default function PipelineReview() {
   const [uploadProjectId, setUploadProjectId] = useState('');
   const [uploadFileName, setUploadFileName] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [uploadMode, setUploadMode] = useState<'file' | 'text'>('file');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
   // Review state
   const [reviewAction, setReviewAction] = useState<string>('');
@@ -107,6 +127,24 @@ export default function PipelineReview() {
 
   // Mark as pushed state
   const [markingPushedId, setMarkingPushedId] = useState<string | null>(null);
+
+  // Skill-driven field definitions for the review form
+  const [skillData, setSkillData] = useState<SkillData | null>(null);
+  const [allSkills, setAllSkills] = useState<SkillListItem[]>([]);
+  const [loadingSkill, setLoadingSkill] = useState(false);
+
+  // New document type creation state
+  const [showNewTypeFlow, setShowNewTypeFlow] = useState(false);
+  const [newTypeName, setNewTypeName] = useState('');
+  const [reclassifySkillId, setReclassifySkillId] = useState('');
+  const [savingNewType, setSavingNewType] = useState(false);
+
+  // Add/remove field state
+  const [showAddField, setShowAddField] = useState(false);
+  const [newFieldName, setNewFieldName] = useState('');
+  const [newFieldType, setNewFieldType] = useState<string>('string');
+  const [newFieldRequired, setNewFieldRequired] = useState(false);
+  const [savingField, setSavingField] = useState(false);
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
@@ -131,26 +169,195 @@ export default function PipelineReview() {
     fetchItems();
   }, [fetchItems]);
 
-  const handleUpload = async () => {
-    if (!uploadText.trim()) return;
-    setUploading(true);
+  useEffect(() => {
+    fetch('/api/skills').then(r => r.json()).then(d => {
+      if (d.skills) {
+        setAllSkills(d.skills.map((s: SkillData) => ({
+          skill_id: s.skill_id,
+          display_name: s.display_name,
+        })));
+      }
+    }).catch(() => {});
+  }, []);
+
+  const fetchSkillForItem = useCallback(async (item: PipelineItem) => {
+    const extraction = item.extractedData;
+    if (!extraction) return;
+
+    const skillId = extraction.skillId
+      || extraction.documentType?.toLowerCase().replace(/\s+/g, '_')
+      || '_general';
+
+    setLoadingSkill(true);
+    try {
+      const res = await fetch(`/api/skills/${skillId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSkillData(data.skill);
+      } else {
+        setSkillData(null);
+      }
+    } catch {
+      setSkillData(null);
+    } finally {
+      setLoadingSkill(false);
+    }
+  }, []);
+
+  const handleAddField = async () => {
+    if (!newFieldName.trim() || !skillData) return;
+    setSavingField(true);
+
+    const newField: SkillFieldDef = {
+      name: newFieldName.trim(),
+      type: newFieldType as SkillFieldDef['type'],
+      tier: 2,
+      required: newFieldRequired,
+      description: '',
+    };
 
     try {
-      const res = await fetch('/api/pipeline/extract', {
+      const res = await fetch(`/api/skills/${skillData.skill_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addFields: [newField] }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSkillData(data.skill);
+        setEditedFields(prev => ({ ...prev, [newField.name]: '' }));
+        setNewFieldName('');
+        setNewFieldType('string');
+        setNewFieldRequired(false);
+        setShowAddField(false);
+      }
+    } catch (err) {
+      console.error('Failed to add field:', err);
+    } finally {
+      setSavingField(false);
+    }
+  };
+
+  const handleRemoveField = async (fieldName: string) => {
+    if (!skillData) return;
+    if (!confirm(`Remove "${fieldName}" from this document type?`)) return;
+
+    try {
+      const res = await fetch(`/api/skills/${skillData.skill_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ removeFields: [fieldName] }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSkillData(data.skill);
+        setEditedFields(prev => {
+          const next = { ...prev };
+          delete next[fieldName];
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to remove field:', err);
+    }
+  };
+
+  const handleCreateNewType = async () => {
+    if (!newTypeName.trim() || !selectedItem?.extractedData) return;
+    setSavingNewType(true);
+
+    const fields = selectedItem.extractedData.fields;
+    const fieldDefs: SkillFieldDef[] = Object.entries(fields).map(([name, data]) => ({
+      name,
+      type: inferFieldType(data.value),
+      tier: 2 as const,
+      required: data.confidence >= 0.8,
+      description: '',
+    }));
+
+    try {
+      const res = await fetch('/api/skills', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sourceText: uploadText,
-          projectId: uploadProjectId || undefined,
-          fileName: uploadFileName || 'Pasted Document',
+          skillId: newTypeName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+          displayName: newTypeName.trim(),
+          fieldDefinitions: fieldDefs,
         }),
       });
+
+      if (res.ok) {
+        const data = await res.json();
+        setSkillData(data.skill);
+        setShowNewTypeFlow(false);
+        setNewTypeName('');
+        setAllSkills(prev => [...prev, {
+          skill_id: data.skill.skill_id,
+          display_name: data.skill.display_name,
+        }]);
+      } else {
+        const err = await res.json();
+        alert(`Failed to create type: ${err.error}`);
+      }
+    } catch (err) {
+      console.error('Failed to create new type:', err);
+    } finally {
+      setSavingNewType(false);
+    }
+  };
+
+  const handleReclassify = async () => {
+    if (!reclassifySkillId || !selectedItem) return;
+    try {
+      const res = await fetch(`/api/skills/${reclassifySkillId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSkillData(data.skill);
+        setShowNewTypeFlow(false);
+        setReclassifySkillId('');
+      }
+    } catch (err) {
+      console.error('Failed to reclassify:', err);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (uploadMode === 'file' && !uploadFile) return;
+    if (uploadMode === 'text' && !uploadText.trim()) return;
+    setUploading(true);
+
+    try {
+      let res: Response;
+
+      if (uploadMode === 'file' && uploadFile) {
+        const formData = new FormData();
+        formData.append('file', uploadFile);
+        if (uploadProjectId) formData.append('projectId', uploadProjectId);
+        if (uploadFileName) formData.append('fileName', uploadFileName);
+
+        res = await fetch('/api/pipeline/upload', {
+          method: 'POST',
+          body: formData,
+        });
+      } else {
+        res = await fetch('/api/pipeline/extract', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceText: uploadText,
+            projectId: uploadProjectId || undefined,
+            fileName: uploadFileName || 'Pasted Document',
+          }),
+        });
+      }
 
       if (res.ok) {
         setShowUpload(false);
         setUploadText('');
         setUploadFileName('');
         setUploadProjectId('');
+        setUploadFile(null);
+        setUploadMode('file');
         await fetchItems();
       } else {
         const err = await res.json();
@@ -294,13 +501,24 @@ export default function PipelineReview() {
     setReviewAction('');
     setReviewNotes('');
     setRejectionReason('');
-    // Pre-populate editable fields with formatting
+    setShowNewTypeFlow(false);
+    setShowAddField(false);
+    setSkillData(null);
+
     if (item.extractedData) {
       const fields: Record<string, string> = {};
       for (const [key, val] of Object.entries(item.extractedData.fields)) {
         fields[key] = val.value != null ? formatFieldValue(key, val.value) : '';
       }
       setEditedFields(fields);
+
+      fetchSkillForItem(item);
+
+      const isLowConfidence = (item.extractedData.classifierConfidence ?? 1) < 0.5
+        || item.extractedData.skillId === '_general';
+      if (isLowConfidence) {
+        setShowNewTypeFlow(true);
+      }
     }
   };
 
@@ -389,72 +607,265 @@ export default function PipelineReview() {
                 </div>
               )}
 
-              {/* Document type */}
+              {/* Document type + reclassify/create flow */}
               {extraction && (
                 <div className="mb-4">
                   <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider mb-2">Document Type</p>
                   <div className="flex items-center gap-2">
-                    <span className="text-[14px] font-medium text-[#1a1a1a]">{extraction.documentType}</span>
+                    <span className="text-[14px] font-medium text-[#1a1a1a]">{skillData?.display_name || extraction.documentType}</span>
                     <span className="text-[12px] text-[#999]">
                       {getConfidenceIndicator(extraction.documentTypeConfidence)}
                     </span>
+                    {!showNewTypeFlow && (
+                      <button
+                        onClick={() => setShowNewTypeFlow(true)}
+                        className="ml-auto text-[11px] text-[#007aff] hover:underline"
+                      >
+                        Change type
+                      </button>
+                    )}
                   </div>
+
+                  {showNewTypeFlow && (
+                    <div className="mt-3 p-3 rounded-lg border border-amber-200 bg-amber-50/50 space-y-3">
+                      <p className="text-[12px] font-medium text-amber-800">
+                        {(extraction.classifierConfidence ?? 1) < 0.5
+                          ? "We couldn't confidently identify this document type."
+                          : 'Select the correct type or create a new one.'}
+                      </p>
+
+                      <div>
+                        <label className="text-[11px] font-medium text-[#555] block mb-1">Reclassify as existing type</label>
+                        <div className="flex gap-2">
+                          <select
+                            value={reclassifySkillId}
+                            onChange={(e) => setReclassifySkillId(e.target.value)}
+                            className="flex-1 px-2 py-1.5 rounded-lg border border-[#e0e0e0] text-[12px]"
+                          >
+                            <option value="">Select type...</option>
+                            {allSkills.filter(s => s.skill_id !== '_general').map(s => (
+                              <option key={s.skill_id} value={s.skill_id}>{s.display_name}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={handleReclassify}
+                            disabled={!reclassifySkillId}
+                            className="px-3 py-1.5 rounded-lg bg-[#1a1a1a] text-white text-[12px] font-medium disabled:opacity-40"
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-amber-200 pt-3">
+                        <label className="text-[11px] font-medium text-[#555] block mb-1">Or create new type</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={newTypeName}
+                            onChange={(e) => setNewTypeName(e.target.value)}
+                            placeholder="e.g. Permit Application"
+                            className="flex-1 px-2 py-1.5 rounded-lg border border-[#e0e0e0] text-[12px]"
+                          />
+                          <button
+                            onClick={handleCreateNewType}
+                            disabled={!newTypeName.trim() || savingNewType}
+                            className="px-3 py-1.5 rounded-lg bg-green-600 text-white text-[12px] font-medium disabled:opacity-40"
+                          >
+                            {savingNewType ? 'Creating...' : 'Create'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => setShowNewTypeFlow(false)}
+                        className="text-[11px] text-[#999] hover:underline"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Editable fields */}
+              {/* Editable fields — driven by skill field_definitions when available */}
               {extraction && (
                 <div className="mb-4">
-                  <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider mb-2">Fields</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider">Fields</p>
+                    <button
+                      onClick={() => setShowAddField(!showAddField)}
+                      className="text-[11px] text-[#007aff] hover:underline"
+                    >
+                      {showAddField ? 'Cancel' : '+ Add field'}
+                    </button>
+                  </div>
+
+                  {showAddField && (
+                    <div className="mb-3 p-3 rounded-lg border border-blue-200 bg-blue-50/50 space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newFieldName}
+                          onChange={(e) => setNewFieldName(e.target.value)}
+                          placeholder="Field name"
+                          className="flex-1 px-2 py-1.5 rounded-lg border border-[#e0e0e0] text-[12px]"
+                        />
+                        <select
+                          value={newFieldType}
+                          onChange={(e) => setNewFieldType(e.target.value)}
+                          className="px-2 py-1.5 rounded-lg border border-[#e0e0e0] text-[12px]"
+                        >
+                          <option value="string">Text</option>
+                          <option value="number">Number</option>
+                          <option value="date">Date</option>
+                          <option value="boolean">Yes/No</option>
+                          <option value="enum">Dropdown</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-1.5 text-[11px] text-[#555]">
+                          <input
+                            type="checkbox"
+                            checked={newFieldRequired}
+                            onChange={(e) => setNewFieldRequired(e.target.checked)}
+                            className="rounded"
+                          />
+                          Required
+                        </label>
+                        <button
+                          onClick={handleAddField}
+                          disabled={!newFieldName.trim() || savingField}
+                          className="px-3 py-1 rounded-lg bg-[#1a1a1a] text-white text-[11px] font-medium disabled:opacity-40"
+                        >
+                          {savingField ? 'Adding...' : 'Add'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="space-y-2">
-                    {Object.entries(extraction.fields).map(([fieldName, fieldData]) => (
-                      <div key={fieldName} className="flex items-start gap-2">
-                        <div className="flex-1">
-                          <label className="flex items-center gap-1.5 text-[12px] font-medium text-[#555] mb-1">
-                            {fieldName}
-                            <span className="text-[10px]">
-                              {getConfidenceIndicator(fieldData.confidence)}
-                            </span>
-                          </label>
-                          {DROPDOWN_FIELDS[fieldName] ? (
-                            <select
-                              value={editedFields[fieldName] ?? ''}
-                              onChange={(e) =>
-                                setEditedFields({ ...editedFields, [fieldName]: e.target.value })
-                              }
-                              className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
-                                fieldData.confidence < 0.7
-                                  ? 'border-red-200 bg-red-50/50'
-                                  : fieldData.confidence < 0.9
-                                  ? 'border-amber-200 bg-amber-50/50'
-                                  : 'border-[#e0e0e0] bg-white'
-                              } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
-                            >
-                              {DROPDOWN_FIELDS[fieldName].map((opt) => (
-                                <option key={opt} value={opt}>
-                                  {opt || '— Select —'}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
+                    {(() => {
+                      const fieldDefs = skillData?.field_definitions;
+                      const fieldEntries = Object.entries(extraction.fields);
+
+                      if (fieldDefs && fieldDefs.length > 0) {
+                        const extractedFieldNames = new Set(fieldEntries.map(([k]) => k));
+                        const allFields = [
+                          ...fieldDefs.map(fd => ({
+                            name: fd.name,
+                            def: fd,
+                            extracted: extraction.fields[fd.name] || null,
+                          })),
+                          ...fieldEntries
+                            .filter(([k]) => !fieldDefs.some(fd => fd.name === k))
+                            .map(([k, v]) => ({ name: k, def: null as SkillFieldDef | null, extracted: v })),
+                        ];
+
+                        return allFields.map(({ name: fieldName, def, extracted }) => {
+                          const confidence = extracted?.confidence ?? 0;
+                          const isEnum = def?.type === 'enum' && def.options && def.options.length > 0;
+                          const isBoolean = def?.type === 'boolean';
+
+                          return (
+                            <div key={fieldName} className="flex items-start gap-2 group">
+                              <div className="flex-1">
+                                <label className="flex items-center gap-1.5 text-[12px] font-medium text-[#555] mb-1">
+                                  {fieldName}
+                                  {def?.required && <span className="text-red-400 text-[10px]">*</span>}
+                                  <span className="text-[10px]">
+                                    {extracted ? getConfidenceIndicator(confidence) : ''}
+                                  </span>
+                                  {def?.description && (
+                                    <span className="text-[10px] text-[#bbb] truncate max-w-[120px]" title={def.description}>
+                                      {def.description}
+                                    </span>
+                                  )}
+                                </label>
+                                {isEnum ? (
+                                  <select
+                                    value={editedFields[fieldName] ?? ''}
+                                    onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
+                                    className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
+                                      confidence < 0.7 ? 'border-red-200 bg-red-50/50'
+                                        : confidence < 0.9 ? 'border-amber-200 bg-amber-50/50'
+                                        : 'border-[#e0e0e0] bg-white'
+                                    } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
+                                  >
+                                    <option value="">— Select —</option>
+                                    {def!.options!.map((opt) => (
+                                      <option key={opt} value={opt}>{opt}</option>
+                                    ))}
+                                  </select>
+                                ) : isBoolean ? (
+                                  <select
+                                    value={editedFields[fieldName] ?? ''}
+                                    onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
+                                    className="w-full px-3 py-1.5 rounded-lg border border-[#e0e0e0] bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30"
+                                  >
+                                    <option value="">— Select —</option>
+                                    <option value="true">Yes</option>
+                                    <option value="false">No</option>
+                                  </select>
+                                ) : (
+                                  <input
+                                    type={def?.type === 'date' ? 'date' : def?.type === 'number' ? 'number' : 'text'}
+                                    value={editedFields[fieldName] ?? ''}
+                                    onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
+                                    className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
+                                      confidence < 0.7 ? 'border-red-200 bg-red-50/50'
+                                        : confidence < 0.9 ? 'border-amber-200 bg-amber-50/50'
+                                        : 'border-[#e0e0e0] bg-white'
+                                    } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
+                                  />
+                                )}
+                              </div>
+                              <button
+                                onClick={() => handleRemoveField(fieldName)}
+                                className="mt-6 p-1 rounded text-[#ddd] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                                title={`Remove ${fieldName}`}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                  <path d="M18 6L6 18M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </div>
+                          );
+                        });
+                      }
+
+                      return fieldEntries.map(([fieldName, fieldData]) => (
+                        <div key={fieldName} className="flex items-start gap-2 group">
+                          <div className="flex-1">
+                            <label className="flex items-center gap-1.5 text-[12px] font-medium text-[#555] mb-1">
+                              {fieldName}
+                              <span className="text-[10px]">
+                                {getConfidenceIndicator(fieldData.confidence)}
+                              </span>
+                            </label>
                             <input
                               type="text"
                               value={editedFields[fieldName] ?? ''}
-                              onChange={(e) =>
-                                setEditedFields({ ...editedFields, [fieldName]: e.target.value })
-                              }
+                              onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
                               className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
-                                fieldData.confidence < 0.7
-                                  ? 'border-red-200 bg-red-50/50'
-                                  : fieldData.confidence < 0.9
-                                  ? 'border-amber-200 bg-amber-50/50'
+                                fieldData.confidence < 0.7 ? 'border-red-200 bg-red-50/50'
+                                  : fieldData.confidence < 0.9 ? 'border-amber-200 bg-amber-50/50'
                                   : 'border-[#e0e0e0] bg-white'
                               } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
                             />
-                          )}
+                          </div>
+                          <button
+                            onClick={() => handleRemoveField(fieldName)}
+                            className="mt-6 p-1 rounded text-[#ddd] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                            title={`Remove ${fieldName}`}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                              <path d="M18 6L6 18M6 6l12 12" />
+                            </svg>
+                          </button>
                         </div>
-                      </div>
-                    ))}
+                      ));
+                    })()}
                   </div>
                 </div>
               )}
@@ -734,11 +1145,35 @@ export default function PipelineReview() {
               <div className="px-6 py-4 border-b border-[#e8e8e8]">
                 <h2 className="text-[16px] font-semibold text-[#1a1a1a]">Submit Document for Processing</h2>
                 <p className="text-[13px] text-[#999] mt-0.5">
-                  Paste document text below. AI will extract and classify the data.
+                  Upload a file or paste document text. AI will extract and classify the data.
                 </p>
               </div>
 
               <div className="p-6 space-y-4">
+                {/* Mode toggle */}
+                <div className="flex gap-1 p-0.5 bg-[#f5f5f5] rounded-lg w-fit">
+                  <button
+                    onClick={() => setUploadMode('file')}
+                    className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
+                      uploadMode === 'file'
+                        ? 'bg-white text-[#1a1a1a] shadow-sm'
+                        : 'text-[#999] hover:text-[#666]'
+                    }`}
+                  >
+                    Upload File
+                  </button>
+                  <button
+                    onClick={() => setUploadMode('text')}
+                    className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
+                      uploadMode === 'text'
+                        ? 'bg-white text-[#1a1a1a] shadow-sm'
+                        : 'text-[#999] hover:text-[#666]'
+                    }`}
+                  >
+                    Paste Text
+                  </button>
+                </div>
+
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="block text-[12px] font-medium text-[#555] mb-1">File Name</label>
@@ -746,7 +1181,7 @@ export default function PipelineReview() {
                       type="text"
                       value={uploadFileName}
                       onChange={(e) => setUploadFileName(e.target.value)}
-                      placeholder="e.g. COR-007.pdf"
+                      placeholder={uploadMode === 'file' && uploadFile ? uploadFile.name : 'e.g. COR-007.pdf'}
                       className="w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30"
                     />
                   </div>
@@ -762,21 +1197,99 @@ export default function PipelineReview() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[12px] font-medium text-[#555] mb-1">Document Text</label>
-                  <textarea
-                    value={uploadText}
-                    onChange={(e) => setUploadText(e.target.value)}
-                    placeholder="Paste the full document text here (OCR output, email text, copied content, etc.)..."
-                    rows={12}
-                    className="w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono resize-none focus:outline-none focus:ring-2 focus:ring-[#007aff]/30"
-                  />
-                </div>
+                {uploadMode === 'file' ? (
+                  <div>
+                    <label className="block text-[12px] font-medium text-[#555] mb-1">Document File</label>
+                    <div
+                      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                      onDragLeave={() => setDragOver(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDragOver(false);
+                        const f = e.dataTransfer.files[0];
+                        if (f) {
+                          setUploadFile(f);
+                          if (!uploadFileName) setUploadFileName(f.name);
+                        }
+                      }}
+                      onClick={() => document.getElementById('file-upload-input')?.click()}
+                      className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors ${
+                        dragOver
+                          ? 'border-[#007aff] bg-[#007aff]/5'
+                          : uploadFile
+                          ? 'border-[#34c759] bg-[#34c759]/5'
+                          : 'border-[#e0e0e0] hover:border-[#ccc] hover:bg-[#fafafa]'
+                      }`}
+                    >
+                      <input
+                        id="file-upload-input"
+                        type="file"
+                        className="hidden"
+                        accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.docx,.doc,.pptx,.ppt,.csv,.txt,.eml"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) {
+                            setUploadFile(f);
+                            if (!uploadFileName) setUploadFileName(f.name);
+                          }
+                        }}
+                      />
+                      {uploadFile ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-center gap-2">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#34c759" strokeWidth="2" strokeLinecap="round">
+                              <path d="M20 6L9 17L4 12" />
+                            </svg>
+                            <span className="text-[14px] font-medium text-[#1a1a1a]">{uploadFile.name}</span>
+                          </div>
+                          <p className="text-[12px] text-[#999]">
+                            {(uploadFile.size / 1024 / 1024).toFixed(2)} MB &middot; {uploadFile.type || 'unknown type'}
+                          </p>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setUploadFile(null);
+                              setUploadFileName('');
+                            }}
+                            className="text-[12px] text-[#ff3b30] hover:underline"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <svg className="mx-auto" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="1.5" strokeLinecap="round">
+                            <path d="M21 15V19a2 2 0 01-2 2H5a2 2 0 01-2-2V15" />
+                            <polyline points="17 8 12 3 7 8" />
+                            <line x1="12" y1="3" x2="12" y2="15" />
+                          </svg>
+                          <p className="text-[13px] text-[#666]">
+                            Drag & drop a file here, or <span className="text-[#007aff]">click to browse</span>
+                          </p>
+                          <p className="text-[11px] text-[#bbb]">
+                            PDF, Images, Excel, Word, PowerPoint, CSV, TXT &middot; Max 50 MB
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-[12px] font-medium text-[#555] mb-1">Document Text</label>
+                    <textarea
+                      value={uploadText}
+                      onChange={(e) => setUploadText(e.target.value)}
+                      placeholder="Paste the full document text here (OCR output, email text, copied content, etc.)..."
+                      rows={12}
+                      className="w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono resize-none focus:outline-none focus:ring-2 focus:ring-[#007aff]/30"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="px-6 py-4 border-t border-[#e8e8e8] flex justify-end gap-3">
                 <button
-                  onClick={() => setShowUpload(false)}
+                  onClick={() => { setShowUpload(false); setUploadFile(null); setUploadMode('file'); }}
                   className="px-4 py-2 rounded-lg text-[13px] text-[#666] hover:bg-[#f0f0f0] transition-colors"
                 >
                   Cancel
@@ -784,7 +1297,9 @@ export default function PipelineReview() {
                 <motion.button
                   whileTap={{ scale: 0.97 }}
                   onClick={handleUpload}
-                  disabled={!uploadText.trim() || uploading}
+                  disabled={
+                    (uploadMode === 'file' ? !uploadFile : !uploadText.trim()) || uploading
+                  }
                   className="flex items-center gap-2 px-5 py-2 rounded-lg bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {uploading ? (
@@ -793,7 +1308,7 @@ export default function PipelineReview() {
                         <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
                         <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
                       </svg>
-                      Extracting with AI...
+                      {uploadMode === 'file' ? 'Uploading & Extracting...' : 'Extracting with AI...'}
                     </>
                   ) : (
                     <>

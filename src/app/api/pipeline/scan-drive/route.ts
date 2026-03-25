@@ -14,7 +14,6 @@
 //   4. Return summary
 
 import { NextRequest } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import {
   listAllDriveFiles,
   downloadFileContent,
@@ -26,6 +25,7 @@ import { generatePipelineId } from '@/lib/pipeline';
 import { fetchProjectList, getSupabase } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { extractWithSkill } from '@/lib/skills';
+import { extractTextWithClaude } from '@/lib/file-parser';
 
 const MAX_FILES_PER_RUN = 3;
 
@@ -311,54 +311,4 @@ async function processFile(
     pipelineId,
     projectId: projectId || '(unmatched)',
   };
-}
-
-async function extractTextWithClaude(
-  base64Data: string,
-  mimeType: string,
-  method: 'pdf' | 'image'
-): Promise<string> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-  const prompt = 'Extract ALL text from this construction document. Return the complete text content exactly as it appears, preserving formatting, tables, numbers, and structure. Do not summarize — output every word.';
-
-  let content: Anthropic.MessageCreateParams['messages'][0]['content'];
-
-  if (method === 'pdf') {
-    content = [
-      {
-        type: 'document' as const,
-        source: {
-          type: 'base64' as const,
-          media_type: 'application/pdf' as const,
-          data: base64Data,
-        },
-      },
-      { type: 'text' as const, text: prompt },
-    ];
-  } else {
-    const imgType = mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-    content = [
-      {
-        type: 'image' as const,
-        source: {
-          type: 'base64' as const,
-          media_type: imgType,
-          data: base64Data,
-        },
-      },
-      { type: 'text' as const, text: prompt },
-    ];
-  }
-
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 8192,
-    messages: [{ role: 'user', content }],
-  });
-
-  return response.content
-    .filter((block) => block.type === 'text')
-    .map((block) => (block.type === 'text' ? block.text : ''))
-    .join('');
 }
