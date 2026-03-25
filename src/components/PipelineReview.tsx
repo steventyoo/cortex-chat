@@ -149,10 +149,7 @@ export default function PipelineReview() {
   const fetchItems = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (filterStatus !== 'all') params.set('status', filterStatus);
-
-      const res = await fetch(`/api/pipeline/list?${params}`);
+      const res = await fetch('/api/pipeline/list');
       if (res.ok) {
         const data = await res.json();
         setItems(data.items);
@@ -163,7 +160,7 @@ export default function PipelineReview() {
     } finally {
       setLoading(false);
     }
-  }, [filterStatus]);
+  }, []);
 
   useEffect(() => {
     fetchItems();
@@ -526,6 +523,9 @@ export default function PipelineReview() {
     if (filterStatus === 'all') return true;
     if (filterStatus === 'needs_action') {
       return item.status === 'pending_review' || item.status === 'tier2_flagged';
+    }
+    if (filterStatus === 'approved') {
+      return item.status === 'approved' || item.status === 'pushed';
     }
     return item.status === filterStatus;
   });
@@ -1351,12 +1351,14 @@ export default function PipelineReview() {
         ) : (
           <div className="divide-y divide-[#f0f0f0]">
             {filteredItems.map((item) => (
-              <motion.button
+              <motion.div
                 key={item.id}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 onClick={() => openReview(item)}
-                className="w-full text-left px-6 py-4 hover:bg-[#fafafa] transition-colors flex items-center gap-4"
+                role="button"
+                tabIndex={0}
+                className="w-full text-left px-6 py-4 hover:bg-[#fafafa] transition-colors flex items-center gap-4 cursor-pointer"
               >
                 {/* Color-coded document type badge (left side) */}
                 <DocTypeBadge type={item.documentType} />
@@ -1438,7 +1440,7 @@ export default function PipelineReview() {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round" className="flex-shrink-0">
                   <path d="M9 18l6-6-6-6" />
                 </svg>
-              </motion.button>
+              </motion.div>
             ))}
           </div>
         )}

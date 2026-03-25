@@ -18,7 +18,18 @@ export async function GET(request: NextRequest) {
     let query = sb.from('pipeline_log').select('*').neq('status', 'deleted').order('created_at', { ascending: false }).limit(100);
 
     if (projectId) query = query.eq('project_id', projectId);
-    if (status) query = query.eq('status', status);
+    if (status) {
+      const STATUS_GROUPS: Record<string, string[]> = {
+        approved: ['approved', 'pushed'],
+        pending_review: ['pending_review', 'tier2_validated'],
+      };
+      const statuses = STATUS_GROUPS[status];
+      if (statuses) {
+        query = query.in('status', statuses);
+      } else {
+        query = query.eq('status', status);
+      }
+    }
 
     const { data, error } = await query;
     if (error) {
