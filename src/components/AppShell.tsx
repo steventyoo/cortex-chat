@@ -100,6 +100,8 @@ export default function AppShell({ projects, children }: AppShellProps) {
     isAdmin,
     userName: user?.name,
     userEmail: user?.email,
+    orgName: user?.orgName,
+    orgId: user?.orgId,
     onLogout: session.logout,
   };
 

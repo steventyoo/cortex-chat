@@ -108,6 +108,9 @@ export default function PipelineReview() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
+  // Project list for upload dropdown
+  const [projectOptions, setProjectOptions] = useState<Array<{ projectId: string; projectName: string }>>([]);
+
   // Review state
   const [reviewAction, setReviewAction] = useState<string>('');
   const [reviewNotes, setReviewNotes] = useState('');
@@ -172,6 +175,17 @@ export default function PipelineReview() {
         setAllSkills(d.skills.map((s: SkillData) => ({
           skill_id: s.skill_id,
           display_name: s.display_name,
+        })));
+      }
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/projects').then(r => r.json()).then(d => {
+      if (d.projects) {
+        setProjectOptions(d.projects.map((p: { projectId: string; projectName: string }) => ({
+          projectId: p.projectId,
+          projectName: p.projectName,
         })));
       }
     }).catch(() => {});
@@ -264,6 +278,7 @@ export default function PipelineReview() {
     setSavingNewType(true);
 
     const fields = selectedItem.extractedData.fields;
+    if (!fields) { setSavingNewType(false); return; }
     const fieldDefs: SkillFieldDef[] = Object.entries(fields).map(([name, data]) => ({
       name,
       type: inferFieldType(data.value),
@@ -504,8 +519,10 @@ export default function PipelineReview() {
 
     if (item.extractedData) {
       const fields: Record<string, string> = {};
-      for (const [key, val] of Object.entries(item.extractedData.fields)) {
-        fields[key] = val.value != null ? formatFieldValue(key, val.value) : '';
+      if (item.extractedData.fields) {
+        for (const [key, val] of Object.entries(item.extractedData.fields)) {
+          fields[key] = val.value != null ? formatFieldValue(key, val.value) : '';
+        }
       }
       setEditedFields(fields);
 
@@ -747,7 +764,7 @@ export default function PipelineReview() {
                   <div className="space-y-2">
                     {(() => {
                       const fieldDefs = skillData?.field_definitions;
-                      const fieldEntries = Object.entries(extraction.fields);
+                      const fieldEntries = Object.entries(extraction.fields || {});
 
                       if (fieldDefs && fieldDefs.length > 0) {
                         const extractedFieldNames = new Set(fieldEntries.map(([k]) => k));
@@ -755,7 +772,7 @@ export default function PipelineReview() {
                           ...fieldDefs.map(fd => ({
                             name: fd.name,
                             def: fd,
-                            extracted: extraction.fields[fd.name] || null,
+                            extracted: extraction.fields?.[fd.name] || null,
                           })),
                           ...fieldEntries
                             .filter(([k]) => !fieldDefs.some(fd => fd.name === k))
@@ -1186,14 +1203,17 @@ export default function PipelineReview() {
                     />
                   </div>
                   <div className="flex-1">
-                    <label className="block text-[12px] font-medium text-[#555] mb-1">Project ID</label>
-                    <input
-                      type="text"
+                    <label className="block text-[12px] font-medium text-[#555] mb-1">Project</label>
+                    <select
                       value={uploadProjectId}
                       onChange={(e) => setUploadProjectId(e.target.value)}
-                      placeholder="e.g. PRJ-001"
-                      className="w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30"
-                    />
+                      className="w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 bg-white"
+                    >
+                      <option value="">(Unassigned)</option>
+                      {projectOptions.map((p) => (
+                        <option key={p.projectId} value={p.projectId}>{p.projectName}</option>
+                      ))}
+                    </select>
                   </div>
                 </div>
 
@@ -1548,6 +1568,14 @@ function SourceDocumentView({ text, fileName, fileUrl }: { text: string; fileNam
   const canShowPdf = isPdf && driveFileId;
 
   if (!text && !canShowPdf) {
+    if (fileUrl) {
+      return (
+        <div className="text-center py-8">
+          <p className="text-[13px] text-[#999] mb-3">Source text was not captured for this document.</p>
+          <p className="text-[12px] text-[#ccc]">Re-upload the file to extract text.</p>
+        </div>
+      );
+    }
     return <p className="text-[13px] text-[#999] italic">No source text available</p>;
   }
 

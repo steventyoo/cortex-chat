@@ -172,15 +172,51 @@ export async function updateOrganization(orgId: string, fields: Partial<{
 
 // ── User CRUD ─────────────────────────────────────────────────
 
-export async function getUserByEmail(email: string): Promise<UserRecord | null> {
+export async function getUserByEmail(email: string, orgId?: string): Promise<UserRecord | null> {
   const sb = getSupabase();
-  const { data, error } = await sb
+  let query = sb.from('users').select('*').eq('email', email.toLowerCase());
+  if (orgId) query = query.eq('org_id', orgId);
+  query = query.eq('active', true).limit(1);
+  const { data, error } = await query;
+  if (error || !data || data.length === 0) return null;
+  return mapUser(data[0]);
+}
+
+export async function getUsersByEmail(email: string): Promise<UserRecord[]> {
+  const sb = getSupabase();
+  const { data } = await sb
     .from('users')
     .select('*')
     .eq('email', email.toLowerCase())
-    .single();
-  if (error || !data) return null;
-  return mapUser(data);
+    .eq('active', true);
+  return (data || []).map(mapUser);
+}
+
+export async function getOrgsForUser(email: string): Promise<Array<{ orgId: string; orgName: string; role: UserRecord['role'] }>> {
+  const sb = getSupabase();
+  const { data: userRows } = await sb
+    .from('users')
+    .select('org_id, role')
+    .eq('email', email.toLowerCase())
+    .eq('active', true);
+  if (!userRows || userRows.length === 0) return [];
+
+  const orgIds = userRows.map((r: Record<string, unknown>) => String(r.org_id));
+  const { data: orgRows } = await sb
+    .from('organizations')
+    .select('org_id, org_name')
+    .in('org_id', orgIds)
+    .eq('active', true);
+  if (!orgRows) return [];
+
+  const orgMap = new Map(orgRows.map((o: Record<string, unknown>) => [String(o.org_id), String(o.org_name)]));
+  return userRows
+    .filter((r: Record<string, unknown>) => orgMap.has(String(r.org_id)))
+    .map((r: Record<string, unknown>) => ({
+      orgId: String(r.org_id),
+      orgName: orgMap.get(String(r.org_id)) || '',
+      role: (r.role as UserRecord['role']) || 'member',
+    }));
 }
 
 export async function getUserById(userId: string): Promise<UserRecord | null> {

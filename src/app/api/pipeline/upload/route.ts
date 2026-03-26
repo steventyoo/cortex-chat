@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   }
 
   const file = formData.get('file') as File | null;
-  const projectId = (formData.get('projectId') as string) || '';
+  const projectId = (formData.get('projectId') as string) || null;
   const fileNameOverride = formData.get('fileName') as string | null;
 
   if (!file) {
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
   try {
     const { data } = await sb.from('pipeline_log').insert({
       pipeline_id: pipelineId,
-      project_id: projectId,
+      ...(projectId ? { project_id: projectId } : {}),
       org_id: orgId,
       file_name: fileName,
       status: 'tier1_extracting',
@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
   let flags;
 
   try {
-    const result = await extractWithSkill(sourceText, projectId, orgId);
+    const result = await extractWithSkill(sourceText, projectId || '', orgId);
     extraction = result.extraction;
     overallConfidence = result.overallConfidence;
     flags = result.flags;
@@ -159,7 +159,7 @@ export async function POST(request: NextRequest) {
   if (recordId) {
     try {
       await sb.from('pipeline_log').update({
-        document_type: extraction.documentType,
+        document_type: extraction.skillId || null,
         status: finalStatus,
         overall_confidence: overallConfidence,
         extracted_data: extraction,

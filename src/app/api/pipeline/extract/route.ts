@@ -8,23 +8,22 @@ export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateUserSession(token))) {
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   let sourceText: string;
-  let projectId: string;
+  let projectId: string | null;
   let fileName: string;
   let fileUrl: string | null;
-  let orgId: string | undefined;
 
   try {
     const body = await request.json();
     sourceText = body.sourceText;
-    projectId = body.projectId || '';
+    projectId = body.projectId || null;
     fileName = body.fileName || 'Untitled Document';
     fileUrl = body.fileUrl || null;
-    orgId = body.orgId || undefined;
 
     if (!sourceText || sourceText.trim().length === 0) {
       return Response.json({ error: 'sourceText is required' }, { status: 400 });
@@ -32,6 +31,8 @@ export async function POST(request: NextRequest) {
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
+
+  const orgId = session.orgId;
 
   const pipelineId = generatePipelineId();
   const now = new Date().toISOString();
@@ -41,7 +42,8 @@ export async function POST(request: NextRequest) {
   try {
     const { data } = await sb.from('pipeline_log').insert({
       pipeline_id: pipelineId,
-      project_id: projectId,
+      ...(projectId ? { project_id: projectId } : {}),
+      org_id: orgId,
       file_name: fileName,
       file_url: fileUrl || null,
       status: 'tier1_extracting',
@@ -59,7 +61,7 @@ export async function POST(request: NextRequest) {
   let flags;
 
   try {
-    const result = await extractWithSkill(sourceText, projectId, orgId);
+    const result = await extractWithSkill(sourceText, projectId || '', orgId);
     extraction = result.extraction;
     overallConfidence = result.overallConfidence;
     flags = result.flags;
@@ -91,7 +93,7 @@ export async function POST(request: NextRequest) {
   if (recordId) {
     try {
       await sb.from('pipeline_log').update({
-        document_type: extraction.documentType,
+        document_type: extraction.skillId || null,
         status: finalStatus,
         overall_confidence: overallConfidence,
         extracted_data: extraction,

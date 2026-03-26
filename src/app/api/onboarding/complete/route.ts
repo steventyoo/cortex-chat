@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Organization not found' }, { status: 404 });
   }
 
-  await updateOrganization(org.id, { onboardingComplete: true });
+  await updateOrganization(session.orgId, { onboardingComplete: true });
 
   return Response.json({ success: true });
 }
