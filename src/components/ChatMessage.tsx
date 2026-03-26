@@ -2,18 +2,20 @@
 
 import { useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { ChatMessage as ChatMessageType } from '@/lib/types';
+import { ChatMessage as ChatMessageType, SourceRef } from '@/lib/types';
 import MarkdownRenderer from './MarkdownRenderer';
 import { StreamingProvider } from './DataTable';
 import LoadingDots from './LoadingDots';
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  sources?: SourceRef[];
   isStreaming?: boolean;
 }
 
 export default function ChatMessage({
   message,
+  sources,
   isStreaming = false,
 }: ChatMessageProps) {
   const isUser = message.role === 'user';
@@ -54,7 +56,7 @@ export default function ChatMessage({
           <p className="text-[15px] leading-[1.5]">{message.content}</p>
         ) : message.content ? (
           <StreamingProvider isStreaming={isStreaming}>
-            <MarkdownRenderer content={message.content} />
+            <MarkdownRenderer content={message.content} sources={sources} />
           </StreamingProvider>
         ) : isStreaming ? (
           <LoadingDots />

@@ -9,12 +9,11 @@
 //   3. For new files (up to 3 per run):
 //      a. Download content
 //      b. Extract text (text files) or prepare base64 (PDF/images)
-//      c. Run AI extraction + validation via Claude
+//      c. Run AI extraction + validation via skill-based pipeline
 //      d. Create pipeline_log entry
 //   4. Return summary
 
 import { NextRequest } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import {
   listAllDriveFiles,
   downloadFileContent,
@@ -22,27 +21,17 @@ import {
   isSupportedFileType,
   DriveFile,
 } from '@/lib/google-drive';
-import {
-  EXTRACTION_SYSTEM_PROMPT,
-  buildExtractionPrompt,
-  generatePipelineId,
-  computeOverallConfidence,
-  ExtractionResult,
-  ValidationFlag,
-  DOCUMENT_TYPE_FIELDS,
-} from '@/lib/pipeline';
+import { generatePipelineId } from '@/lib/pipeline';
 import { fetchProjectList, getSupabase } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
+import { extractWithSkill } from '@/lib/skills';
+import { extractTextWithClaude } from '@/lib/file-parser';
 
-const MAX_FILES_PER_RUN = 3; // Stay within 60s timeout
+const MAX_FILES_PER_RUN = 3;
 
 export const maxDuration = 60;
 
-/**
- * GET handler — triggered by Vercel Cron or manual admin call.
- */
 export async function GET(request: NextRequest) {
-  // Auth: accept CRON_SECRET, admin cookie, or valid session
   const authHeader = request.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
 
@@ -55,7 +44,6 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Check if Google Drive is configured
   if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_DRIVE_FOLDER_ID) {
     return Response.json({
       error: 'Google Drive not configured',
@@ -64,14 +52,11 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // 1. List all files in Drive
     const allDriveFiles = await listAllDriveFiles();
     const supportedFiles = allDriveFiles.filter((f) => isSupportedFileType(f.mimeType));
 
-    // 2. Get already-processed files from pipeline_log
     const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles();
 
-    // 3. Find new files (not yet in pipeline)
     const newFiles = supportedFiles.filter((f) => {
       if (processedFileUrls.has(buildDriveFileUrl(f.id))) return false;
       const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
@@ -88,7 +73,6 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // 4. Map Drive folder names to project IDs
     const projects = await fetchProjectList();
     const folderLookup = new Map<string, string>();
     for (const p of projects) {
@@ -98,7 +82,6 @@ export async function GET(request: NextRequest) {
       folderLookup.set(p.projectName.toLowerCase().replace(/\s+/g, '-'), p.projectId);
     }
 
-    // 5. Process up to MAX_FILES_PER_RUN new files
     const filesToProcess = newFiles.slice(0, MAX_FILES_PER_RUN);
     const results: Array<{
       fileName: string;
@@ -149,9 +132,6 @@ export async function GET(request: NextRequest) {
 
 // ─── Helper Functions ────────────────────────────────────────────
 
-/**
- * Get all Drive file URLs and file names already in pipeline_log to avoid reprocessing.
- */
 async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: Set<string> }> {
   const urls = new Set<string>();
   const nameKeys = new Set<string>();
@@ -176,9 +156,6 @@ async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: 
   return { urls, nameKeys };
 }
 
-/**
- * Process a single Drive file through the extraction pipeline.
- */
 async function processFile(
   file: DriveFile,
   folderLookup: Map<string, string>
@@ -195,7 +172,6 @@ async function processFile(
   const now = new Date().toISOString();
   const sb = getSupabase();
 
-  // Resolve project ID from folder name
   let projectId = '';
   if (file.parentFolderName && file.parentFolderName !== '_Root') {
     const folderLower = file.parentFolderName.toLowerCase();
@@ -212,7 +188,6 @@ async function processFile(
     }
   }
 
-  // Final dedup check — right before inserting
   const { count: dupCount } = await sb
     .from('pipeline_log')
     .select('id', { count: 'exact', head: true })
@@ -227,7 +202,6 @@ async function processFile(
     };
   }
 
-  // 1. Create initial pipeline_log record
   const { data: createData, error: createError } = await sb
     .from('pipeline_log')
     .insert({
@@ -237,7 +211,7 @@ async function processFile(
       file_url: driveFileUrl,
       status: 'tier1_extracting',
       created_at: now,
-      ai_model: 'claude-sonnet-4-20250514',
+      ai_model: 'sonnet-classify+sonnet-extract',
     })
     .select('id')
     .single();
@@ -248,7 +222,6 @@ async function processFile(
 
   const recordId = createData?.id ? String(createData.id) : null;
 
-  // 2. Download file content from Drive
   const content = await downloadFileContent(file.id, file.mimeType);
 
   if (content.method === 'unsupported') {
@@ -265,7 +238,6 @@ async function processFile(
     return { fileName: file.name, driveId: file.id, status: 'unsupported_type', pipelineId };
   }
 
-  // 3. Extract text from the file
   let sourceText: string;
 
   if (content.text) {
@@ -286,37 +258,22 @@ async function processFile(
     return { fileName: file.name, driveId: file.id, status: 'extraction_failed', pipelineId };
   }
 
-  // Store source text
   if (recordId) {
     await sb.from('pipeline_log').update({
       source_text: sourceText.substring(0, 500000),
     }).eq('id', recordId);
   }
 
-  // 4. Run AI extraction
-  let extraction: ExtractionResult;
+  // Skill-based extraction (classify → extract → validate)
+  let extraction;
+  let overallConfidence: number;
+  let flags;
 
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const extractionPrompt = buildExtractionPrompt(sourceText, projectId || undefined);
-
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 8192,
-      system: EXTRACTION_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: extractionPrompt }],
-    });
-
-    const responseText = response.content
-      .filter((block) => block.type === 'text')
-      .map((block) => (block.type === 'text' ? block.text : ''))
-      .join('');
-
-    let jsonStr = responseText.trim();
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) jsonStr = jsonMatch[1].trim();
-
-    extraction = JSON.parse(jsonStr) as ExtractionResult;
+    const result = await extractWithSkill(sourceText, projectId);
+    extraction = result.extraction;
+    overallConfidence = result.overallConfidence;
+    flags = result.flags;
   } catch (err) {
     console.error('AI extraction failed for Drive file:', file.name, err);
     if (recordId) {
@@ -332,42 +289,9 @@ async function processFile(
     return { fileName: file.name, driveId: file.id, status: 'ai_extraction_failed', pipelineId };
   }
 
-  // 5. Validation (Tier 2)
-  const overallConfidence = computeOverallConfidence(extraction);
-  const flags: ValidationFlag[] = [];
-
-  for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
-    if (fieldData.value !== null && fieldData.confidence < 0.7) {
-      flags.push({
-        field: fieldName,
-        issue: `Low confidence (${Math.round(fieldData.confidence * 100)}%)`,
-        severity: 'warning',
-      });
-    }
-    if (fieldData.value === null) {
-      const expectedFields = DOCUMENT_TYPE_FIELDS[extraction.documentType] || [];
-      if (expectedFields.includes(fieldName)) {
-        flags.push({
-          field: fieldName,
-          issue: 'Missing — not detected in document',
-          severity: 'info',
-        });
-      }
-    }
-  }
-
-  if (extraction.documentTypeConfidence < 0.8) {
-    flags.push({
-      field: 'Document Type',
-      issue: `Document type classification has low confidence (${Math.round(extraction.documentTypeConfidence * 100)}%)`,
-      severity: 'warning',
-    });
-  }
-
   const hasErrors = flags.some((f) => f.severity === 'error');
   const finalStatus = hasErrors ? 'tier2_flagged' : 'pending_review';
 
-  // 6. Update pipeline record
   if (recordId) {
     await sb.from('pipeline_log').update({
       document_type: extraction.documentType,
@@ -387,57 +311,4 @@ async function processFile(
     pipelineId,
     projectId: projectId || '(unmatched)',
   };
-}
-
-/**
- * Use Claude to read text from a PDF or image.
- */
-async function extractTextWithClaude(
-  base64Data: string,
-  mimeType: string,
-  method: 'pdf' | 'image'
-): Promise<string> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-  const prompt = 'Extract ALL text from this construction document. Return the complete text content exactly as it appears, preserving formatting, tables, numbers, and structure. Do not summarize — output every word.';
-
-  let content: Anthropic.MessageCreateParams['messages'][0]['content'];
-
-  if (method === 'pdf') {
-    content = [
-      {
-        type: 'document' as const,
-        source: {
-          type: 'base64' as const,
-          media_type: 'application/pdf' as const,
-          data: base64Data,
-        },
-      },
-      { type: 'text' as const, text: prompt },
-    ];
-  } else {
-    const imgType = mimeType as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-    content = [
-      {
-        type: 'image' as const,
-        source: {
-          type: 'base64' as const,
-          media_type: imgType,
-          data: base64Data,
-        },
-      },
-      { type: 'text' as const, text: prompt },
-    ];
-  }
-
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 8192,
-    messages: [{ role: 'user', content }],
-  });
-
-  return response.content
-    .filter((block) => block.type === 'text')
-    .map((block) => (block.type === 'text' ? block.text : ''))
-    .join('');
 }

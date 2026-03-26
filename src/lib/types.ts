@@ -84,3 +84,12 @@ export interface ConversationSummary {
   createdAt: number;
   updatedAt: number;
 }
+
+export interface SourceRef {
+  tag: string;
+  type: 'structured' | 'extracted';
+  label: string;
+  table?: string;
+  similarity?: number;
+  sourceFile?: string;
+}

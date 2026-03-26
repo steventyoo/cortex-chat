@@ -4,7 +4,8 @@ import { getSupabase } from '@/lib/supabase';
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateUserSession(token))) {
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest) {
     const { error } = await sb.from('pipeline_log').update({
       status: 'deleted',
       review_notes: `Soft-deleted by user at ${new Date().toISOString()}`,
-    }).eq('id', recordId);
+    }).eq('id', recordId).eq('org_id', session.orgId);
 
     if (error) {
       console.error('Supabase soft-delete error:', error.message);

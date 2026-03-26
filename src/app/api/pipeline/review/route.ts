@@ -1,14 +1,16 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getSupabase, pushRecordsToTable, checkDuplicatePipeline } from '@/lib/supabase';
-import { DOC_TYPE_TO_TABLE, ExtractionResult, ReviewAction } from '@/lib/pipeline';
+import { getSupabase, pushToExtractedRecords, checkDuplicatePipeline } from '@/lib/supabase';
+import { ExtractionResult, ReviewAction } from '@/lib/pipeline';
+import { getSkill, recordCorrection } from '@/lib/skills';
+import { embedAndStoreForRecord } from '@/lib/embeddings';
 
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
-  // Auth check
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateUserSession(token))) {
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -41,18 +43,17 @@ export async function POST(request: NextRequest) {
   const sb = getSupabase();
 
   try {
-    // 1. Get the current pipeline record
     const { data: record, error: getError } = await sb
       .from('pipeline_log')
       .select('*')
       .eq('id', recordId)
+      .eq('org_id', session.orgId)
       .single();
 
     if (getError || !record) {
       return Response.json({ error: 'Pipeline record not found' }, { status: 404 });
     }
 
-    // 2. Update pipeline record with review action
     const updateFields: Record<string, unknown> = {
       status: action === 'rejected' ? 'rejected' : 'approved',
       reviewer,
@@ -63,7 +64,6 @@ export async function POST(request: NextRequest) {
     if (notes) updateFields.review_notes = notes;
     if (rejectionReason) updateFields.rejection_reason = rejectionReason;
 
-    // If edited, store the edits and update extracted data
     if (action === 'edited' && editedFields) {
       updateFields.review_edits = editedFields;
       updateFields.status = 'approved';
@@ -73,18 +73,27 @@ export async function POST(request: NextRequest) {
           ? JSON.parse(record.extracted_data)
           : record.extracted_data;
 
+        // Record the correction for the feedback loop (non-blocking)
+        try {
+          const skillId = extractedData.skillId
+            || extractedData.documentType.toLowerCase().replace(/\s+/g, '_');
+
+          await recordCorrection(
+            skillId,
+            recordId,
+            extractedData as unknown as Record<string, unknown>,
+            editedFields,
+            (record.source_text || '').substring(0, 1500)
+          );
+        } catch (err) {
+          console.error('Failed to record correction:', err);
+        }
+
         for (const [key, value] of Object.entries(editedFields)) {
-          if (extractedData.fields[key]) {
-            extractedData.fields[key] = {
-              value: value as string | number | null,
-              confidence: 1.0,
-            };
-          } else {
-            extractedData.fields[key] = {
-              value: value as string | number | null,
-              confidence: 1.0,
-            };
-          }
+          extractedData.fields[key] = {
+            value: value as string | number | null,
+            confidence: 1.0,
+          };
         }
         updateFields.extracted_data = extractedData;
       } catch { /* keep existing extracted data */ }
@@ -92,21 +101,16 @@ export async function POST(request: NextRequest) {
 
     await sb.from('pipeline_log').update(updateFields).eq('id', recordId);
 
-    // 3. If approved, push data to the appropriate Supabase table
     let pushedRecordId: string | null = null;
     let alreadyPushed = false;
 
     if ((action === 'approved' || action === 'edited') && !testMode) {
       try {
-        // ── DUPLICATE PUSH SAFEGUARD ──
-
-        // Check 1: Was THIS record already pushed?
         if (record.pushed_record_ids) {
           alreadyPushed = true;
           console.warn(`Pipeline ${recordId} already pushed (record: ${record.pushed_record_ids}). Skipping push.`);
         }
 
-        // Check 2 & 3: Is there another pipeline entry for the same file that was already pushed?
         if (!alreadyPushed) {
           const isDuplicate = await checkDuplicatePipeline(
             record.file_url || null,
@@ -127,51 +131,48 @@ export async function POST(request: NextRequest) {
               ? JSON.parse(record.extracted_data)
               : record.extracted_data);
 
-          const targetTable = DOC_TYPE_TO_TABLE[extractedData.documentType] || 'DOCUMENTS';
+          const skillId = extractedData.skillId
+            || extractedData.documentType.toLowerCase().replace(/\s+/g, '_');
+          const skill = await getSkill(skillId);
+
           const projectId = record.project_id || '';
           const orgId = record.org_id || '';
-          const allPushedIds: string[] = [];
 
-          // Push multi-record extraction
-          if (extractedData.records && extractedData.records.length > 0) {
-            console.log(`Pushing ${extractedData.records.length} records to ${targetTable}`);
-            const ids = await pushRecordsToTable(targetTable, projectId, orgId, extractedData.records);
-            allPushedIds.push(...ids);
+          const singleFields: Record<string, { value: string | number | null; confidence: number }> = {};
+          for (const [fieldName, fieldData] of Object.entries(extractedData.fields)) {
+            singleFields[fieldName] = fieldData;
           }
 
-          // Push to additional target tables
-          if (extractedData.targetTables && extractedData.targetTables.length > 0) {
-            for (const tt of extractedData.targetTables) {
-              if (tt.records && tt.records.length > 0) {
-                console.log(`Pushing ${tt.records.length} records to ${tt.table}`);
-                const ids = await pushRecordsToTable(tt.table, projectId, orgId, tt.records);
-                allPushedIds.push(...ids);
-              }
-            }
-          }
+          const erRecordId = await pushToExtractedRecords({
+            projectId,
+            orgId,
+            skillId,
+            skillVersion: skill?.version || 1,
+            pipelineLogId: recordId,
+            documentType: extractedData.documentType,
+            sourceFile: record.file_name || undefined,
+            fields: singleFields,
+            rawText: record.source_text || undefined,
+            overallConfidence: extractedData.documentTypeConfidence,
+            status: 'approved',
+          });
 
-          // Push single-record summary fields (if no multi-record)
-          if (!extractedData.records || extractedData.records.length === 0) {
-            const singleRecord: Record<string, { value: string | number | null; confidence: number }> = {};
-            for (const [fieldName, fieldData] of Object.entries(extractedData.fields)) {
-              if (fieldData.value !== null) {
-                singleRecord[fieldName] = fieldData;
-              }
-            }
-            const ids = await pushRecordsToTable(targetTable, projectId, orgId, [singleRecord]);
-            allPushedIds.push(...ids);
-          }
-
-          // Update pipeline record with all pushed record IDs
-          if (allPushedIds.length > 0) {
-            pushedRecordId = allPushedIds.join(',');
+          if (erRecordId) {
+            pushedRecordId = erRecordId;
             await sb.from('pipeline_log').update({
               status: 'pushed',
-              pushed_record_ids: pushedRecordId,
+              pushed_record_ids: erRecordId,
               pushed_at: new Date().toISOString(),
               review_notes: (notes ? notes + '\n' : '') +
-                `Pushed ${allPushedIds.length} record(s) to database.`,
+                `Pushed to extracted_records.`,
             }).eq('id', recordId);
+
+            embedAndStoreForRecord(
+              erRecordId,
+              extractedData.documentType,
+              singleFields,
+              record.source_text || undefined,
+            ).catch(err => console.error('Async embedding failed:', err));
           }
         }
       } catch (err) {

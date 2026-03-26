@@ -8,7 +8,7 @@ interface SubFolder {
   name: string;
 }
 
-const STEPS = ['Connect Drive', 'Select Projects', 'Invite Team', 'Done'];
+const STEPS = ['Connect Drive', 'Select Projects', 'Create Project', 'Invite Team', 'Done'];
 
 export default function OnboardingWizard({
   orgName,
@@ -19,17 +19,25 @@ export default function OnboardingWizard({
 }) {
   const [step, setStep] = useState(0);
 
-  // Step 1: Connect Drive
+  // Step 0: Connect Drive
   const [folderId, setFolderId] = useState('');
   const [testing, setTesting] = useState(false);
   const [driveError, setDriveError] = useState('');
   const [folderName, setFolderName] = useState('');
   const [subfolders, setSubfolders] = useState<SubFolder[]>([]);
 
-  // Step 2: Select Projects
+  // Step 1: Select Projects
   const [selectedFolders, setSelectedFolders] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [importedCount, setImportedCount] = useState(0);
+
+  // Step 2: Create Project (manual)
+  const [manualProjectName, setManualProjectName] = useState('');
+  const [manualProjectAddress, setManualProjectAddress] = useState('');
+  const [manualProjectTrade, setManualProjectTrade] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState('');
+  const [manualProjectCreated, setManualProjectCreated] = useState(false);
 
   // Step 3: Invite
   const [copied, setCopied] = useState(false);
@@ -75,11 +83,10 @@ export default function OnboardingWizard({
     }
   }, [folderId]);
 
-  // ─── Step 2: Import Selected Projects ─────────────────────
+  // ─── Step 1: Import Selected Projects ─────────────────────
   const handleImportProjects = useCallback(async () => {
     const selected = subfolders.filter((f) => selectedFolders.has(f.id));
     if (selected.length === 0) {
-      // Skip if no folders — user can add projects later
       setStep(2);
       return;
     }
@@ -99,14 +106,47 @@ export default function OnboardingWizard({
 
       const data = await res.json();
       setImportedCount(data.created || 0);
-      setStep(2);
+      setStep(3);
     } catch {
-      // Still proceed
-      setStep(2);
+      setStep(3);
     } finally {
       setImporting(false);
     }
   }, [subfolders, selectedFolders]);
+
+  // ─── Step 2: Create Project Manually ────────────────────────
+  const handleCreateProject = useCallback(async () => {
+    if (!manualProjectName.trim()) return;
+    setCreatingProject(true);
+    setCreateProjectError('');
+
+    try {
+      const res = await fetch('/api/onboarding/import-projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projects: [{
+            name: manualProjectName.trim(),
+            address: manualProjectAddress.trim() || undefined,
+            trade: manualProjectTrade.trim() || undefined,
+          }],
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        setCreateProjectError(data.error || 'Failed to create project');
+        return;
+      }
+
+      setManualProjectCreated(true);
+      setStep(3);
+    } catch {
+      setCreateProjectError('Network error — please try again');
+    } finally {
+      setCreatingProject(false);
+    }
+  }, [manualProjectName, manualProjectAddress, manualProjectTrade]);
 
   // ─── Step 3: Copy Invite Link ─────────────────────────────
   const inviteUrl =
@@ -357,6 +397,90 @@ export default function OnboardingWizard({
               className="bg-white rounded-2xl border border-[#e8e8e8] p-6 shadow-sm"
             >
               <h2 className="text-[16px] font-semibold text-[#1a1a1a] mb-1">
+                Create Your First Project
+              </h2>
+              <p className="text-[13px] text-[#999] mb-5">
+                Add a project so you can start uploading and organizing documents.
+              </p>
+
+              <div className="space-y-3 mb-5">
+                <div>
+                  <label className="block text-[12px] font-medium text-[#555] mb-1">Project Name *</label>
+                  <input
+                    type="text"
+                    value={manualProjectName}
+                    onChange={(e) => { setManualProjectName(e.target.value); setCreateProjectError(''); }}
+                    placeholder="e.g. Northgate Medical Center"
+                    className="w-full px-4 py-3 rounded-xl border border-[#e0e0e0] text-[14px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-medium text-[#555] mb-1">Address (optional)</label>
+                  <input
+                    type="text"
+                    value={manualProjectAddress}
+                    onChange={(e) => setManualProjectAddress(e.target.value)}
+                    placeholder="e.g. 123 Main St, Austin TX"
+                    className="w-full px-4 py-3 rounded-xl border border-[#e0e0e0] text-[14px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[12px] font-medium text-[#555] mb-1">Trade (optional)</label>
+                  <input
+                    type="text"
+                    value={manualProjectTrade}
+                    onChange={(e) => setManualProjectTrade(e.target.value)}
+                    placeholder="e.g. Plumbing, Electrical, General"
+                    className="w-full px-4 py-3 rounded-xl border border-[#e0e0e0] text-[14px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]"
+                  />
+                </div>
+              </div>
+
+              {createProjectError && (
+                <div className="mb-4 p-3 rounded-xl bg-[#fff5f5] border border-[#fecaca] text-[13px] text-[#dc2626]">
+                  {createProjectError}
+                </div>
+              )}
+
+              <button
+                onClick={handleCreateProject}
+                disabled={!manualProjectName.trim() || creatingProject}
+                className="w-full py-3 rounded-xl bg-[#1a1a1a] text-white text-[14px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40"
+              >
+                {creatingProject ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                    Creating...
+                  </span>
+                ) : (
+                  'Create Project'
+                )}
+              </button>
+
+              <button
+                onClick={() => setStep(3)}
+                className="w-full mt-3 py-2 text-[13px] text-[#999] hover:text-[#666] transition-colors"
+              >
+                Skip — I&apos;ll add projects later
+              </button>
+              <p className="text-[11px] text-[#ccc] text-center mt-1">
+                You&apos;ll need at least one project to upload documents.
+              </p>
+            </motion.div>
+          )}
+
+          {step === 3 && (
+            <motion.div
+              key="step3"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              className="bg-white rounded-2xl border border-[#e8e8e8] p-6 shadow-sm"
+            >
+              <h2 className="text-[16px] font-semibold text-[#1a1a1a] mb-1">
                 Invite Your Team
               </h2>
               <p className="text-[13px] text-[#999] mb-5">
@@ -365,7 +489,13 @@ export default function OnboardingWizard({
 
               {importedCount > 0 && (
                 <div className="bg-[#f0fdf4] border border-[#bbf7d0] rounded-xl p-3 mb-5 text-[13px] text-[#15803d]">
-                  ✅ {importedCount} project{importedCount !== 1 ? 's' : ''} imported successfully
+                  {importedCount} project{importedCount !== 1 ? 's' : ''} imported successfully
+                </div>
+              )}
+
+              {manualProjectCreated && (
+                <div className="bg-[#f0fdf4] border border-[#bbf7d0] rounded-xl p-3 mb-5 text-[13px] text-[#15803d]">
+                  Project created successfully
                 </div>
               )}
 
@@ -390,13 +520,13 @@ export default function OnboardingWizard({
 
               <div className="flex gap-2">
                 <button
-                  onClick={() => setStep(1)}
+                  onClick={() => setStep(2)}
                   className="flex-1 py-3 rounded-xl text-[13px] text-[#666] hover:bg-[#f0f0f0] transition-colors"
                 >
                   Back
                 </button>
                 <button
-                  onClick={() => setStep(3)}
+                  onClick={() => setStep(4)}
                   className="flex-1 py-3 rounded-xl bg-[#1a1a1a] text-white text-[14px] font-medium hover:bg-[#333] transition-colors"
                 >
                   Continue
@@ -404,7 +534,7 @@ export default function OnboardingWizard({
               </div>
 
               <button
-                onClick={() => setStep(3)}
+                onClick={() => setStep(4)}
                 className="w-full mt-3 py-2 text-[13px] text-[#999] hover:text-[#666] transition-colors"
               >
                 Skip — I&apos;ll invite later
@@ -412,9 +542,9 @@ export default function OnboardingWizard({
             </motion.div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <motion.div
-              key="step3"
+              key="step4"
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -12 }}

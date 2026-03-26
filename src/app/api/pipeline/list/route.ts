@@ -5,7 +5,8 @@ import { getSupabase } from '@/lib/supabase';
 
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateUserSession(token))) {
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -15,10 +16,21 @@ export async function GET(request: NextRequest) {
 
   try {
     const sb = getSupabase();
-    let query = sb.from('pipeline_log').select('*').neq('status', 'deleted').order('created_at', { ascending: false }).limit(100);
+    let query = sb.from('pipeline_log').select('*').eq('org_id', session.orgId).neq('status', 'deleted').order('created_at', { ascending: false }).limit(100);
 
     if (projectId) query = query.eq('project_id', projectId);
-    if (status) query = query.eq('status', status);
+    if (status) {
+      const STATUS_GROUPS: Record<string, string[]> = {
+        approved: ['approved', 'pushed'],
+        pending_review: ['pending_review', 'tier2_validated'],
+      };
+      const statuses = STATUS_GROUPS[status];
+      if (statuses) {
+        query = query.in('status', statuses);
+      } else {
+        query = query.eq('status', status);
+      }
+    }
 
     const { data, error } = await query;
     if (error) {

@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ProjectSummary, ConversationSummary } from '@/lib/types';
 import { formatCurrency } from '@/lib/utils';
@@ -24,6 +24,8 @@ interface SidebarProps {
   isAdmin?: boolean;
   userName?: string;
   userEmail?: string;
+  orgName?: string;
+  orgId?: string;
   onLogout?: () => void;
   hideFooter?: boolean;
 }
@@ -85,6 +87,201 @@ function timeAgo(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+interface OrgItem {
+  orgId: string;
+  orgName: string;
+  role: string;
+}
+
+function OrgSwitcher({ orgName, orgId }: { orgName?: string; orgId?: string }) {
+  const [open, setOpen] = useState(false);
+  const [orgs, setOrgs] = useState<OrgItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newOrgName, setNewOrgName] = useState('');
+  const [createLoading, setCreateLoading] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const fetchOrgs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/org/list');
+      if (res.ok) {
+        const data = await res.json();
+        setOrgs(data.orgs || []);
+      }
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (open) fetchOrgs();
+  }, [open, fetchOrgs]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setCreating(false);
+        setNewOrgName('');
+      }
+    }
+    if (open) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  async function handleSwitch(targetOrgId: string) {
+    if (targetOrgId === orgId) {
+      setOpen(false);
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/switch-org', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orgId: targetOrgId }),
+      });
+      if (res.ok) {
+        window.location.reload();
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newOrgName.trim() || createLoading) return;
+    setCreateLoading(true);
+    try {
+      const res = await fetch('/api/org/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orgName: newOrgName.trim() }),
+      });
+      if (res.ok) {
+        window.location.reload();
+      }
+    } catch { /* ignore */ }
+    setCreateLoading(false);
+  }
+
+  const displayName = orgName || 'Project Cortex';
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2.5 px-2 py-1 -mx-1 rounded-lg hover:bg-[#ebebea] transition-colors w-full text-left group"
+      >
+        <div className="w-6 h-6 rounded-[6px] bg-[#1a1a1a] flex items-center justify-center flex-shrink-0">
+          <span className="text-[10px] font-bold text-white">
+            {displayName.charAt(0).toUpperCase()}
+          </span>
+        </div>
+        <span className="text-[14px] font-semibold text-[#37352f] tracking-[-0.01em] truncate flex-1">
+          {displayName}
+        </span>
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#999"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.15 }}
+            className="absolute left-0 right-0 top-full mt-1 bg-white rounded-lg border border-[#e8e8e8] shadow-lg z-50 overflow-hidden"
+          >
+            <div className="py-1 max-h-[240px] overflow-y-auto">
+              {loading ? (
+                <div className="px-3 py-2 text-[12px] text-[#999]">Loading...</div>
+              ) : orgs.length === 0 ? (
+                <div className="px-3 py-2 text-[12px] text-[#999]">No organizations</div>
+              ) : (
+                orgs.map((org) => (
+                  <button
+                    key={org.orgId}
+                    onClick={() => handleSwitch(org.orgId)}
+                    className={`w-full text-left px-3 py-2 text-[13px] flex items-center gap-2 transition-colors ${
+                      org.orgId === orgId
+                        ? 'bg-[#f5f5f4] text-[#37352f]'
+                        : 'text-[#6b6b6b] hover:bg-[#f5f5f4] hover:text-[#37352f]'
+                    }`}
+                  >
+                    <div className="w-5 h-5 rounded-[4px] bg-[#e8e8e8] flex items-center justify-center flex-shrink-0 text-[9px] font-bold text-[#666]">
+                      {org.orgName.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="truncate flex-1 font-medium">{org.orgName}</span>
+                    {org.orgId === orgId && (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#37352f" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+
+            <div className="border-t border-[#f0f0f0]">
+              {creating ? (
+                <form onSubmit={handleCreate} className="p-2">
+                  <input
+                    autoFocus
+                    type="text"
+                    value={newOrgName}
+                    onChange={(e) => setNewOrgName(e.target.value)}
+                    placeholder="Organization name"
+                    className="w-full px-2.5 py-1.5 rounded-md border border-[#e5e5e5] text-[13px] text-[#37352f] placeholder-[#b4b4b4] focus:outline-none focus:ring-1 focus:ring-[#007aff]/30 focus:border-[#007aff]/40"
+                    onKeyDown={(e) => { if (e.key === 'Escape') { setCreating(false); setNewOrgName(''); } }}
+                  />
+                  <div className="flex gap-1.5 mt-1.5">
+                    <button
+                      type="submit"
+                      disabled={!newOrgName.trim() || createLoading}
+                      className="flex-1 px-2.5 py-1.5 rounded-md bg-[#1a1a1a] text-white text-[12px] font-medium disabled:opacity-40 hover:bg-[#333] transition-colors"
+                    >
+                      {createLoading ? 'Creating...' : 'Create'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setCreating(false); setNewOrgName(''); }}
+                      className="px-2.5 py-1.5 rounded-md text-[12px] text-[#6b6b6b] hover:bg-[#f0f0f0] transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <button
+                  onClick={() => setCreating(true)}
+                  className="w-full text-left px-3 py-2 text-[13px] text-[#6b6b6b] hover:bg-[#f5f5f4] hover:text-[#37352f] transition-colors flex items-center gap-2"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M12 5V19M5 12H19" />
+                  </svg>
+                  Create new organization
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export default function Sidebar({
   projects,
   selectedProject,
@@ -102,11 +299,44 @@ export default function Sidebar({
   isAdmin = false,
   userName,
   userEmail,
+  orgName,
+  orgId,
   onLogout,
   hideFooter = false,
 }: SidebarProps) {
   const [dailyStatus, setDailyStatus] = useState<Record<string, { hasNotes: boolean; hasStaffing: boolean }>>({});
   const pathname = usePathname();
+  const router = useRouter();
+
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [createProjectError, setCreateProjectError] = useState('');
+
+  const handleCreateProject = useCallback(async () => {
+    if (!newProjectName.trim()) return;
+    setCreatingProject(true);
+    setCreateProjectError('');
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newProjectName.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setCreateProjectError(data.error || 'Failed to create project');
+        return;
+      }
+      setShowCreateProject(false);
+      setNewProjectName('');
+      router.refresh();
+    } catch {
+      setCreateProjectError('Network error');
+    } finally {
+      setCreatingProject(false);
+    }
+  }, [newProjectName, router]);
 
   useEffect(() => {
     if (projects.length === 0) return;
@@ -137,21 +367,10 @@ export default function Sidebar({
       >
         {/* Header */}
         <div className="p-3 pt-4">
-          <div
-            className="flex items-center gap-2.5 mb-3 px-2 cursor-default select-none"
-          >
-            <div className="w-6 h-6 rounded-[6px] bg-[#1a1a1a] flex items-center justify-center">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
-                <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
-                <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <span className="text-[14px] font-semibold text-[#37352f] tracking-[-0.01em]">
-              Project Cortex
-            </span>
+          <div className="mb-3">
+            <OrgSwitcher orgName={orgName} orgId={orgId} />
             {isAdmin && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#1a1a1a] text-white font-medium tracking-wide uppercase">
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#1a1a1a] text-white font-medium tracking-wide uppercase ml-[36px] mt-1 inline-block">
                 Admin
               </span>
             )}
@@ -239,11 +458,60 @@ export default function Sidebar({
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto px-3 pt-2">
           {/* Projects */}
-          <p className="text-[11px] font-medium uppercase tracking-wider text-[#aeaeb2] mb-2 px-2">
-            Projects
-          </p>
-          {projects.length === 0 ? (
-            <p className="text-[12px] text-[#b4b4b4] px-2">No projects</p>
+          <div className="flex items-center justify-between mb-2 px-2">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-[#aeaeb2]">
+              Projects
+            </p>
+            <button
+              onClick={() => setShowCreateProject((v) => !v)}
+              className="w-5 h-5 flex items-center justify-center rounded hover:bg-[#e0e0e0] text-[#aeaeb2] hover:text-[#666] transition-colors"
+              title="Create project"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M12 5V19M5 12H19" />
+              </svg>
+            </button>
+          </div>
+
+          {showCreateProject && (
+            <div className="mb-3 px-1">
+              <input
+                type="text"
+                value={newProjectName}
+                onChange={(e) => { setNewProjectName(e.target.value); setCreateProjectError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCreateProject(); if (e.key === 'Escape') { setShowCreateProject(false); setNewProjectName(''); } }}
+                placeholder="Project name..."
+                autoFocus
+                className="w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff] bg-white"
+              />
+              {createProjectError && (
+                <p className="text-[11px] text-[#dc2626] mt-1 px-1">{createProjectError}</p>
+              )}
+              <div className="flex gap-1.5 mt-1.5">
+                <button
+                  onClick={handleCreateProject}
+                  disabled={!newProjectName.trim() || creatingProject}
+                  className="flex-1 py-1.5 rounded-lg bg-[#1a1a1a] text-white text-[12px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40"
+                >
+                  {creatingProject ? 'Creating...' : 'Create'}
+                </button>
+                <button
+                  onClick={() => { setShowCreateProject(false); setNewProjectName(''); setCreateProjectError(''); }}
+                  className="px-3 py-1.5 rounded-lg text-[12px] text-[#666] hover:bg-[#f0f0f0] transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {projects.length === 0 && !showCreateProject ? (
+            <button
+              onClick={() => setShowCreateProject(true)}
+              className="w-full text-left px-3 py-2.5 rounded-lg text-[13px] text-[#999] hover:bg-[#ebebea] hover:text-[#666] transition-colors"
+            >
+              + Create your first project
+            </button>
           ) : (
             <div className="space-y-0.5 mb-4">
               {projects.map((project) => (

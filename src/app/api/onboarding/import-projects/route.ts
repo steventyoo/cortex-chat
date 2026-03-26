@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
 
   const sb = getSupabase();
   const rows = projects.map(
-    (p: { name: string; projectId?: string; driveFolderId?: string }) => ({
+    (p: { name: string; projectId?: string; driveFolderId?: string; address?: string; trade?: string }) => ({
       project_id: p.projectId || p.name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase(),
       project_name: p.name,
       org_id: session.orgId,
@@ -33,6 +33,8 @@ export async function POST(req: NextRequest) {
       job_to_date: 0,
       percent_complete_cost: 0,
       total_cos: 0,
+      ...(p.address ? { address: p.address } : {}),
+      ...(p.trade ? { trade: p.trade } : {}),
     })
   );
 

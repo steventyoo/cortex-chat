@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, createContext, useContext, ReactNode, createElement } from 'react';
 import { ChatMessage, ConversationSummary } from '@/lib/types';
 import { nanoid } from 'nanoid';
 
-const STORAGE_KEY = 'cortex-conversations';
+const STORAGE_KEY_PREFIX = 'cortex-conversations';
 const MAX_CONVERSATIONS = 20;
 
 interface StoredConversation {
@@ -16,10 +16,19 @@ interface StoredConversation {
   updatedAt: number;
 }
 
-function loadConversations(): StoredConversation[] {
+export interface PendingLoad {
+  messages: ChatMessage[];
+  projectId: string | null;
+}
+
+function storageKey(orgId: string | null): string {
+  return orgId ? `${STORAGE_KEY_PREFIX}:${orgId}` : STORAGE_KEY_PREFIX;
+}
+
+function loadConversationsFromStorage(orgId: string | null): StoredConversation[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(orgId));
     if (!raw) return [];
     return JSON.parse(raw);
   } catch {
@@ -27,42 +36,63 @@ function loadConversations(): StoredConversation[] {
   }
 }
 
-function saveConversations(conversations: StoredConversation[]) {
+function saveConversationsToStorage(conversations: StoredConversation[], orgId: string | null) {
   if (typeof window === 'undefined') return;
   try {
-    // Keep only most recent conversations
     const trimmed = conversations
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, MAX_CONVERSATIONS);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
+    localStorage.setItem(storageKey(orgId), JSON.stringify(trimmed));
   } catch {
     // localStorage full or unavailable
   }
 }
 
+interface ConversationHistoryState {
+  currentConversationId: string | null;
+  pendingLoad: PendingLoad | null;
+  saveConversation: (messages: ChatMessage[], projectId: string | null, projectName: string | null) => void;
+  loadConversation: (conversationId: string) => void;
+  consumePendingLoad: () => void;
+  startNewConversation: () => void;
+  deleteConversation: (conversationId: string) => void;
+  getSummaries: () => ConversationSummary[];
+}
+
+const ConversationHistoryContext = createContext<ConversationHistoryState>({
+  currentConversationId: null,
+  pendingLoad: null,
+  saveConversation: () => {},
+  loadConversation: () => {},
+  consumePendingLoad: () => {},
+  startNewConversation: () => {},
+  deleteConversation: () => {},
+  getSummaries: () => [],
+});
+
 export function useConversationHistory() {
+  return useContext(ConversationHistoryContext);
+}
+
+export function ConversationHistoryProvider({ orgId, children }: { orgId: string | null; children: ReactNode }) {
   const [conversations, setConversations] = useState<StoredConversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [pendingLoad, setPendingLoad] = useState<PendingLoad | null>(null);
 
-  // Load from localStorage on mount
   useEffect(() => {
-    setConversations(loadConversations());
-  }, []);
+    setConversations(loadConversationsFromStorage(orgId));
+    setCurrentConversationId(null);
+    setPendingLoad(null);
+  }, [orgId]);
 
-  // Save a conversation (create or update)
   const saveConversation = useCallback(
-    (
-      messages: ChatMessage[],
-      projectId: string | null,
-      projectName: string | null
-    ) => {
+    (messages: ChatMessage[], projectId: string | null, projectName: string | null) => {
       if (messages.length === 0) return;
 
       setConversations((prev) => {
         let updated: StoredConversation[];
 
         if (currentConversationId) {
-          // Update existing
           const exists = prev.find((c) => c.id === currentConversationId);
           if (exists) {
             updated = prev.map((c) =>
@@ -71,7 +101,6 @@ export function useConversationHistory() {
                 : c
             );
           } else {
-            // Conversation was deleted, create new
             const newConv: StoredConversation = {
               id: currentConversationId,
               projectId,
@@ -83,7 +112,6 @@ export function useConversationHistory() {
             updated = [newConv, ...prev];
           }
         } else {
-          // Create new conversation
           const newId = nanoid();
           setCurrentConversationId(newId);
           const newConv: StoredConversation = {
@@ -97,41 +125,40 @@ export function useConversationHistory() {
           updated = [newConv, ...prev];
         }
 
-        saveConversations(updated);
+        saveConversationsToStorage(updated, orgId);
         return updated;
       });
     },
-    [currentConversationId]
+    [currentConversationId, orgId]
   );
 
-  // Load a previous conversation
   const loadConversation = useCallback(
-    (conversationId: string): StoredConversation | null => {
+    (conversationId: string) => {
       const conv = conversations.find((c) => c.id === conversationId);
       if (conv) {
         setCurrentConversationId(conversationId);
-        return conv;
+        setPendingLoad({ messages: conv.messages, projectId: conv.projectId });
       }
-      return null;
     },
     [conversations]
   );
 
-  // Start a new conversation
+  const consumePendingLoad = useCallback(() => {
+    setPendingLoad(null);
+  }, []);
+
   const startNewConversation = useCallback(() => {
     setCurrentConversationId(null);
   }, []);
 
-  // Delete a conversation
   const deleteConversation = useCallback((conversationId: string) => {
     setConversations((prev) => {
       const updated = prev.filter((c) => c.id !== conversationId);
-      saveConversations(updated);
+      saveConversationsToStorage(updated, orgId);
       return updated;
     });
-  }, []);
+  }, [orgId]);
 
-  // Get conversation summaries for the sidebar
   const getSummaries = useCallback((): ConversationSummary[] => {
     return conversations
       .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -149,12 +176,16 @@ export function useConversationHistory() {
       });
   }, [conversations]);
 
-  return {
+  const value: ConversationHistoryState = {
     currentConversationId,
+    pendingLoad,
     saveConversation,
     loadConversation,
+    consumePendingLoad,
     startNewConversation,
     deleteConversation,
     getSummaries,
   };
+
+  return createElement(ConversationHistoryContext.Provider, { value }, children);
 }

@@ -58,6 +58,7 @@ export async function GET(req: NextRequest) {
     const sb = getSupabase();
     let query = sb.from('daily_notes').select('*')
       .eq('project_id', projectId)
+      .eq('org_id', session.orgId)
       .neq('status', 'deleted');
 
     if (mode === 'single' && date) {
@@ -134,7 +135,7 @@ export async function POST(req: NextRequest) {
     if (noteId) {
       // Fetch current state to save as version
       try {
-        const { data: existing } = await sb.from('daily_notes').select('*').eq('id', noteId).single();
+        const { data: existing } = await sb.from('daily_notes').select('*').eq('id', noteId).eq('org_id', session.orgId).single();
         if (existing) {
           await saveVersion(noteId, existing, 'edit', session.email);
         }
@@ -146,7 +147,7 @@ export async function POST(req: NextRequest) {
         weather: weather || null,
         production_data: productionData || null,
         updated_at: new Date().toISOString(),
-      }).eq('id', noteId);
+      }).eq('id', noteId).eq('org_id', session.orgId);
 
       if (error) {
         console.error('Daily note UPDATE error:', error?.message, error?.details, error?.hint);
@@ -251,7 +252,7 @@ export async function DELETE(req: NextRequest) {
 
     // Fetch current state to save as version
     try {
-      const { data: existing } = await sb.from('daily_notes').select('*').eq('id', noteId).single();
+      const { data: existing } = await sb.from('daily_notes').select('*').eq('id', noteId).eq('org_id', session.orgId).single();
       if (existing) {
         await saveVersion(noteId, existing, 'delete', session.email);
       }
@@ -261,7 +262,7 @@ export async function DELETE(req: NextRequest) {
     const { error } = await sb.from('daily_notes').update({
       status: 'deleted',
       updated_at: new Date().toISOString(),
-    }).eq('id', noteId);
+    }).eq('id', noteId).eq('org_id', session.orgId);
 
     if (error) {
       return Response.json({ error: 'Failed to delete note' }, { status: 500 });

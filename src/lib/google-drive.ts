@@ -3,6 +3,18 @@
 
 import { google, drive_v3 } from 'googleapis';
 import * as XLSX from 'xlsx';
+import {
+  extractTextFromDocx,
+  extractTextFromPptx,
+  parseEmailText,
+  TEXT_TYPES as SHARED_TEXT_TYPES,
+  PDF_TYPES as SHARED_PDF_TYPES,
+  IMAGE_TYPES as SHARED_IMAGE_TYPES,
+  EXCEL_TYPES as SHARED_EXCEL_TYPES,
+  WORD_TYPES as SHARED_WORD_TYPES,
+  PPT_TYPES as SHARED_PPT_TYPES,
+  EMAIL_TYPES as SHARED_EMAIL_TYPES,
+} from './file-parser';
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -141,57 +153,28 @@ export async function listAllDriveFiles(): Promise<DriveFile[]> {
 }
 
 // ─── Supported MIME Types ───────────────────────────────────────
+// Re-exported from file-parser.ts as SHARED_* to avoid name collisions
 
 /** Plain text and structured text formats */
-const TEXT_TYPES = [
-  'text/plain',
-  'text/csv',
-  'text/html',
-  'text/markdown',
-  'application/json',
-  'application/xml',
-  'text/xml',
-];
+const TEXT_TYPES = SHARED_TEXT_TYPES;
 
 /** PDF */
-const PDF_TYPES = ['application/pdf'];
+const PDF_TYPES = SHARED_PDF_TYPES;
 
 /** Images (for OCR via Claude vision) */
-const IMAGE_TYPES = [
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/gif',
-  'image/tiff',
-];
+const IMAGE_TYPES = SHARED_IMAGE_TYPES;
 
 /** Excel / spreadsheet files (parsed with SheetJS) */
-const EXCEL_TYPES = [
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
-  'application/vnd.ms-excel', // .xls
-  'application/vnd.oasis.opendocument.spreadsheet', // .ods
-];
+const EXCEL_TYPES = SHARED_EXCEL_TYPES;
 
 /** Word / document files (sent to Claude as-is for extraction) */
-const WORD_TYPES = [
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-  'application/msword', // .doc
-  'application/vnd.oasis.opendocument.text', // .odt
-  'application/rtf', // .rtf
-];
+const WORD_TYPES = SHARED_WORD_TYPES;
 
 /** PowerPoint / presentation files */
-const PPT_TYPES = [
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation', // .pptx
-  'application/vnd.ms-powerpoint', // .ppt
-  'application/vnd.oasis.opendocument.presentation', // .odp
-];
+const PPT_TYPES = SHARED_PPT_TYPES;
 
 /** Email files */
-const EMAIL_TYPES = [
-  'message/rfc822', // .eml
-  'application/vnd.ms-outlook', // .msg
-];
+const EMAIL_TYPES = SHARED_EMAIL_TYPES;
 
 /** Google Workspace types (exportable as text) */
 const GOOGLE_DOC_TYPES = [
@@ -369,165 +352,6 @@ export async function downloadFileContent(
 
   // Unsupported type
   return { text: null, base64: null, mimeType, method: 'unsupported' };
-}
-
-/**
- * Extract text from .docx files.
- * DOCX = ZIP containing word/document.xml with the text content.
- * Uses the xlsx library's CFB/ZIP utilities to read the archive.
- */
-function extractTextFromDocx(buffer: Buffer): string | null {
-  try {
-    // Use XLSX's internal ZIP reader (CFB = Compound File Binary)
-    const zip = XLSX.read(buffer, { type: 'buffer', bookSheets: true });
-    // XLSX reads it as a workbook but docx isn't a workbook — need different approach
-    // Fall back to direct ZIP extraction using AdmZip-style parsing
-    return extractXmlTextFromZip(buffer, 'word/document.xml');
-  } catch {
-    // Try direct XML extraction
-    return extractXmlTextFromZip(buffer, 'word/document.xml');
-  }
-}
-
-/**
- * Extract text from .pptx files.
- * PPTX = ZIP containing ppt/slides/slide*.xml files with text content.
- */
-function extractTextFromPptx(buffer: Buffer): string | null {
-  try {
-    // PPTX has slides at ppt/slides/slide1.xml, slide2.xml, etc.
-    // Try to extract from all slides
-    const texts: string[] = [];
-    for (let i = 1; i <= 100; i++) {
-      const text = extractXmlTextFromZip(buffer, `ppt/slides/slide${i}.xml`);
-      if (text) {
-        texts.push(`=== Slide ${i} ===\n${text}`);
-      } else {
-        break; // No more slides
-      }
-    }
-    return texts.length > 0 ? texts.join('\n\n') : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Extract text from XML content inside a ZIP file (used for .docx and .pptx).
- * Strips XML tags and returns plain text.
- */
-function extractXmlTextFromZip(buffer: Buffer, xmlPath: string): string | null {
-  try {
-    // Use Node.js zlib to decompress the ZIP
-    // ZIP files have a specific format — find the file entry and extract it
-    const zip = findFileInZip(buffer, xmlPath);
-    if (!zip) return null;
-
-    // Strip XML tags, keeping text content
-    const text = zip
-      .replace(/<\/w:p>/g, '\n')      // Word paragraph breaks
-      .replace(/<\/a:p>/g, '\n')       // PowerPoint paragraph breaks
-      .replace(/<[^>]+>/g, '')         // Strip all XML tags
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'")
-      .replace(/\n{3,}/g, '\n\n')     // Collapse multiple newlines
-      .trim();
-
-    return text || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Simple ZIP file reader — finds and extracts a single file from a ZIP archive.
- * Handles both STORE and DEFLATE compression methods.
- */
-function findFileInZip(zipBuffer: Buffer, targetPath: string): string | null {
-  try {
-    const { inflateRawSync } = require('zlib');
-    let offset = 0;
-
-    while (offset < zipBuffer.length - 4) {
-      // Look for local file header signature (PK\x03\x04)
-      if (
-        zipBuffer[offset] === 0x50 &&
-        zipBuffer[offset + 1] === 0x4b &&
-        zipBuffer[offset + 2] === 0x03 &&
-        zipBuffer[offset + 3] === 0x04
-      ) {
-        const compressionMethod = zipBuffer.readUInt16LE(offset + 8);
-        const compressedSize = zipBuffer.readUInt32LE(offset + 18);
-        const uncompressedSize = zipBuffer.readUInt32LE(offset + 22);
-        const fileNameLen = zipBuffer.readUInt16LE(offset + 26);
-        const extraLen = zipBuffer.readUInt16LE(offset + 28);
-        const fileName = zipBuffer.toString('utf-8', offset + 30, offset + 30 + fileNameLen);
-        const dataOffset = offset + 30 + fileNameLen + extraLen;
-
-        if (fileName === targetPath) {
-          if (compressionMethod === 0) {
-            // STORE — no compression
-            return zipBuffer.toString('utf-8', dataOffset, dataOffset + uncompressedSize);
-          } else if (compressionMethod === 8) {
-            // DEFLATE
-            const compressed = zipBuffer.subarray(dataOffset, dataOffset + compressedSize);
-            const decompressed = inflateRawSync(compressed);
-            return decompressed.toString('utf-8');
-          }
-        }
-
-        // Move to next file
-        offset = dataOffset + compressedSize;
-      } else {
-        offset++;
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Basic email (.eml) text parser.
- * Extracts From, To, Subject, Date, and body text.
- */
-function parseEmailText(raw: string): string {
-  const lines = raw.split(/\r?\n/);
-  const headers: string[] = [];
-  let bodyStart = 0;
-
-  // Parse headers (up to first blank line)
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === '') {
-      bodyStart = i + 1;
-      break;
-    }
-    const match = lines[i].match(/^(From|To|Cc|Subject|Date):\s*(.+)/i);
-    if (match) {
-      headers.push(`${match[1]}: ${match[2]}`);
-    }
-  }
-
-  // Get body — try to extract plain text part
-  let body = lines.slice(bodyStart).join('\n');
-
-  // If it's a multipart email, try to find the text/plain section
-  if (body.includes('Content-Type: text/plain')) {
-    const textMatch = body.match(/Content-Type: text\/plain[^\n]*\n(?:Content-Transfer-Encoding:[^\n]*\n)?\n([\s\S]*?)(?:\n--|\n\n--)/);
-    if (textMatch) {
-      body = textMatch[1];
-    }
-  }
-
-  // Strip HTML tags if the body is HTML
-  body = body.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-
-  return `EMAIL\n${headers.join('\n')}\n\n${body}`.substring(0, 50000);
 }
 
 /**
