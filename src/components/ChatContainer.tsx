@@ -38,6 +38,8 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
   const {
     saveConversation,
     startNewConversation,
+    pendingLoad,
+    consumePendingLoad,
   } = useConversationHistory();
 
   const { user, isAdmin } = useSession();
@@ -59,6 +61,20 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
       });
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (pendingLoad) {
+      setMessages(pendingLoad.messages);
+      if (pendingLoad.projectId) {
+        setProject(pendingLoad.projectId);
+      } else {
+        clearProject();
+      }
+      prevMessagesLenRef.current = pendingLoad.messages.length;
+      setCurrentView('chat');
+      consumePendingLoad();
+    }
+  }, [pendingLoad, setMessages, setProject, clearProject, consumePendingLoad]);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {

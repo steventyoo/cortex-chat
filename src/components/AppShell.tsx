@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, createContext, useContext, ReactNode 
 import { usePathname, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { useSessionProvider, SessionContext } from '@/hooks/useSession';
-import { useConversationHistory } from '@/hooks/useConversationHistory';
+import { useConversationHistory, ConversationHistoryProvider } from '@/hooks/useConversationHistory';
 import { ProjectSummary } from '@/lib/types';
 import Sidebar, { SidebarFooter } from './Sidebar';
 
@@ -65,8 +65,9 @@ export default function AppShell({ projects, children }: AppShellProps) {
     (convId: string) => {
       loadConversation(convId);
       setSidebarOpen(false);
+      if (pathname !== '/') router.push('/');
     },
-    [loadConversation]
+    [loadConversation, pathname, router]
   );
 
   const handleNavigate = useCallback(
@@ -107,6 +108,7 @@ export default function AppShell({ projects, children }: AppShellProps) {
 
   return (
     <SessionContext.Provider value={session}>
+      <ConversationHistoryProvider orgId={user?.orgId ?? null}>
       <FooterContext.Provider value={{ setFooter }}>
       <div className={`flex flex-col h-dvh bg-white lg:grid lg:grid-cols-[260px_1fr] ${
         hasFooter ? 'lg:grid-rows-[1fr_auto]' : 'lg:grid-rows-[1fr]'
@@ -173,6 +175,7 @@ export default function AppShell({ projects, children }: AppShellProps) {
         ) : null}
       </div>
       </FooterContext.Provider>
+      </ConversationHistoryProvider>
     </SessionContext.Provider>
   );
 }

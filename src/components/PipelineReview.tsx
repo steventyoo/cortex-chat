@@ -119,7 +119,7 @@ export default function PipelineReview() {
   const [submittingReview, setSubmittingReview] = useState(false);
 
   // Test mode — approvals won't push to real Airtable tables
-  const [testMode, setTestMode] = useState(true);
+  const [testMode, setTestMode] = useState(false);
 
   // Drive scan state
   const [scanning, setScanning] = useState(false);
