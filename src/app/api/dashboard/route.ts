@@ -8,7 +8,6 @@ import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 export const maxDuration = 30;
 
 export async function GET(req: NextRequest) {
-  // Auth
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
   if (!session) {
@@ -20,6 +19,11 @@ export async function GET(req: NextRequest) {
 
   if (!projectId) {
     return Response.json({ error: 'projectId required' }, { status: 400 });
+  }
+
+  const hasAccess = await verifyProjectAccess(projectId, session.orgId);
+  if (!hasAccess) {
+    return Response.json({ error: 'Project not found' }, { status: 404 });
   }
 
   try {

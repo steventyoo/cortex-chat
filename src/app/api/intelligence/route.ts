@@ -2,7 +2,7 @@
 // Returns projected-at-completion, burn rates, risk scores, and anomalies
 
 import { NextRequest } from 'next/server';
-import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData } from '@/lib/supabase';
+import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData, verifyProjectAccess } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { computeDriftMetrics } from '@/lib/drift-engine';
 
@@ -20,7 +20,10 @@ export async function GET(req: NextRequest) {
 
   try {
     if (projectId) {
-      // Single project predictive analytics
+      const hasAccess = await verifyProjectAccess(projectId, session.orgId);
+      if (!hasAccess) {
+        return Response.json({ error: 'Project not found' }, { status: 404 });
+      }
       const prediction = await computeProjectPrediction(projectId);
       return Response.json(prediction);
     } else {

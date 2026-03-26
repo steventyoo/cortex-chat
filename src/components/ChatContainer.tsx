@@ -27,6 +27,7 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
     isStreaming,
     error,
     currentProjectId,
+    sourcesMap,
     sendMessage,
     clearConversation,
     setProject,
@@ -320,6 +321,7 @@ export default function ChatContainer({ projects }: ChatContainerProps) {
                     <ChatMessage
                       key={message.id}
                       message={message}
+                      sources={sourcesMap[message.id]}
                       isStreaming={
                         isStreaming && i === messages.length - 1 && message.role === 'assistant'
                       }

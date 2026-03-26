@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getSupabase, pushRecordsToTable, pushToExtractedRecords, checkDuplicatePipeline } from '@/lib/supabase';
+import { getSupabase, pushToExtractedRecords, checkDuplicatePipeline } from '@/lib/supabase';
 import { ExtractionResult, ReviewAction } from '@/lib/pipeline';
 import { getSkill, recordCorrection } from '@/lib/skills';
 import { embedAndStoreForRecord } from '@/lib/embeddings';
@@ -9,7 +9,8 @@ export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateUserSession(token))) {
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -46,6 +47,7 @@ export async function POST(request: NextRequest) {
       .from('pipeline_log')
       .select('*')
       .eq('id', recordId)
+      .eq('org_id', session.orgId)
       .single();
 
     if (getError || !record) {
@@ -129,85 +131,48 @@ export async function POST(request: NextRequest) {
               ? JSON.parse(record.extracted_data)
               : record.extracted_data);
 
-          // Look up the skill to get target table and column mapping
           const skillId = extractedData.skillId
             || extractedData.documentType.toLowerCase().replace(/\s+/g, '_');
           const skill = await getSkill(skillId);
 
-          const targetTable = skill?.targetTable || 'documents';
-          const columnMapping = skill?.columnMapping;
           const projectId = record.project_id || '';
           const orgId = record.org_id || '';
-          const allPushedIds: string[] = [];
 
-          if (extractedData.records && extractedData.records.length > 0) {
-            console.log(`Pushing ${extractedData.records.length} records to ${targetTable}`);
-            const ids = await pushRecordsToTable(targetTable, projectId, orgId, extractedData.records, columnMapping);
-            allPushedIds.push(...ids);
+          const singleFields: Record<string, { value: string | number | null; confidence: number }> = {};
+          for (const [fieldName, fieldData] of Object.entries(extractedData.fields)) {
+            singleFields[fieldName] = fieldData;
           }
 
-          if (extractedData.targetTables && extractedData.targetTables.length > 0) {
-            for (const tt of extractedData.targetTables) {
-              if (tt.records && tt.records.length > 0) {
-                console.log(`Pushing ${tt.records.length} records to ${tt.table}`);
-                const ids = await pushRecordsToTable(tt.table, projectId, orgId, tt.records, columnMapping);
-                allPushedIds.push(...ids);
-              }
-            }
-          }
+          const erRecordId = await pushToExtractedRecords({
+            projectId,
+            orgId,
+            skillId,
+            skillVersion: skill?.version || 1,
+            pipelineLogId: recordId,
+            documentType: extractedData.documentType,
+            sourceFile: record.file_name || undefined,
+            fields: singleFields,
+            rawText: record.source_text || undefined,
+            overallConfidence: extractedData.documentTypeConfidence,
+            status: 'approved',
+          });
 
-          if (!extractedData.records || extractedData.records.length === 0) {
-            const singleRecord: Record<string, { value: string | number | null; confidence: number }> = {};
-            for (const [fieldName, fieldData] of Object.entries(extractedData.fields)) {
-              if (fieldData.value !== null) {
-                singleRecord[fieldName] = fieldData;
-              }
-            }
-            const ids = await pushRecordsToTable(targetTable, projectId, orgId, [singleRecord], columnMapping);
-            allPushedIds.push(...ids);
-          }
-
-          if (allPushedIds.length > 0) {
-            pushedRecordId = allPushedIds.join(',');
+          if (erRecordId) {
+            pushedRecordId = erRecordId;
             await sb.from('pipeline_log').update({
               status: 'pushed',
-              pushed_record_ids: pushedRecordId,
+              pushed_record_ids: erRecordId,
               pushed_at: new Date().toISOString(),
               review_notes: (notes ? notes + '\n' : '') +
-                `Pushed ${allPushedIds.length} record(s) to database.`,
+                `Pushed to extracted_records.`,
             }).eq('id', recordId);
-          }
 
-          // Dual-write to extracted_records for unified storage
-          try {
-            const singleFields: Record<string, { value: string | number | null; confidence: number }> = {};
-            for (const [fieldName, fieldData] of Object.entries(extractedData.fields)) {
-              singleFields[fieldName] = fieldData;
-            }
-            await pushToExtractedRecords({
-              projectId,
-              orgId,
-              skillId,
-              skillVersion: skill?.version || 1,
-              pipelineLogId: recordId,
-              documentType: extractedData.documentType,
-              sourceFile: record.file_name || undefined,
-              fields: singleFields,
-              rawText: record.source_text || undefined,
-              overallConfidence: extractedData.documentTypeConfidence,
-              status: 'approved',
-            }).then(async (erRecordId) => {
-              if (erRecordId) {
-                embedAndStoreForRecord(
-                  erRecordId,
-                  extractedData.documentType,
-                  singleFields,
-                  record.source_text || undefined,
-                ).catch(err => console.error('Async embedding failed:', err));
-              }
-            });
-          } catch (erErr) {
-            console.error('Dual-write to extracted_records failed:', erErr);
+            embedAndStoreForRecord(
+              erRecordId,
+              extractedData.documentType,
+              singleFields,
+              record.source_text || undefined,
+            ).catch(err => console.error('Async embedding failed:', err));
           }
         }
       } catch (err) {

@@ -1,12 +1,11 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { fetchAllProjectData } from '@/lib/supabase';
+import { fetchAllProjectData, verifyProjectAccess } from '@/lib/supabase';
 import { generateProjectCsv } from '@/lib/csv-export';
 
 export const maxDuration = 30;
 
 export async function POST(request: NextRequest) {
-  // 1. Auth check
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
   if (!session) {
@@ -16,7 +15,6 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // 2. Parse request
   let projectId: string;
   let projectName: string;
 
@@ -38,8 +36,15 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  const hasAccess = await verifyProjectAccess(projectId, session.orgId);
+  if (!hasAccess) {
+    return new Response(JSON.stringify({ error: 'Project not found' }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   try {
-    // 3. Fetch project data
     const data = await fetchAllProjectData(projectId);
 
     // 4. Generate CSV

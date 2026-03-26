@@ -3,6 +3,7 @@
 // Body: { text: string, fileName: string, projectId?: string, orgId: string, action: 'preview' | 'import' }
 
 import { NextRequest, NextResponse } from 'next/server';
+import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { parseJobCostReport, computeFingerprint, ParsedJobCostReport } from '@/lib/job-cost-parser';
 import { getSupabase } from '@/lib/supabase';
 
@@ -222,12 +223,19 @@ async function updateProjectSummary(
 }
 
 export async function POST(req: NextRequest) {
+  const token = req.cookies.get(SESSION_COOKIE)?.value;
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     const body = await req.json();
-    const { text, fileName, projectId: explicitProjectId, orgId, action } = body;
+    const { text, fileName, projectId: explicitProjectId, action } = body;
+    const orgId = session.orgId;
 
-    if (!text || !orgId) {
-      return NextResponse.json({ error: 'text and orgId are required' }, { status: 400 });
+    if (!text) {
+      return NextResponse.json({ error: 'text is required' }, { status: 400 });
     }
 
     // 1. Parse the report

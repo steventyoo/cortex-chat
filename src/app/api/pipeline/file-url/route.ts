@@ -4,13 +4,18 @@ import { getSignedUrl } from '@/lib/supabase';
 
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateUserSession(token))) {
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const path = request.nextUrl.searchParams.get('path');
   if (!path) {
     return Response.json({ error: 'path parameter required' }, { status: 400 });
+  }
+
+  if (!path.startsWith(session.orgId + '/')) {
+    return Response.json({ error: 'Access denied' }, { status: 403 });
   }
 
   const url = await getSignedUrl(path);

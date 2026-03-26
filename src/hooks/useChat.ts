@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { ChatMessage } from '@/lib/types';
+import { ChatMessage, SourceRef } from '@/lib/types';
 import { nanoid } from 'nanoid';
 
 export function useChat() {
@@ -9,6 +9,7 @@ export function useChat() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [sourcesMap, setSourcesMap] = useState<Record<string, SourceRef[]>>({});
   const abortRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(
@@ -30,10 +31,11 @@ export function useChat() {
         timestamp: Date.now(),
       };
 
+      const assistantId = assistantMessage.id;
+
       setMessages((prev) => [...prev, userMessage, assistantMessage]);
       setIsStreaming(true);
 
-      // Build history (exclude the current message pair)
       const history = messages.map((m) => ({
         id: m.id,
         role: m.role,
@@ -87,6 +89,13 @@ export function useChat() {
                 setCurrentProjectId(data.projectId);
               }
 
+              if (data.sources) {
+                setSourcesMap((prev) => ({
+                  ...prev,
+                  [assistantId]: data.sources as SourceRef[],
+                }));
+              }
+
               if (data.text) {
                 accumulated += data.text;
                 setMessages((prev) => {
@@ -132,6 +141,7 @@ export function useChat() {
   const clearConversation = useCallback(() => {
     if (abortRef.current) abortRef.current.abort();
     setMessages([]);
+    setSourcesMap({});
     setError(null);
     setIsStreaming(false);
   }, []);
@@ -152,6 +162,7 @@ export function useChat() {
     isStreaming,
     error,
     currentProjectId,
+    sourcesMap,
     sendMessage,
     clearConversation,
     setProject,

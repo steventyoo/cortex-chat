@@ -4,7 +4,8 @@ import { getSupabase } from '@/lib/supabase';
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  if (!token || !(await validateUserSession(token))) {
+  const session = token ? await validateUserSession(token) : null;
+  if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -23,7 +24,7 @@ export async function POST(request: NextRequest) {
       reviewed_at: now,
       pushed_at: now,
       review_notes: 'Marked as already pushed — data was manually entered prior to pipeline setup.',
-    }).eq('id', recordId);
+    }).eq('id', recordId).eq('org_id', session.orgId);
 
     if (error) {
       console.error('Supabase update error:', error.message);
