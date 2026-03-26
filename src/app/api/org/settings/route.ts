@@ -46,13 +46,13 @@ export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const allowedFields: (keyof typeof body)[] = [
+    const allowedFields = [
       'orgName',
       'driveFolderId',
       'alertEmailEnabled',
       'weeklyReportEnabled',
       'logoUrl',
-    ];
+    ] as const;
 
     const updates: Record<string, unknown> = {};
     for (const field of allowedFields) {
