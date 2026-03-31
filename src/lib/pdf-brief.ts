@@ -31,7 +31,8 @@ function fmtPercent(value: unknown): string {
 export function generateProjectBrief(
   data: ProjectData,
   projectName: string,
-  logoBase64?: string
+  logoBase64?: string,
+  orgName?: string
 ): ArrayBuffer {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -64,7 +65,7 @@ export function generateProjectBrief(
   doc.setFontSize(16);
   doc.setTextColor(26, 26, 26);
   doc.setFont('helvetica', 'bold');
-  doc.text('ONE WAY PLUMBING LLC', margin, y);
+  doc.text(orgName || 'Project Cortex', margin, y);
   y += 7;
 
   doc.setFontSize(12);

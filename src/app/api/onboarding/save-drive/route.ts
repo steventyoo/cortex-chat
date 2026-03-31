@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'Organization not found' }, { status: 404 });
   }
 
-  await updateOrganization(org.id, { driveFolderId: folderId.trim() });
+  await updateOrganization(org.orgId, { driveFolderId: folderId.trim() });
 
   return Response.json({ success: true });
 }

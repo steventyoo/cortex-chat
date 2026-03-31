@@ -377,7 +377,7 @@ export default function PipelineReview() {
       }
     } catch (err) {
       console.error('Upload error:', err);
-      alert('Failed to process document');
+      alert(`Failed to process document: ${err instanceof Error ? err.message : 'Network error'}`);
     } finally {
       setUploading(false);
     }
@@ -399,7 +399,7 @@ export default function PipelineReview() {
         );
         if (processed > 0) await fetchItems();
       } else {
-        setScanResult(data.error || 'Scan failed');
+        setScanResult(data.error ? `${data.error}${data.hint ? ` — ${data.hint}` : ''}` : 'Scan failed');
       }
     } catch (err) {
       console.error('Drive scan error:', err);
@@ -1370,6 +1370,14 @@ export default function PipelineReview() {
           </div>
         ) : (
           <div className="divide-y divide-[#f0f0f0]">
+            {/* Column headers */}
+            <div className="px-6 py-2.5 flex items-center gap-4 bg-[#f7f7f5] border-b border-[#e8e8e8] text-[11px] font-semibold text-[#999] uppercase tracking-wider">
+              <div className="w-10 flex-shrink-0">Type</div>
+              <div className="flex-1 min-w-0">Document</div>
+              <div className="w-14 flex-shrink-0 text-right">Confidence</div>
+              <div className="w-24 flex-shrink-0 text-center">Status</div>
+              <div className="w-[104px] flex-shrink-0 text-center">Actions</div>
+            </div>
             {filteredItems.map((item) => (
               <motion.div
                 key={item.id}

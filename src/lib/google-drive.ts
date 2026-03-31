@@ -78,9 +78,9 @@ function getRootFolderId(): string {
  * Each sub-folder represents a project (e.g., "Compass Northgate M2").
  * Also includes a virtual "_Inbox" if it exists for unassigned docs.
  */
-export async function listProjectFolders(): Promise<DriveFolder[]> {
+export async function listProjectFolders(rootFolderIdOverride?: string): Promise<DriveFolder[]> {
   const drive = getDriveClient();
-  const rootId = getRootFolderId();
+  const rootId = rootFolderIdOverride || getRootFolderId();
 
   const res = await drive.files.list({
     q: `'${rootId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
@@ -130,9 +130,9 @@ export async function listFilesInFolder(
  * List ALL files across all project folders + root.
  * Returns files tagged with their parent folder name (= project name).
  */
-export async function listAllDriveFiles(): Promise<DriveFile[]> {
-  const rootId = getRootFolderId();
-  const folders = await listProjectFolders();
+export async function listAllDriveFiles(rootFolderIdOverride?: string): Promise<DriveFile[]> {
+  const rootId = rootFolderIdOverride || getRootFolderId();
+  const folders = await listProjectFolders(rootId);
 
   // Fetch files from all folders + root in parallel
   const results = await Promise.allSettled([

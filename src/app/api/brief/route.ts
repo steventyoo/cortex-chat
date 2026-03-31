@@ -1,8 +1,6 @@
 import { NextRequest } from 'next/server';
-import { readFile } from 'fs/promises';
-import { join } from 'path';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { fetchAllProjectData, verifyProjectAccess } from '@/lib/supabase';
+import { fetchAllProjectData, verifyProjectAccess, getOrganization } from '@/lib/supabase';
 import { generateProjectBrief } from '@/lib/pdf-brief';
 
 export const maxDuration = 30;
@@ -49,20 +47,14 @@ export async function POST(request: NextRequest) {
   try {
     const data = await fetchAllProjectData(projectId);
 
-    // 4. Load OWP logo as base64
-    let logoBase64: string | undefined;
-    try {
-      const logoPath = join(process.cwd(), 'public', 'owp-logo.png');
-      const logoBuffer = await readFile(logoPath);
-      logoBase64 = `data:image/png;base64,${logoBuffer.toString('base64')}`;
-    } catch {
-      // Logo not found — skip it
-    }
+    // Load org name for the PDF header
+    const org = await getOrganization(session.orgId);
+    const orgName = org?.orgName || undefined;
 
-    // 5. Generate PDF
-    const pdfBuffer = generateProjectBrief(data, projectName, logoBase64);
+    // Generate PDF
+    const pdfBuffer = generateProjectBrief(data, projectName, undefined, orgName);
 
-    // 6. Return PDF
+    // Return PDF
     const filename = `${projectName.replace(/[^a-zA-Z0-9]/g, '-')}-Brief.pdf`;
     return new Response(pdfBuffer, {
       headers: {
