@@ -22,14 +22,14 @@ import {
   DriveFile,
 } from '@/lib/google-drive';
 import { generatePipelineId } from '@/lib/pipeline';
-import { fetchProjectList, getSupabase } from '@/lib/supabase';
+import { fetchProjectList, getSupabase, getOrganization } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { extractWithSkill } from '@/lib/skills';
 import { extractTextWithClaude } from '@/lib/file-parser';
 
 const MAX_FILES_PER_RUN = 3;
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization');
@@ -44,15 +44,37 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_DRIVE_FOLDER_ID) {
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
     return Response.json({
       error: 'Google Drive not configured',
-      hint: 'Set GOOGLE_SERVICE_ACCOUNT_EMAIL, GOOGLE_PRIVATE_KEY, and GOOGLE_DRIVE_FOLDER_ID',
+      hint: 'Set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY',
+    }, { status: 503 });
+  }
+
+  // Resolve the Drive folder ID: prefer per-org value from DB, fall back to env var
+  let driveFolderId: string | undefined;
+
+  const session = sessionToken ? await validateUserSession(sessionToken) : null;
+  if (session?.orgId) {
+    const org = await getOrganization(session.orgId);
+    if (org?.driveFolderId) {
+      driveFolderId = org.driveFolderId;
+    }
+  }
+
+  if (!driveFolderId) {
+    driveFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
+  }
+
+  if (!driveFolderId) {
+    return Response.json({
+      error: 'No Google Drive folder configured',
+      hint: 'Connect a Google Drive folder in Settings, or set GOOGLE_DRIVE_FOLDER_ID env var',
     }, { status: 503 });
   }
 
   try {
-    const allDriveFiles = await listAllDriveFiles();
+    const allDriveFiles = await listAllDriveFiles(driveFolderId);
     const supportedFiles = allDriveFiles.filter((f) => isSupportedFileType(f.mimeType));
 
     const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles();
@@ -83,6 +105,20 @@ export async function GET(request: NextRequest) {
     }
 
     const filesToProcess = newFiles.slice(0, MAX_FILES_PER_RUN);
+
+    // Resolve orgId: from session for logged-in users, or from DB for cron calls
+    let orgId = session?.orgId || '';
+    if (!orgId && driveFolderId) {
+      const sb = getSupabase();
+      const { data: orgRow } = await sb
+        .from('organizations')
+        .select('org_id')
+        .eq('google_drive_folder_id', driveFolderId)
+        .limit(1)
+        .maybeSingle();
+      if (orgRow?.org_id) orgId = orgRow.org_id;
+    }
+
     const results: Array<{
       fileName: string;
       driveId: string;
@@ -93,7 +129,7 @@ export async function GET(request: NextRequest) {
 
     for (const file of filesToProcess) {
       try {
-        const result = await processFile(file, folderLookup);
+        const result = await processFile(file, folderLookup, orgId);
         results.push(result);
       } catch (err) {
         results.push({
@@ -140,7 +176,8 @@ async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: 
   try {
     const { data } = await sb
       .from('pipeline_log')
-      .select('file_url, file_name, project_id');
+      .select('file_url, file_name, project_id')
+      .neq('status', 'deleted');
 
     for (const row of data || []) {
       if (row.file_url) urls.add(String(row.file_url));
@@ -158,7 +195,8 @@ async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: 
 
 async function processFile(
   file: DriveFile,
-  folderLookup: Map<string, string>
+  folderLookup: Map<string, string>,
+  orgId: string
 ): Promise<{
   fileName: string;
   driveId: string;
@@ -191,7 +229,8 @@ async function processFile(
   const { count: dupCount } = await sb
     .from('pipeline_log')
     .select('id', { count: 'exact', head: true })
-    .eq('file_url', driveFileUrl);
+    .eq('file_url', driveFileUrl)
+    .neq('status', 'deleted');
 
   if ((dupCount || 0) > 0) {
     return {
@@ -206,7 +245,8 @@ async function processFile(
     .from('pipeline_log')
     .insert({
       pipeline_id: pipelineId,
-      project_id: projectId,
+      ...(projectId ? { project_id: projectId } : {}),
+      org_id: orgId,
       file_name: file.name,
       file_url: driveFileUrl,
       status: 'tier1_extracting',
@@ -223,6 +263,22 @@ async function processFile(
   const recordId = createData?.id ? String(createData.id) : null;
 
   const content = await downloadFileContent(file.id, file.mimeType);
+
+  // Guard against oversized files that will fail in Claude's API
+  const MAX_BASE64_SIZE = 25 * 1024 * 1024; // ~25MB
+  if (content.base64 && content.base64.length > MAX_BASE64_SIZE) {
+    if (recordId) {
+      await sb.from('pipeline_log').update({
+        status: 'intake',
+        validation_flags: [{
+          field: 'file_size',
+          issue: `File too large for AI processing (${Math.round(content.base64.length / 1024 / 1024)}MB). Max ~25MB.`,
+          severity: 'error',
+        }],
+      }).eq('id', recordId);
+    }
+    return { fileName: file.name, driveId: file.id, status: 'too_large', pipelineId };
+  }
 
   if (content.method === 'unsupported') {
     if (recordId) {
@@ -259,9 +315,10 @@ async function processFile(
   }
 
   if (recordId) {
-    await sb.from('pipeline_log').update({
+    const { error: srcErr } = await sb.from('pipeline_log').update({
       source_text: sourceText.substring(0, 500000),
     }).eq('id', recordId);
+    if (srcErr) console.error('Failed to save source_text:', srcErr.message);
   }
 
   // Skill-based extraction (classify → extract → validate)
@@ -290,11 +347,13 @@ async function processFile(
   }
 
   const hasErrors = flags.some((f) => f.severity === 'error');
-  const finalStatus = hasErrors ? 'tier2_flagged' : 'pending_review';
+  const hasWarnings = flags.some((f) => f.severity === 'warning');
+  const autoApproveEligible = overallConfidence >= 0.95 && !hasErrors && !hasWarnings;
+  const finalStatus = autoApproveEligible ? 'tier2_validated' : hasErrors ? 'tier2_flagged' : 'pending_review';
 
   if (recordId) {
-    await sb.from('pipeline_log').update({
-      document_type: extraction.documentType,
+    const { error: updateErr } = await sb.from('pipeline_log').update({
+      document_type: extraction.skillId || null,
       status: finalStatus,
       overall_confidence: overallConfidence,
       extracted_data: extraction,
@@ -302,6 +361,7 @@ async function processFile(
       tier1_completed_at: new Date().toISOString(),
       tier2_completed_at: new Date().toISOString(),
     }).eq('id', recordId);
+    if (updateErr) console.error('Failed to update extraction results:', updateErr.message);
   }
 
   return {

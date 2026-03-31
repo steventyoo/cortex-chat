@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect, createContext, useContext, ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import Image from 'next/image';
 import { useSessionProvider, SessionContext } from '@/hooks/useSession';
 import { useConversationHistory, ConversationHistoryProvider } from '@/hooks/useConversationHistory';
 import { ProjectSummary } from '@/lib/types';
@@ -157,13 +156,16 @@ export default function AppShell({ projects, children }: AppShellProps) {
                 <path d="M3 12H21M3 6H21M3 18H21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
             </button>
-            <Image
-              src="/owp-logo.png"
-              alt="One Way Plumbing"
-              width={150}
-              height={30}
-              className="h-[24px] w-auto"
-            />
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-lg bg-[#1a1a1a] flex items-center justify-center flex-shrink-0">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                  <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                  <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <span className="text-[15px] font-semibold text-[#1a1a1a]">Cortex</span>
+            </div>
           </div>
 
           {children}

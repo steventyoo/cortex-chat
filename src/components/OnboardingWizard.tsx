@@ -41,6 +41,7 @@ export default function OnboardingWizard({
 
   // Step 3: Invite
   const [copied, setCopied] = useState(false);
+  const [emailCopied, setEmailCopied] = useState(false);
 
   // ─── Step 1: Test Drive Connection ────────────────────────
   const handleTestDrive = useCallback(async () => {
@@ -73,7 +74,7 @@ export default function OnboardingWizard({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ folderId: folderId.trim() }),
-      }).catch(() => {}); // Non-critical
+      }).catch((err) => console.error('Failed to save Drive folder ID:', err));
 
       setStep(1);
     } catch {
@@ -247,11 +248,16 @@ export default function OnboardingWizard({
                     <button
                       onClick={() => {
                         navigator.clipboard.writeText(serviceAccountEmail);
+                        setEmailCopied(true);
+                        setTimeout(() => setEmailCopied(false), 2000);
                       }}
-                      className="text-[12px] text-[#007aff] bg-[#ebebea] rounded-lg px-2 py-1 mt-1 font-mono hover:bg-[#ddd] transition-colors"
+                      className="text-[12px] text-[#007aff] bg-[#ebebea] rounded-lg px-2 py-1 mt-1 font-mono hover:bg-[#ddd] transition-colors select-all"
                     >
-                      {serviceAccountEmail} <span className="text-[10px]">📋</span>
+                      {serviceAccountEmail} <span className="text-[10px]">{emailCopied ? '✓' : '📋'}</span>
                     </button>
+                    {emailCopied && (
+                      <p className="text-[11px] text-green-600 mt-1">Copied to clipboard!</p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
