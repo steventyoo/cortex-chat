@@ -178,6 +178,28 @@ export default function PipelineReview() {
     fetchItems();
   }, [fetchItems]);
 
+  // Auto-poll while any items are queued or processing
+  useEffect(() => {
+    const hasInProgress = items.some(
+      (i) => i.status === 'queued' || i.status === 'processing' || i.status === 'tier1_extracting'
+    );
+    if (!hasInProgress) return;
+
+    const interval = setInterval(() => {
+      fetch('/api/pipeline/list')
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => {
+          if (data) {
+            setItems(data.items);
+            setStats(data.stats);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [items]);
+
   useEffect(() => {
     fetch('/api/skills').then(r => r.json()).then(d => {
       if (d.skills) {
@@ -440,13 +462,38 @@ export default function PipelineReview() {
         await fetchItems();
       } else {
         const err = await res.json();
-        alert(`Extraction failed: ${err.error}`);
+        alert(`Upload failed: ${err.error}`);
       }
     } catch (err) {
       console.error('Upload error:', err);
-      alert(`Failed to process document: ${err instanceof Error ? err.message : 'Network error'}`);
+      alert(`Failed to upload document: ${err instanceof Error ? err.message : 'Network error'}`);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  const handleRetry = async (recordId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRetryingId(recordId);
+    try {
+      const res = await fetch('/api/pipeline/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordId }),
+      });
+      if (res.ok) {
+        await fetchItems();
+      } else {
+        const err = await res.json();
+        alert(`Retry failed: ${err.error}`);
+      }
+    } catch (err) {
+      console.error('Retry error:', err);
+      alert('Failed to retry');
+    } finally {
+      setRetryingId(null);
     }
   };
 
@@ -1545,13 +1592,13 @@ export default function PipelineReview() {
                   }
                   className="flex items-center gap-2 px-5 py-2 rounded-lg bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {uploading ? (
+                    {uploading ? (
                     <>
                       <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
                         <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
                         <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
                       </svg>
-                      {uploadMode === 'file' ? 'Uploading & Extracting...' : 'Extracting with AI...'}
+                      {uploadMode === 'file' ? 'Uploading...' : 'Extracting with AI...'}
                     </>
                   ) : (
                     <>
@@ -1646,8 +1693,41 @@ export default function PipelineReview() {
                 {/* Status */}
                 <StatusBadge status={item.status} />
 
+                {/* Processing spinner for queued/processing items */}
+                {(item.status === 'queued' || item.status === 'processing') && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <svg className="animate-spin w-3.5 h-3.5 text-yellow-600" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                  </div>
+                )}
+
+                {/* Retry button for failed items */}
+                {item.status === 'failed' && (
+                  <button
+                    onClick={(e) => handleRetry(item.id, e)}
+                    disabled={retryingId === item.id}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors flex-shrink-0 disabled:opacity-50"
+                    title="Retry processing"
+                  >
+                    {retryingId === item.id ? (
+                      <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                        <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                      </svg>
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="M1 4v6h6" />
+                        <path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
+                      </svg>
+                    )}
+                    Retry
+                  </button>
+                )}
+
                 {/* Mark as Pushed button — for items not yet pushed */}
-                {item.status !== 'pushed' && item.status !== 'rejected' && (
+                {item.status !== 'pushed' && item.status !== 'rejected' && item.status !== 'queued' && item.status !== 'processing' && item.status !== 'failed' && (
                   <button
                     onClick={(e) => handleMarkAsPushed(item.id, item.fileName, e)}
                     disabled={markingPushedId === item.id}
