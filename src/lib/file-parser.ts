@@ -7,6 +7,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import * as XLSX from 'xlsx';
+import { extractText as pdfExtractText } from 'unpdf';
 
 // ── MIME type groups ────────────────────────────────────────────
 
@@ -77,8 +78,20 @@ export async function parseFileBuffer(
     return { text: buffer.toString('utf-8'), method: 'text' };
   }
 
-  // PDF -> Claude document API
+  // PDF -> try unpdf first (local, fast), fall back to Claude for scanned docs
   if (PDF_TYPES.includes(mimeType)) {
+    const t0 = Date.now();
+    try {
+      const { text } = await pdfExtractText(new Uint8Array(buffer), { mergePages: true });
+      const trimmed = (text as string).trim();
+      if (trimmed.length > 100) {
+        console.log(`[parseFileBuffer] unpdf extracted ${trimmed.length} chars in ${Date.now() - t0}ms (skipping Claude OCR)`);
+        return { text: trimmed, method: 'pdf-ocr' };
+      }
+      console.log(`[parseFileBuffer] unpdf got only ${trimmed.length} chars — falling back to Claude OCR for scanned PDF`);
+    } catch (err) {
+      console.log(`[parseFileBuffer] unpdf failed (${err instanceof Error ? err.message : 'unknown'}) — falling back to Claude OCR`);
+    }
     const base64 = buffer.toString('base64');
     const text = await extractTextWithClaude(base64, 'application/pdf', 'pdf');
     return { text, method: 'pdf-ocr' };
@@ -146,6 +159,7 @@ export async function extractTextWithClaude(
   mimeType: string,
   method: 'pdf' | 'image'
 ): Promise<string> {
+  const t0 = Date.now();
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const prompt =
@@ -181,15 +195,19 @@ export async function extractTextWithClaude(
   }
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 8192,
     messages: [{ role: 'user', content }],
   });
 
-  return response.content
+  const text = response.content
     .filter((block) => block.type === 'text')
     .map((block) => (block.type === 'text' ? block.text : ''))
     .join('');
+
+  console.log(`[extractTextWithClaude] method=${method} base64Size=${(base64Data.length / 1024).toFixed(0)}KB outputChars=${text.length} elapsed=${Date.now() - t0}ms`);
+
+  return text;
 }
 
 // ── Excel parser ────────────────────────────────────────────────

@@ -298,20 +298,24 @@ export async function extractWithSkill(
   projectId: string,
   orgId?: string
 ): Promise<ExtractionOutput> {
+  const t0 = Date.now();
   const skills = await listActiveSkills();
+  const tSkills = Date.now() - t0;
 
-  // 1. Classify
+  let tStep = Date.now();
   const classification = await classifyDocument(sourceText, skills, orgId);
+  const tClassify = Date.now() - tStep;
 
-  // 2. Get matched skill
+  tStep = Date.now();
   const skill = await getSkill(classification.skillId || '_general')
     || await getSkill('_general');
+  const tGetSkill = Date.now() - tStep;
 
   if (!skill) {
     throw new Error('No skill found (not even _general). Run the seed script.');
   }
 
-  // 3. Build prompt and extract
+  tStep = Date.now();
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const extractionPrompt = buildSkillPrompt(skill, sourceText);
 
@@ -321,6 +325,7 @@ export async function extractWithSkill(
     system: skill.systemPrompt,
     messages: [{ role: 'user', content: extractionPrompt }],
   });
+  const tExtract = Date.now() - tStep;
 
   const responseText = response.content
     .filter(b => b.type === 'text')
@@ -333,15 +338,12 @@ export async function extractWithSkill(
 
   const extraction = JSON.parse(jsonStr) as ExtractionResult;
 
-  // Attach skill metadata
   extraction.skillId = skill.skillId;
   extraction.skillVersion = skill.version;
   extraction.classifierConfidence = classification.confidence;
 
-  // 4. Compute confidence
   const overallConfidence = computeOverallConfidence(extraction);
 
-  // 5. Validate
   const flags: ValidationFlag[] = [];
 
   for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
@@ -364,7 +366,6 @@ export async function extractWithSkill(
     }
   }
 
-  // Check for required fields that weren't returned at all
   for (const fd of skill.fieldDefinitions) {
     if (fd.required && !(fd.name in extraction.fields)) {
       flags.push({
@@ -382,6 +383,11 @@ export async function extractWithSkill(
       severity: 'warning',
     });
   }
+
+  const tTotal = Date.now() - t0;
+  console.log(`[extractWithSkill] skill=${skill.skillId} — ` +
+    `listSkills=${tSkills}ms classify=${tClassify}ms getSkill=${tGetSkill}ms extract=${tExtract}ms total=${tTotal}ms ` +
+    `(inputChars=${sourceText.length} classConf=${classification.confidence})`);
 
   return { extraction, overallConfidence, flags };
 }

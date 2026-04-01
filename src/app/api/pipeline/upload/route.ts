@@ -5,16 +5,20 @@ import { generatePipelineId } from '@/lib/pipeline';
 import { extractWithSkill } from '@/lib/skills';
 import { parseFileBuffer, isSupportedMimeType } from '@/lib/file-parser';
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export async function POST(request: NextRequest) {
+  const t0 = Date.now();
+  const timing: Record<string, number> = {};
+
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = await validateUserSession(token || '');
   if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  timing.auth = Date.now() - t0;
 
   let formData: FormData;
   try {
@@ -52,7 +56,8 @@ export async function POST(request: NextRequest) {
   const now = new Date().toISOString();
   const sb = getSupabase();
 
-  // Create pipeline_log entry first so we have the record ID for the storage path
+  let tStep = Date.now();
+
   let recordId: string | null = null;
   try {
     const { data } = await sb.from('pipeline_log').insert({
@@ -68,8 +73,9 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error('Failed to create pipeline record:', err);
   }
+  timing.db_insert = Date.now() - tStep;
 
-  // Upload original file to Supabase Storage
+  tStep = Date.now();
   const buffer = Buffer.from(await file.arrayBuffer());
   const storagePath = [
     orgId,
@@ -87,13 +93,13 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error('Storage upload failed (non-fatal):', err);
   }
+  timing.storage_upload = Date.now() - tStep;
 
-  // Update pipeline_log with file_url
   if (recordId && fileUrl) {
     await sb.from('pipeline_log').update({ file_url: fileUrl }).eq('id', recordId);
   }
 
-  // Parse file to extract text
+  tStep = Date.now();
   let sourceText: string;
   try {
     const result = await parseFileBuffer(buffer, mimeType, fileName);
@@ -115,15 +121,17 @@ export async function POST(request: NextRequest) {
       { status: 422 }
     );
   }
+  timing.text_extraction = Date.now() - tStep;
 
-  // Store extracted text
+  tStep = Date.now();
   if (recordId) {
     await sb.from('pipeline_log').update({
       source_text: sourceText.substring(0, 500000),
     }).eq('id', recordId);
   }
+  timing.save_source_text = Date.now() - tStep;
 
-  // Run skill-based classification + extraction
+  tStep = Date.now();
   let extraction;
   let overallConfidence: number;
   let flags;
@@ -150,12 +158,14 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+  timing.ai_extraction = Date.now() - tStep;
 
   const hasErrors = flags.some((f) => f.severity === 'error');
   const hasWarnings = flags.some((f) => f.severity === 'warning');
   const autoApproveEligible = overallConfidence >= 0.95 && !hasErrors && !hasWarnings;
   const finalStatus = autoApproveEligible ? 'tier2_validated' : hasErrors ? 'tier2_flagged' : 'pending_review';
 
+  tStep = Date.now();
   if (recordId) {
     try {
       await sb.from('pipeline_log').update({
@@ -171,6 +181,11 @@ export async function POST(request: NextRequest) {
       console.error('Failed to update pipeline record:', err);
     }
   }
+  timing.db_final_update = Date.now() - tStep;
+  timing.total = Date.now() - t0;
+
+  console.log(`[upload] ${fileName} (${(file.size / 1024).toFixed(0)}KB ${mimeType}) — ` +
+    Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
 
   return Response.json({
     pipelineId,
@@ -182,5 +197,6 @@ export async function POST(request: NextRequest) {
     overallConfidence,
     flags,
     autoApproveEligible,
+    timing,
   });
 }

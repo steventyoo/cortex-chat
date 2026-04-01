@@ -26,10 +26,11 @@ import { fetchProjectList, getSupabase, getOrganization } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { extractWithSkill } from '@/lib/skills';
 import { extractTextWithClaude } from '@/lib/file-parser';
+import { extractText as pdfExtractText } from 'unpdf';
 
 const MAX_FILES_PER_RUN = 3;
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get('authorization');
@@ -74,10 +75,17 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const t0 = Date.now();
+    const timing: Record<string, number> = {};
+
+    let tStep = Date.now();
     const allDriveFiles = await listAllDriveFiles(driveFolderId);
     const supportedFiles = allDriveFiles.filter((f) => isSupportedFileType(f.mimeType));
+    timing.list_drive_files = Date.now() - tStep;
 
+    tStep = Date.now();
     const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles();
+    timing.dedup_query = Date.now() - tStep;
 
     const newFiles = supportedFiles.filter((f) => {
       if (processedFileUrls.has(buildDriveFileUrl(f.id))) return false;
@@ -87,14 +95,18 @@ export async function GET(request: NextRequest) {
     });
 
     if (newFiles.length === 0) {
+      timing.total = Date.now() - t0;
+      console.log(`[scan-drive] No new files — ${Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' ')}`);
       return Response.json({
         message: 'No new files found',
         totalDriveFiles: allDriveFiles.length,
         supportedFiles: supportedFiles.length,
         alreadyProcessed: processedFileUrls.size,
+        timing,
       });
     }
 
+    tStep = Date.now();
     const projects = await fetchProjectList();
     const folderLookup = new Map<string, string>();
     for (const p of projects) {
@@ -103,10 +115,10 @@ export async function GET(request: NextRequest) {
       folderLookup.set(p.projectId.toLowerCase().replace(/[-_]/g, ' '), p.projectId);
       folderLookup.set(p.projectName.toLowerCase().replace(/\s+/g, '-'), p.projectId);
     }
+    timing.fetch_projects = Date.now() - tStep;
 
     const filesToProcess = newFiles.slice(0, MAX_FILES_PER_RUN);
 
-    // Resolve orgId: from session for logged-in users, or from DB for cron calls
     let orgId = session?.orgId || '';
     if (!orgId && driveFolderId) {
       const sb = getSupabase();
@@ -125,6 +137,7 @@ export async function GET(request: NextRequest) {
       status: string;
       pipelineId?: string;
       error?: string;
+      timing?: Record<string, number>;
     }> = [];
 
     for (const file of filesToProcess) {
@@ -141,6 +154,9 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    timing.total = Date.now() - t0;
+    console.log(`[scan-drive] ${results.length} files — ${Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' ')}`);
+
     return Response.json({
       message: `Processed ${results.length} new file(s)`,
       totalDriveFiles: allDriveFiles.length,
@@ -148,6 +164,7 @@ export async function GET(request: NextRequest) {
       newFilesFound: newFiles.length,
       processed: results,
       remainingNewFiles: Math.max(0, newFiles.length - MAX_FILES_PER_RUN),
+      timing,
     });
   } catch (err) {
     console.error('Drive scan error:', err);
@@ -204,7 +221,10 @@ async function processFile(
   pipelineId?: string;
   projectId?: string;
   error?: string;
+  timing?: Record<string, number>;
 }> {
+  const t0 = Date.now();
+  const timing: Record<string, number> = {};
   const pipelineId = generatePipelineId();
   const driveFileUrl = buildDriveFileUrl(file.id);
   const now = new Date().toISOString();
@@ -226,21 +246,26 @@ async function processFile(
     }
   }
 
+  let tStep = Date.now();
   const { count: dupCount } = await sb
     .from('pipeline_log')
     .select('id', { count: 'exact', head: true })
     .eq('file_url', driveFileUrl)
     .neq('status', 'deleted');
+  timing.dedup_check = Date.now() - tStep;
 
   if ((dupCount || 0) > 0) {
+    timing.total = Date.now() - t0;
     return {
       fileName: file.name,
       driveId: file.id,
       status: 'already_exists',
       pipelineId,
+      timing,
     };
   }
 
+  tStep = Date.now();
   const { data: createData, error: createError } = await sb
     .from('pipeline_log')
     .insert({
@@ -255,6 +280,7 @@ async function processFile(
     })
     .select('id')
     .single();
+  timing.db_insert = Date.now() - tStep;
 
   if (createError) {
     throw new Error(`Failed to create pipeline record: ${createError.message}`);
@@ -262,10 +288,11 @@ async function processFile(
 
   const recordId = createData?.id ? String(createData.id) : null;
 
+  tStep = Date.now();
   const content = await downloadFileContent(file.id, file.mimeType);
+  timing.drive_download = Date.now() - tStep;
 
-  // Guard against oversized files that will fail in Claude's API
-  const MAX_BASE64_SIZE = 25 * 1024 * 1024; // ~25MB
+  const MAX_BASE64_SIZE = 25 * 1024 * 1024;
   if (content.base64 && content.base64.length > MAX_BASE64_SIZE) {
     if (recordId) {
       await sb.from('pipeline_log').update({
@@ -277,7 +304,8 @@ async function processFile(
         }],
       }).eq('id', recordId);
     }
-    return { fileName: file.name, driveId: file.id, status: 'too_large', pipelineId };
+    timing.total = Date.now() - t0;
+    return { fileName: file.name, driveId: file.id, status: 'too_large', pipelineId, timing };
   }
 
   if (content.method === 'unsupported') {
@@ -291,14 +319,32 @@ async function processFile(
         }],
       }).eq('id', recordId);
     }
-    return { fileName: file.name, driveId: file.id, status: 'unsupported_type', pipelineId };
+    timing.total = Date.now() - t0;
+    return { fileName: file.name, driveId: file.id, status: 'unsupported_type', pipelineId, timing };
   }
 
+  tStep = Date.now();
   let sourceText: string;
 
   if (content.text) {
     sourceText = content.text;
-  } else if (content.base64 && (content.method === 'pdf' || content.method === 'image')) {
+  } else if (content.base64 && content.method === 'pdf') {
+    const pdfBuffer = Buffer.from(content.base64, 'base64');
+    try {
+      const { text: localText } = await pdfExtractText(new Uint8Array(pdfBuffer), { mergePages: true });
+      const trimmed = (localText as string).trim();
+      if (trimmed.length > 100) {
+        console.log(`[scan-drive:file] unpdf extracted ${trimmed.length} chars for ${file.name}`);
+        sourceText = trimmed;
+      } else {
+        console.log(`[scan-drive:file] unpdf got only ${trimmed.length} chars for ${file.name} — falling back to Claude OCR`);
+        sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+      }
+    } catch (err) {
+      console.log(`[scan-drive:file] unpdf failed for ${file.name} (${err instanceof Error ? err.message : 'unknown'}) — falling back to Claude OCR`);
+      sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+    }
+  } else if (content.base64 && content.method === 'image') {
     sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
   } else {
     if (recordId) {
@@ -311,17 +357,21 @@ async function processFile(
         }],
       }).eq('id', recordId);
     }
-    return { fileName: file.name, driveId: file.id, status: 'extraction_failed', pipelineId };
+    timing.total = Date.now() - t0;
+    return { fileName: file.name, driveId: file.id, status: 'extraction_failed', pipelineId, timing };
   }
+  timing.text_extraction = Date.now() - tStep;
 
+  tStep = Date.now();
   if (recordId) {
     const { error: srcErr } = await sb.from('pipeline_log').update({
       source_text: sourceText.substring(0, 500000),
     }).eq('id', recordId);
     if (srcErr) console.error('Failed to save source_text:', srcErr.message);
   }
+  timing.save_source_text = Date.now() - tStep;
 
-  // Skill-based extraction (classify → extract → validate)
+  tStep = Date.now();
   let extraction;
   let overallConfidence: number;
   let flags;
@@ -343,14 +393,19 @@ async function processFile(
         }],
       }).eq('id', recordId);
     }
-    return { fileName: file.name, driveId: file.id, status: 'ai_extraction_failed', pipelineId };
+    timing.ai_extraction = Date.now() - tStep;
+    timing.total = Date.now() - t0;
+    console.log(`[scan-drive:file] ${file.name} FAILED — ${Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' ')}`);
+    return { fileName: file.name, driveId: file.id, status: 'ai_extraction_failed', pipelineId, timing };
   }
+  timing.ai_extraction = Date.now() - tStep;
 
   const hasErrors = flags.some((f) => f.severity === 'error');
   const hasWarnings = flags.some((f) => f.severity === 'warning');
   const autoApproveEligible = overallConfidence >= 0.95 && !hasErrors && !hasWarnings;
   const finalStatus = autoApproveEligible ? 'tier2_validated' : hasErrors ? 'tier2_flagged' : 'pending_review';
 
+  tStep = Date.now();
   if (recordId) {
     const { error: updateErr } = await sb.from('pipeline_log').update({
       document_type: extraction.skillId || null,
@@ -363,6 +418,10 @@ async function processFile(
     }).eq('id', recordId);
     if (updateErr) console.error('Failed to update extraction results:', updateErr.message);
   }
+  timing.db_final_update = Date.now() - tStep;
+  timing.total = Date.now() - t0;
+
+  console.log(`[scan-drive:file] ${file.name} → ${finalStatus} — ${Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' ')}`);
 
   return {
     fileName: file.name,
@@ -370,5 +429,6 @@ async function processFile(
     status: finalStatus,
     pipelineId,
     projectId: projectId || '(unmatched)',
+    timing,
   };
 }
