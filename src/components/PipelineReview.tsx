@@ -150,6 +150,10 @@ export default function PipelineReview() {
   // Delete state
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Move category state
+  const [movingId, setMovingId] = useState<string | null>(null);
+  const [showReviewMoveMenu, setShowReviewMoveMenu] = useState(false);
+
   // Mark as pushed state
   const [markingPushedId, setMarkingPushedId] = useState<string | null>(null);
 
@@ -562,6 +566,28 @@ export default function PipelineReview() {
     }
   };
 
+  const handleMove = async (recordId: string, categoryId: string) => {
+    setMovingId(recordId);
+    try {
+      const res = await fetch('/api/pipeline/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordId, categoryId }),
+      });
+      if (res.ok) {
+        await fetchItems();
+      } else {
+        const err = await res.json();
+        alert(`Move failed: ${err.error}`);
+      }
+    } catch (err) {
+      console.error('Move error:', err);
+      alert('Failed to move document');
+    } finally {
+      setMovingId(null);
+    }
+  };
+
   const handleMarkAsPushed = async (recordId: string, fileName: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm(`Mark "${fileName}" as already pushed to Airtable?\n\nThis means the data from this file is already in your database — no new records will be created.`)) return;
@@ -642,6 +668,7 @@ export default function PipelineReview() {
     setRejectionReason('');
     setShowNewTypeFlow(false);
     setShowAddField(false);
+    setShowReviewMoveMenu(false);
     setSkillData(null);
 
     if (item.extractedData) {
@@ -708,6 +735,62 @@ export default function PipelineReview() {
             <p className="text-[12px] text-[#999]">
               {selectedItem.pipelineId} · {extraction?.documentType || 'Unknown type'}
             </p>
+          </div>
+          {/* Move to category dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowReviewMoveMenu(!showReviewMoveMenu)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${
+                showReviewMoveMenu
+                  ? 'bg-blue-50 text-[#007aff]'
+                  : 'text-[#999] hover:bg-[#f0f0f0] hover:text-[#555]'
+              }`}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+              </svg>
+              {categories.find(c => c.id === selectedItem.categoryId)?.label || 'Uncategorized'}
+            </button>
+            {showReviewMoveMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowReviewMoveMenu(false)} />
+                <div className="absolute right-0 top-full mt-1 z-20 bg-white rounded-xl shadow-lg border border-[#e8e8e8] py-1 min-w-[200px] max-h-[320px] overflow-y-auto">
+                  <div className="px-3 py-1.5 text-[10px] font-semibold text-[#999] uppercase tracking-wider">Move to category</div>
+                  {categories.map((cat) => {
+                    const isActive = selectedItem.categoryId === cat.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        onClick={() => {
+                          if (!isActive) {
+                            handleMove(selectedItem.id, cat.id);
+                            setSelectedItem({ ...selectedItem, categoryId: cat.id });
+                          }
+                          setShowReviewMoveMenu(false);
+                        }}
+                        className={`w-full text-left px-3 py-2 text-[13px] flex items-center gap-2 transition-colors ${
+                          isActive
+                            ? 'text-[#007aff] bg-blue-50/50 font-medium'
+                            : 'text-[#555] hover:bg-[#f7f7f5]'
+                        }`}
+                      >
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          cat.priority === 'P1' ? 'bg-blue-400'
+                            : cat.priority === 'P2' ? 'bg-amber-400'
+                            : 'bg-gray-300'
+                        }`} />
+                        <span className="flex-1 truncate">{cat.label}</span>
+                        {isActive && (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
           <StatusBadge status={selectedItem.status} />
         </div>
@@ -1677,22 +1760,27 @@ export default function PipelineReview() {
             handleRetry={handleRetry}
             handleMarkAsPushed={handleMarkAsPushed}
             handleDelete={handleDelete}
+            handleMove={handleMove}
             retryingId={retryingId}
             markingPushedId={markingPushedId}
             deletingId={deletingId}
+            movingId={movingId}
           />
         ) : listView === 'drive' ? (
           <DrivePathFolderView
             items={filteredItems}
+            categories={categories}
             expandedSections={expandedSections}
             toggleSection={toggleSection}
             openReview={openReview}
             handleRetry={handleRetry}
             handleMarkAsPushed={handleMarkAsPushed}
             handleDelete={handleDelete}
+            handleMove={handleMove}
             retryingId={retryingId}
             markingPushedId={markingPushedId}
             deletingId={deletingId}
+            movingId={movingId}
           />
         ) : (
           <div className="divide-y divide-[#f0f0f0]">
@@ -1708,13 +1796,16 @@ export default function PipelineReview() {
               <DocumentRow
                 key={item.id}
                 item={item}
+                categories={categories}
                 openReview={openReview}
                 handleRetry={handleRetry}
                 handleMarkAsPushed={handleMarkAsPushed}
                 handleDelete={handleDelete}
+                handleMove={handleMove}
                 retryingId={retryingId}
                 markingPushedId={markingPushedId}
                 deletingId={deletingId}
+                movingId={movingId}
               />
             ))}
           </div>
@@ -1838,25 +1929,32 @@ function ViewToggle({ value, onChange }: { value: ListView; onChange: (v: ListVi
 
 interface DocumentRowProps {
   item: PipelineItem;
+  categories: CategoryInfo[];
   openReview: (item: PipelineItem) => void;
   handleRetry: (recordId: string, e: React.MouseEvent) => void;
   handleMarkAsPushed: (recordId: string, fileName: string, e: React.MouseEvent) => void;
   handleDelete: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  handleMove: (recordId: string, categoryId: string) => void;
   retryingId: string | null;
   markingPushedId: string | null;
   deletingId: string | null;
+  movingId: string | null;
 }
 
 function DocumentRow({
   item,
+  categories,
   openReview,
   handleRetry,
   handleMarkAsPushed,
   handleDelete,
+  handleMove,
   retryingId,
   markingPushedId,
   deletingId,
+  movingId,
 }: DocumentRowProps) {
+  const [showMoveMenu, setShowMoveMenu] = useState(false);
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -1965,6 +2063,69 @@ function DocumentRow({
         </button>
       )}
 
+      {/* Move category dropdown */}
+      <div className="relative flex-shrink-0">
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowMoveMenu(!showMoveMenu); }}
+          disabled={movingId === item.id}
+          className={`p-1.5 rounded-lg transition-colors disabled:opacity-50 ${
+            showMoveMenu
+              ? 'text-[#007aff] bg-blue-50'
+              : 'text-[#ccc] hover:text-[#007aff] hover:bg-blue-50'
+          }`}
+          title="Move to category"
+        >
+          {movingId === item.id ? (
+            <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+            </svg>
+          )}
+        </button>
+        {showMoveMenu && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={(e) => { e.stopPropagation(); setShowMoveMenu(false); }} />
+            <div className="absolute right-0 top-full mt-1 z-20 bg-white rounded-xl shadow-lg border border-[#e8e8e8] py-1 min-w-[200px] max-h-[320px] overflow-y-auto">
+              <div className="px-3 py-1.5 text-[10px] font-semibold text-[#999] uppercase tracking-wider">Move to category</div>
+              {categories.map((cat) => {
+                const isActive = item.categoryId === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (!isActive) handleMove(item.id, cat.id);
+                      setShowMoveMenu(false);
+                    }}
+                    className={`w-full text-left px-3 py-2 text-[13px] flex items-center gap-2 transition-colors ${
+                      isActive
+                        ? 'text-[#007aff] bg-blue-50/50 font-medium'
+                        : 'text-[#555] hover:bg-[#f7f7f5]'
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                      cat.priority === 'P1' ? 'bg-blue-400'
+                        : cat.priority === 'P2' ? 'bg-amber-400'
+                        : 'bg-gray-300'
+                    }`} />
+                    <span className="flex-1 truncate">{cat.label}</span>
+                    {isActive && (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
       <button
         onClick={(e) => handleDelete(item.id, item.fileName, e)}
         disabled={deletingId === item.id}
@@ -2055,9 +2216,11 @@ function CategoryFolderView({
   handleRetry,
   handleMarkAsPushed,
   handleDelete,
+  handleMove,
   retryingId,
   markingPushedId,
   deletingId,
+  movingId,
 }: {
   items: PipelineItem[];
   categories: CategoryInfo[];
@@ -2067,9 +2230,11 @@ function CategoryFolderView({
   handleRetry: (recordId: string, e: React.MouseEvent) => void;
   handleMarkAsPushed: (recordId: string, fileName: string, e: React.MouseEvent) => void;
   handleDelete: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  handleMove: (recordId: string, categoryId: string) => void;
   retryingId: string | null;
   markingPushedId: string | null;
   deletingId: string | null;
+  movingId: string | null;
 }) {
   const grouped = new Map<string, PipelineItem[]>();
 
@@ -2114,13 +2279,16 @@ function CategoryFolderView({
               <DocumentRow
                 key={item.id}
                 item={item}
+                categories={categories}
                 openReview={openReview}
                 handleRetry={handleRetry}
                 handleMarkAsPushed={handleMarkAsPushed}
                 handleDelete={handleDelete}
+                handleMove={handleMove}
                 retryingId={retryingId}
                 markingPushedId={markingPushedId}
                 deletingId={deletingId}
+                movingId={movingId}
               />
             ))}
           </CollapsibleSection>
@@ -2149,13 +2317,16 @@ function CategoryFolderView({
             <DocumentRow
               key={item.id}
               item={item}
+              categories={categories}
               openReview={openReview}
               handleRetry={handleRetry}
               handleMarkAsPushed={handleMarkAsPushed}
               handleDelete={handleDelete}
+              handleMove={handleMove}
               retryingId={retryingId}
               markingPushedId={markingPushedId}
               deletingId={deletingId}
+              movingId={movingId}
             />
           ))}
         </CollapsibleSection>
@@ -2166,26 +2337,32 @@ function CategoryFolderView({
 
 function DrivePathFolderView({
   items,
+  categories,
   expandedSections,
   toggleSection,
   openReview,
   handleRetry,
   handleMarkAsPushed,
   handleDelete,
+  handleMove,
   retryingId,
   markingPushedId,
   deletingId,
+  movingId,
 }: {
   items: PipelineItem[];
+  categories: CategoryInfo[];
   expandedSections: Set<string>;
   toggleSection: (key: string) => void;
   openReview: (item: PipelineItem) => void;
   handleRetry: (recordId: string, e: React.MouseEvent) => void;
   handleMarkAsPushed: (recordId: string, fileName: string, e: React.MouseEvent) => void;
   handleDelete: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  handleMove: (recordId: string, categoryId: string) => void;
   retryingId: string | null;
   markingPushedId: string | null;
   deletingId: string | null;
+  movingId: string | null;
 }) {
   const grouped = new Map<string, PipelineItem[]>();
 
@@ -2226,13 +2403,16 @@ function DrivePathFolderView({
               <DocumentRow
                 key={item.id}
                 item={item}
+                categories={categories}
                 openReview={openReview}
                 handleRetry={handleRetry}
                 handleMarkAsPushed={handleMarkAsPushed}
                 handleDelete={handleDelete}
+                handleMove={handleMove}
                 retryingId={retryingId}
                 markingPushedId={markingPushedId}
                 deletingId={deletingId}
+                movingId={movingId}
               />
             ))}
           </CollapsibleSection>
@@ -2261,13 +2441,16 @@ function DrivePathFolderView({
             <DocumentRow
               key={item.id}
               item={item}
+              categories={categories}
               openReview={openReview}
               handleRetry={handleRetry}
               handleMarkAsPushed={handleMarkAsPushed}
               handleDelete={handleDelete}
+              handleMove={handleMove}
               retryingId={retryingId}
               markingPushedId={markingPushedId}
               deletingId={deletingId}
+              movingId={movingId}
             />
           ))}
         </CollapsibleSection>
