@@ -29,7 +29,13 @@ export type ClassificationOutput = z.infer<typeof ClassificationSchema>;
 const EXTRACTED_FIELD_JSON_SCHEMA = {
   type: 'object' as const,
   properties: {
-    value: { type: ['string', 'number', 'null'] as const },
+    value: {
+      anyOf: [
+        { type: 'string' as const },
+        { type: 'number' as const },
+        { type: 'null' as const },
+      ],
+    },
     confidence: { type: 'number' as const, minimum: 0, maximum: 1 },
   },
   required: ['value', 'confidence'],
