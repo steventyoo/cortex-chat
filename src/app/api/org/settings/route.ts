@@ -25,6 +25,7 @@ export async function GET(req: NextRequest) {
       weeklyReportEnabled: org.weeklyReportEnabled,
       logoUrl: org.logoUrl,
       onboardingComplete: org.onboardingComplete,
+      serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || null,
     });
   } catch (err) {
     console.error('Get org settings error:', err);

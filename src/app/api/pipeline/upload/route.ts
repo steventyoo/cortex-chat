@@ -2,19 +2,23 @@ import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
 import { getSupabase, uploadToStorage } from '@/lib/supabase';
 import { generatePipelineId } from '@/lib/pipeline';
-import { extractWithSkill } from '@/lib/skills';
-import { parseFileBuffer, isSupportedMimeType } from '@/lib/file-parser';
+import { isSupportedMimeType } from '@/lib/file-parser';
+import { publishProcessJob, ProcessPayload } from '@/lib/qstash';
 
-export const maxDuration = 120;
+export const maxDuration = 30;
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
 export async function POST(request: NextRequest) {
+  const t0 = Date.now();
+  const timing: Record<string, number> = {};
+
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = await validateUserSession(token || '');
   if (!session) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
+  timing.auth = Date.now() - t0;
 
   let formData: FormData;
   try {
@@ -52,7 +56,8 @@ export async function POST(request: NextRequest) {
   const now = new Date().toISOString();
   const sb = getSupabase();
 
-  // Create pipeline_log entry first so we have the record ID for the storage path
+  let tStep = Date.now();
+
   let recordId: string | null = null;
   try {
     const { data } = await sb.from('pipeline_log').insert({
@@ -60,16 +65,17 @@ export async function POST(request: NextRequest) {
       ...(projectId ? { project_id: projectId } : {}),
       org_id: orgId,
       file_name: fileName,
-      status: 'tier1_extracting',
+      status: 'queued',
       created_at: now,
-      ai_model: 'sonnet-classify+sonnet-extract',
+      ai_model: 'haiku-classify+sonnet-extract',
     }).select('id').single();
     if (data) recordId = String(data.id);
   } catch (err) {
     console.error('Failed to create pipeline record:', err);
   }
+  timing.db_insert = Date.now() - tStep;
 
-  // Upload original file to Supabase Storage
+  tStep = Date.now();
   const buffer = Buffer.from(await file.arrayBuffer());
   const storagePath = [
     orgId,
@@ -87,100 +93,64 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error('Storage upload failed (non-fatal):', err);
   }
+  timing.storage_upload = Date.now() - tStep;
 
-  // Update pipeline_log with file_url
   if (recordId && fileUrl) {
     await sb.from('pipeline_log').update({ file_url: fileUrl }).eq('id', recordId);
   }
 
-  // Parse file to extract text
-  let sourceText: string;
-  try {
-    const result = await parseFileBuffer(buffer, mimeType, fileName);
-    sourceText = result.text;
-  } catch (err) {
-    console.error('File parsing failed:', err);
-    if (recordId) {
-      await sb.from('pipeline_log').update({
-        status: 'intake',
-        validation_flags: [{
-          field: 'file_type',
-          issue: `Failed to extract text: ${err instanceof Error ? err.message : 'Unknown error'}`,
-          severity: 'error',
-        }],
-      }).eq('id', recordId);
-    }
-    return Response.json(
-      { error: `Failed to extract text from file: ${err instanceof Error ? err.message : 'Unknown'}` },
-      { status: 422 }
-    );
-  }
-
-  // Store extracted text
-  if (recordId) {
-    await sb.from('pipeline_log').update({
-      source_text: sourceText.substring(0, 500000),
-    }).eq('id', recordId);
-  }
-
-  // Run skill-based classification + extraction
-  let extraction;
-  let overallConfidence: number;
-  let flags;
-
-  try {
-    const result = await extractWithSkill(sourceText, projectId || '', orgId);
-    extraction = result.extraction;
-    overallConfidence = result.overallConfidence;
-    flags = result.flags;
-  } catch (err) {
-    console.error('AI extraction failed:', err);
-    if (recordId) {
-      await sb.from('pipeline_log').update({
-        status: 'intake',
-        validation_flags: [{
-          field: 'extraction',
-          issue: `AI extraction failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-          severity: 'error',
-        }],
-      }).eq('id', recordId);
-    }
-    return Response.json(
-      { error: 'AI extraction failed', pipelineId },
-      { status: 500 }
-    );
-  }
-
-  const hasErrors = flags.some((f) => f.severity === 'error');
-  const hasWarnings = flags.some((f) => f.severity === 'warning');
-  const autoApproveEligible = overallConfidence >= 0.95 && !hasErrors && !hasWarnings;
-  const finalStatus = autoApproveEligible ? 'tier2_validated' : hasErrors ? 'tier2_flagged' : 'pending_review';
-
+  tStep = Date.now();
+  let qstashMessageId: string | null = null;
   if (recordId) {
     try {
-      await sb.from('pipeline_log').update({
-        document_type: extraction.skillId || null,
-        status: finalStatus,
-        overall_confidence: overallConfidence,
-        extracted_data: extraction,
-        validation_flags: flags.length > 0 ? flags : null,
-        tier1_completed_at: new Date().toISOString(),
-        tier2_completed_at: new Date().toISOString(),
-      }).eq('id', recordId);
+      const baseUrl = getBaseUrl(request);
+      const payload: ProcessPayload = {
+        recordId,
+        orgId,
+        projectId,
+        fileName,
+        mimeType,
+        storagePath,
+      };
+      qstashMessageId = await publishProcessJob(payload, baseUrl);
+      console.log(`[upload] Queued processing for ${fileName} — qstash_msg=${qstashMessageId}`);
     } catch (err) {
-      console.error('Failed to update pipeline record:', err);
+      console.error('Failed to publish QStash job:', err);
+      // Fall back: mark as failed so user can retry
+      await sb.from('pipeline_log').update({
+        status: 'failed',
+        validation_flags: [{
+          field: 'queue',
+          issue: `Failed to queue processing: ${err instanceof Error ? err.message : 'Unknown'}`,
+          severity: 'error',
+        }],
+      }).eq('id', recordId);
     }
   }
+  timing.queue_publish = Date.now() - tStep;
+  timing.total = Date.now() - t0;
+
+  console.log(`[upload] ${fileName} (${(file.size / 1024).toFixed(0)}KB ${mimeType}) — ` +
+    Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
 
   return Response.json({
     pipelineId,
     recordId,
-    status: finalStatus,
+    status: 'queued',
     fileName,
     fileUrl,
-    extraction,
-    overallConfidence,
-    flags,
-    autoApproveEligible,
+    qstashMessageId,
+    timing,
   });
+}
+
+function getBaseUrl(request: NextRequest): string {
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
+  if (forwardedHost) {
+    return `${forwardedProto}://${forwardedHost}`;
+  }
+  const host = request.headers.get('host') || 'localhost:3000';
+  const proto = host.includes('localhost') ? 'http' : 'https';
+  return `${proto}://${host}`;
 }

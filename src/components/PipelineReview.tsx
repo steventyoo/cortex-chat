@@ -125,6 +125,15 @@ export default function PipelineReview() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
 
+  // Drive connection state
+  const [showDriveSetup, setShowDriveSetup] = useState(false);
+  const [driveFolderId, setDriveFolderId] = useState('');
+  const [savedDriveFolderId, setSavedDriveFolderId] = useState<string | null | undefined>(undefined);
+  const [serviceAccountEmail, setServiceAccountEmail] = useState<string | null>(null);
+  const [driveTestResult, setDriveTestResult] = useState<{ success: boolean; folderName?: string; subfolders?: { id: string; name: string }[]; error?: string } | null>(null);
+  const [testingDrive, setTestingDrive] = useState(false);
+  const [savingDrive, setSavingDrive] = useState(false);
+
   // Delete state
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -169,6 +178,28 @@ export default function PipelineReview() {
     fetchItems();
   }, [fetchItems]);
 
+  // Auto-poll while any items are queued or processing
+  useEffect(() => {
+    const hasInProgress = items.some(
+      (i) => i.status === 'queued' || i.status === 'processing' || i.status === 'tier1_extracting'
+    );
+    if (!hasInProgress) return;
+
+    const interval = setInterval(() => {
+      fetch('/api/pipeline/list')
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => {
+          if (data) {
+            setItems(data.items);
+            setStats(data.stats);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [items]);
+
   useEffect(() => {
     fetch('/api/skills').then(r => r.json()).then(d => {
       if (d.skills) {
@@ -190,6 +221,64 @@ export default function PipelineReview() {
       }
     }).catch(() => {});
   }, []);
+
+  // Load current Drive folder config
+  useEffect(() => {
+    fetch('/api/org/settings').then(r => r.json()).then(d => {
+      setSavedDriveFolderId(d.driveFolderId || null);
+      if (d.serviceAccountEmail) setServiceAccountEmail(d.serviceAccountEmail);
+    }).catch(() => {
+      setSavedDriveFolderId(null);
+    });
+  }, []);
+
+  const handleTestDrive = async () => {
+    if (!driveFolderId.trim()) return;
+    setTestingDrive(true);
+    setDriveTestResult(null);
+    try {
+      const res = await fetch('/api/onboarding/test-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderId: driveFolderId.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setDriveTestResult({ success: true, folderName: data.folderName, subfolders: data.subfolders });
+      } else {
+        setDriveTestResult({ success: false, error: data.error });
+      }
+    } catch {
+      setDriveTestResult({ success: false, error: 'Network error' });
+    } finally {
+      setTestingDrive(false);
+    }
+  };
+
+  const handleSaveDrive = async () => {
+    if (!driveFolderId.trim()) return;
+    setSavingDrive(true);
+    try {
+      const res = await fetch('/api/org/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ driveFolderId: driveFolderId.trim() }),
+      });
+      if (res.ok) {
+        setSavedDriveFolderId(driveFolderId.trim());
+        setShowDriveSetup(false);
+        setDriveTestResult(null);
+        setDriveFolderId('');
+      } else {
+        const err = await res.json();
+        alert(`Failed to save: ${err.error}`);
+      }
+    } catch {
+      alert('Network error saving Drive folder');
+    } finally {
+      setSavingDrive(false);
+    }
+  };
 
   const fetchSkillForItem = useCallback(async (item: PipelineItem) => {
     const extraction = item.extractedData;
@@ -373,13 +462,38 @@ export default function PipelineReview() {
         await fetchItems();
       } else {
         const err = await res.json();
-        alert(`Extraction failed: ${err.error}`);
+        alert(`Upload failed: ${err.error}`);
       }
     } catch (err) {
       console.error('Upload error:', err);
-      alert(`Failed to process document: ${err instanceof Error ? err.message : 'Network error'}`);
+      alert(`Failed to upload document: ${err instanceof Error ? err.message : 'Network error'}`);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  const handleRetry = async (recordId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRetryingId(recordId);
+    try {
+      const res = await fetch('/api/pipeline/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recordId }),
+      });
+      if (res.ok) {
+        await fetchItems();
+      } else {
+        const err = await res.json();
+        alert(`Retry failed: ${err.error}`);
+      }
+    } catch (err) {
+      console.error('Retry error:', err);
+      alert('Failed to retry');
+    } finally {
+      setRetryingId(null);
     }
   };
 
@@ -1068,6 +1182,22 @@ export default function PipelineReview() {
               Test
             </button>
 
+            {/* Drive settings button */}
+            <button
+              onClick={() => { setShowDriveSetup(!showDriveSetup); setDriveTestResult(null); }}
+              className={`p-2 rounded-xl border transition-colors ${
+                showDriveSetup
+                  ? 'border-[#007aff] bg-[#007aff]/5 text-[#007aff]'
+                  : 'border-[#e0e0e0] text-[#999] hover:bg-[#f7f7f5]'
+              }`}
+              title="Google Drive settings"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+              </svg>
+            </button>
+
             {/* Scan Drive button */}
             <motion.button
               whileTap={{ scale: 0.97 }}
@@ -1116,6 +1246,146 @@ export default function PipelineReview() {
           </div>
         )}
       </div>
+
+      {/* Drive setup panel */}
+      <AnimatePresence>
+        {showDriveSetup && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="border-b border-[#e8e8e8] overflow-hidden"
+          >
+            <div className="px-6 py-4 bg-[#fafafa]">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#4285f4]/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <svg width="16" height="16" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
+                    <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+                    <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0-1.2 4.5h27.5z" fill="#00ac47"/>
+                    <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 9.85z" fill="#ea4335"/>
+                    <path d="M43.65 25 57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+                    <path d="m59.8 53H27.5l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+                    <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25l16.15 28h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+                  </svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-[14px] font-semibold text-[#1a1a1a]">Google Drive Connection</h3>
+                    {savedDriveFolderId && (
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Connected</span>
+                    )}
+                  </div>
+                  {savedDriveFolderId && !driveFolderId && (
+                    <p className="text-[12px] text-[#999] mb-3">
+                      Current folder ID: <code className="text-[11px] bg-[#f0f0f0] px-1.5 py-0.5 rounded font-mono">{savedDriveFolderId}</code>
+                    </p>
+                  )}
+                  <p className="text-[12px] text-[#777] mb-3">
+                    {savedDriveFolderId
+                      ? 'Update your Google Drive folder or reconnect with a new one.'
+                      : 'Connect a Google Drive folder to scan documents automatically.'}
+                  </p>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[11px] font-medium text-[#555] mb-1">
+                        1. Share your Google Drive folder with the service account:
+                      </label>
+                      <button
+                        onClick={() => {
+                          if (serviceAccountEmail) navigator.clipboard.writeText(serviceAccountEmail);
+                        }}
+                        className="text-[12px] text-[#007aff] bg-[#f0f0f0] rounded-lg px-2.5 py-1 font-mono hover:bg-[#e8e8e8] transition-colors select-all"
+                      >
+                        {serviceAccountEmail || '(loading...)'} <span className="text-[10px]">📋</span>
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-medium text-[#555] mb-1">
+                        2. Paste your Google Drive folder ID:
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={driveFolderId}
+                          onChange={(e) => setDriveFolderId(e.target.value)}
+                          placeholder={savedDriveFolderId || 'e.g. 1AbCdEfGhIjKlMnOpQrStUvWxYz'}
+                          className="flex-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 bg-white"
+                        />
+                        <button
+                          onClick={handleTestDrive}
+                          disabled={!driveFolderId.trim() || testingDrive}
+                          className="px-4 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-medium text-[#555] hover:bg-white transition-colors disabled:opacity-40"
+                        >
+                          {testingDrive ? 'Testing...' : 'Test'}
+                        </button>
+                        <button
+                          onClick={handleSaveDrive}
+                          disabled={!driveFolderId.trim() || !driveTestResult?.success || savingDrive}
+                          className="px-4 py-2 rounded-lg bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40"
+                        >
+                          {savingDrive ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Test result */}
+                    {driveTestResult && (
+                      <div className={`rounded-lg px-3 py-2.5 text-[12px] ${
+                        driveTestResult.success
+                          ? 'bg-green-50 border border-green-200 text-green-800'
+                          : 'bg-red-50 border border-red-200 text-red-800'
+                      }`}>
+                        {driveTestResult.success ? (
+                          <div>
+                            <p className="font-medium">Connected to &ldquo;{driveTestResult.folderName}&rdquo;</p>
+                            {driveTestResult.subfolders && driveTestResult.subfolders.length > 0 && (
+                              <p className="mt-1 text-[11px] opacity-80">
+                                Found {driveTestResult.subfolders.length} subfolder{driveTestResult.subfolders.length !== 1 ? 's' : ''}: {driveTestResult.subfolders.slice(0, 5).map(f => f.name).join(', ')}{driveTestResult.subfolders.length > 5 ? '...' : ''}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <p>{driveTestResult.error}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setShowDriveSetup(false); setDriveTestResult(null); }}
+                  className="p-1.5 rounded-lg text-[#999] hover:text-[#1a1a1a] hover:bg-[#f0f0f0] transition-colors"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M18 6L6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* No Drive folder banner */}
+      {savedDriveFolderId === null && !showDriveSetup && !loading && (
+        <div className="px-6 py-3 bg-amber-50 border-b border-amber-200 flex items-center gap-3">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2" strokeLinecap="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <span className="text-[12px] text-amber-800 flex-1">
+            No Google Drive folder connected. Click the settings icon next to &quot;Scan Drive&quot; to connect one.
+          </span>
+          <button
+            onClick={() => setShowDriveSetup(true)}
+            className="text-[12px] font-medium text-amber-700 hover:text-amber-900 underline"
+          >
+            Connect now
+          </button>
+        </div>
+      )}
 
       {/* Test mode banner */}
       {testMode && (
@@ -1322,13 +1592,13 @@ export default function PipelineReview() {
                   }
                   className="flex items-center gap-2 px-5 py-2 rounded-lg bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {uploading ? (
+                    {uploading ? (
                     <>
                       <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
                         <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
                         <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
                       </svg>
-                      {uploadMode === 'file' ? 'Uploading & Extracting...' : 'Extracting with AI...'}
+                      {uploadMode === 'file' ? 'Uploading...' : 'Extracting with AI...'}
                     </>
                   ) : (
                     <>
@@ -1423,8 +1693,41 @@ export default function PipelineReview() {
                 {/* Status */}
                 <StatusBadge status={item.status} />
 
+                {/* Processing spinner for queued/processing items */}
+                {(item.status === 'queued' || item.status === 'processing') && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <svg className="animate-spin w-3.5 h-3.5 text-yellow-600" viewBox="0 0 24 24" fill="none">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                    </svg>
+                  </div>
+                )}
+
+                {/* Retry button for failed items */}
+                {item.status === 'failed' && (
+                  <button
+                    onClick={(e) => handleRetry(item.id, e)}
+                    disabled={retryingId === item.id}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors flex-shrink-0 disabled:opacity-50"
+                    title="Retry processing"
+                  >
+                    {retryingId === item.id ? (
+                      <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                        <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                      </svg>
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="M1 4v6h6" />
+                        <path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
+                      </svg>
+                    )}
+                    Retry
+                  </button>
+                )}
+
                 {/* Mark as Pushed button — for items not yet pushed */}
-                {item.status !== 'pushed' && item.status !== 'rejected' && (
+                {item.status !== 'pushed' && item.status !== 'rejected' && item.status !== 'queued' && item.status !== 'processing' && item.status !== 'failed' && (
                   <button
                     onClick={(e) => handleMarkAsPushed(item.id, item.fileName, e)}
                     disabled={markingPushedId === item.id}

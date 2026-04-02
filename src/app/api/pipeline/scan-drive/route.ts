@@ -1,33 +1,28 @@
 // Cron-triggered endpoint that scans Google Drive for new documents
-// and feeds them into the extraction pipeline.
+// and queues them for async processing via QStash.
 //
-// Called by Vercel Cron every 5 minutes. Also callable manually (admin only).
+// Called by Vercel Cron every 5 minutes. Also callable manually.
 //
 // Flow:
-//   1. List all files across project folders in Drive
+//   1. Recursively list all files across Drive folder tree
 //   2. Check pipeline_log for already-processed files (by Drive file ID)
-//   3. For new files (up to 3 per run):
-//      a. Download content
-//      b. Extract text (text files) or prepare base64 (PDF/images)
-//      c. Run AI extraction + validation via skill-based pipeline
-//      d. Create pipeline_log entry
+//   3. For new files (up to MAX_FILES_PER_RUN):
+//      a. Create pipeline_log entry with status 'queued'
+//      b. Publish QStash job to /api/pipeline/process
 //   4. Return summary
 
 import { NextRequest } from 'next/server';
 import {
   listAllDriveFiles,
-  downloadFileContent,
   buildDriveFileUrl,
   isSupportedFileType,
-  DriveFile,
 } from '@/lib/google-drive';
 import { generatePipelineId } from '@/lib/pipeline';
 import { fetchProjectList, getSupabase, getOrganization } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { extractWithSkill } from '@/lib/skills';
-import { extractTextWithClaude } from '@/lib/file-parser';
+import { publishProcessJob, ProcessPayload } from '@/lib/qstash';
 
-const MAX_FILES_PER_RUN = 3;
+const MAX_FILES_PER_RUN = 10;
 
 export const maxDuration = 120;
 
@@ -51,7 +46,6 @@ export async function GET(request: NextRequest) {
     }, { status: 503 });
   }
 
-  // Resolve the Drive folder ID: prefer per-org value from DB, fall back to env var
   let driveFolderId: string | undefined;
 
   const session = sessionToken ? await validateUserSession(sessionToken) : null;
@@ -74,10 +68,17 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const t0 = Date.now();
+    const timing: Record<string, number> = {};
+
+    let tStep = Date.now();
     const allDriveFiles = await listAllDriveFiles(driveFolderId);
     const supportedFiles = allDriveFiles.filter((f) => isSupportedFileType(f.mimeType));
+    timing.list_drive_files = Date.now() - tStep;
 
+    tStep = Date.now();
     const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles();
+    timing.dedup_query = Date.now() - tStep;
 
     const newFiles = supportedFiles.filter((f) => {
       if (processedFileUrls.has(buildDriveFileUrl(f.id))) return false;
@@ -87,14 +88,18 @@ export async function GET(request: NextRequest) {
     });
 
     if (newFiles.length === 0) {
+      timing.total = Date.now() - t0;
+      console.log(`[scan-drive] No new files (${supportedFiles.length} total, ${processedFileUrls.size} processed) — ${fmtTiming(timing)}`);
       return Response.json({
         message: 'No new files found',
         totalDriveFiles: allDriveFiles.length,
         supportedFiles: supportedFiles.length,
         alreadyProcessed: processedFileUrls.size,
+        timing,
       });
     }
 
+    tStep = Date.now();
     const projects = await fetchProjectList();
     const folderLookup = new Map<string, string>();
     for (const p of projects) {
@@ -103,10 +108,8 @@ export async function GET(request: NextRequest) {
       folderLookup.set(p.projectId.toLowerCase().replace(/[-_]/g, ' '), p.projectId);
       folderLookup.set(p.projectName.toLowerCase().replace(/\s+/g, '-'), p.projectId);
     }
+    timing.fetch_projects = Date.now() - tStep;
 
-    const filesToProcess = newFiles.slice(0, MAX_FILES_PER_RUN);
-
-    // Resolve orgId: from session for logged-in users, or from DB for cron calls
     let orgId = session?.orgId || '';
     if (!orgId && driveFolderId) {
       const sb = getSupabase();
@@ -119,19 +122,74 @@ export async function GET(request: NextRequest) {
       if (orgRow?.org_id) orgId = orgRow.org_id;
     }
 
+    const filesToQueue = newFiles.slice(0, MAX_FILES_PER_RUN);
+    const baseUrl = getBaseUrl(request);
+    const sb = getSupabase();
+    const now = new Date().toISOString();
+
     const results: Array<{
       fileName: string;
       driveId: string;
       status: string;
       pipelineId?: string;
+      projectId?: string;
       error?: string;
     }> = [];
 
-    for (const file of filesToProcess) {
+    tStep = Date.now();
+    for (const file of filesToQueue) {
       try {
-        const result = await processFile(file, folderLookup, orgId);
-        results.push(result);
+        let projectId = '';
+        if (file.parentFolderName && file.parentFolderName !== '_Root') {
+          projectId = matchProject(file.parentFolderName, folderLookup);
+        }
+
+        const pipelineId = generatePipelineId();
+        const driveFileUrl = buildDriveFileUrl(file.id);
+
+        const { data: createData, error: createError } = await sb
+          .from('pipeline_log')
+          .insert({
+            pipeline_id: pipelineId,
+            ...(projectId ? { project_id: projectId } : {}),
+            org_id: orgId,
+            file_name: file.name,
+            file_url: driveFileUrl,
+            status: 'queued',
+            created_at: now,
+            ai_model: 'haiku-classify+sonnet-extract',
+          })
+          .select('id')
+          .single();
+
+        if (createError) {
+          throw new Error(`DB insert failed: ${createError.message}`);
+        }
+
+        const recordId = String(createData.id);
+
+        const payload: ProcessPayload = {
+          recordId,
+          orgId,
+          projectId: projectId || null,
+          fileName: file.name,
+          mimeType: file.mimeType,
+          storagePath: '',
+          driveFileId: file.id,
+        };
+
+        const msgId = await publishProcessJob(payload, baseUrl);
+        console.log(`[scan-drive] Queued ${file.name} → qstash_msg=${msgId}`);
+
+        results.push({
+          fileName: file.name,
+          driveId: file.id,
+          status: 'queued',
+          pipelineId,
+          projectId: projectId || '(unmatched)',
+        });
       } catch (err) {
+        console.error(`[scan-drive] Failed to queue ${file.name}:`, err);
         results.push({
           fileName: file.name,
           driveId: file.id,
@@ -140,14 +198,19 @@ export async function GET(request: NextRequest) {
         });
       }
     }
+    timing.queue_files = Date.now() - tStep;
+    timing.total = Date.now() - t0;
+
+    console.log(`[scan-drive] Queued ${results.filter((r) => r.status === 'queued').length}/${filesToQueue.length} files — ${fmtTiming(timing)}`);
 
     return Response.json({
-      message: `Processed ${results.length} new file(s)`,
+      message: `Queued ${results.filter((r) => r.status === 'queued').length} file(s) for processing`,
       totalDriveFiles: allDriveFiles.length,
       supportedFiles: supportedFiles.length,
       newFilesFound: newFiles.length,
-      processed: results,
+      queued: results,
       remainingNewFiles: Math.max(0, newFiles.length - MAX_FILES_PER_RUN),
+      timing,
     });
   } catch (err) {
     console.error('Drive scan error:', err);
@@ -167,6 +230,22 @@ export async function GET(request: NextRequest) {
 }
 
 // ─── Helper Functions ────────────────────────────────────────────
+
+function matchProject(folderName: string, lookup: Map<string, string>): string {
+  const folderLower = folderName.toLowerCase();
+  let projectId = lookup.get(folderLower) || '';
+  if (!projectId) projectId = lookup.get(folderLower.replace(/[-_]/g, ' ')) || '';
+  if (!projectId) projectId = lookup.get(folderLower.replace(/\s+/g, '-')) || '';
+  if (!projectId) {
+    for (const [key, id] of lookup) {
+      if (folderLower.includes(key) || key.includes(folderLower)) {
+        projectId = id;
+        break;
+      }
+    }
+  }
+  return projectId;
+}
 
 async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: Set<string> }> {
   const urls = new Set<string>();
@@ -189,186 +268,20 @@ async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: 
     console.error('Failed to fetch processed file IDs:', err);
   }
 
-  console.log(`Dedup loaded: ${urls.size} URLs, ${nameKeys.size} name keys`);
   return { urls, nameKeys };
 }
 
-async function processFile(
-  file: DriveFile,
-  folderLookup: Map<string, string>,
-  orgId: string
-): Promise<{
-  fileName: string;
-  driveId: string;
-  status: string;
-  pipelineId?: string;
-  projectId?: string;
-  error?: string;
-}> {
-  const pipelineId = generatePipelineId();
-  const driveFileUrl = buildDriveFileUrl(file.id);
-  const now = new Date().toISOString();
-  const sb = getSupabase();
+function fmtTiming(t: Record<string, number>): string {
+  return Object.entries(t).map(([k, v]) => `${k}=${v}ms`).join(' ');
+}
 
-  let projectId = '';
-  if (file.parentFolderName && file.parentFolderName !== '_Root') {
-    const folderLower = file.parentFolderName.toLowerCase();
-    projectId = folderLookup.get(folderLower) || '';
-    if (!projectId) projectId = folderLookup.get(folderLower.replace(/[-_]/g, ' ')) || '';
-    if (!projectId) projectId = folderLookup.get(folderLower.replace(/\s+/g, '-')) || '';
-    if (!projectId) {
-      for (const [key, id] of folderLookup) {
-        if (folderLower.includes(key) || key.includes(folderLower)) {
-          projectId = id;
-          break;
-        }
-      }
-    }
+function getBaseUrl(request: NextRequest): string {
+  const forwardedHost = request.headers.get('x-forwarded-host');
+  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
+  if (forwardedHost) {
+    return `${forwardedProto}://${forwardedHost}`;
   }
-
-  const { count: dupCount } = await sb
-    .from('pipeline_log')
-    .select('id', { count: 'exact', head: true })
-    .eq('file_url', driveFileUrl)
-    .neq('status', 'deleted');
-
-  if ((dupCount || 0) > 0) {
-    return {
-      fileName: file.name,
-      driveId: file.id,
-      status: 'already_exists',
-      pipelineId,
-    };
-  }
-
-  const { data: createData, error: createError } = await sb
-    .from('pipeline_log')
-    .insert({
-      pipeline_id: pipelineId,
-      ...(projectId ? { project_id: projectId } : {}),
-      org_id: orgId,
-      file_name: file.name,
-      file_url: driveFileUrl,
-      status: 'tier1_extracting',
-      created_at: now,
-      ai_model: 'sonnet-classify+sonnet-extract',
-    })
-    .select('id')
-    .single();
-
-  if (createError) {
-    throw new Error(`Failed to create pipeline record: ${createError.message}`);
-  }
-
-  const recordId = createData?.id ? String(createData.id) : null;
-
-  const content = await downloadFileContent(file.id, file.mimeType);
-
-  // Guard against oversized files that will fail in Claude's API
-  const MAX_BASE64_SIZE = 25 * 1024 * 1024; // ~25MB
-  if (content.base64 && content.base64.length > MAX_BASE64_SIZE) {
-    if (recordId) {
-      await sb.from('pipeline_log').update({
-        status: 'intake',
-        validation_flags: [{
-          field: 'file_size',
-          issue: `File too large for AI processing (${Math.round(content.base64.length / 1024 / 1024)}MB). Max ~25MB.`,
-          severity: 'error',
-        }],
-      }).eq('id', recordId);
-    }
-    return { fileName: file.name, driveId: file.id, status: 'too_large', pipelineId };
-  }
-
-  if (content.method === 'unsupported') {
-    if (recordId) {
-      await sb.from('pipeline_log').update({
-        status: 'intake',
-        validation_flags: [{
-          field: 'file_type',
-          issue: `Unsupported file type: ${file.mimeType}`,
-          severity: 'error',
-        }],
-      }).eq('id', recordId);
-    }
-    return { fileName: file.name, driveId: file.id, status: 'unsupported_type', pipelineId };
-  }
-
-  let sourceText: string;
-
-  if (content.text) {
-    sourceText = content.text;
-  } else if (content.base64 && (content.method === 'pdf' || content.method === 'image')) {
-    sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
-  } else {
-    if (recordId) {
-      await sb.from('pipeline_log').update({
-        status: 'intake',
-        validation_flags: [{
-          field: 'extraction',
-          issue: 'Could not extract text from file',
-          severity: 'error',
-        }],
-      }).eq('id', recordId);
-    }
-    return { fileName: file.name, driveId: file.id, status: 'extraction_failed', pipelineId };
-  }
-
-  if (recordId) {
-    const { error: srcErr } = await sb.from('pipeline_log').update({
-      source_text: sourceText.substring(0, 500000),
-    }).eq('id', recordId);
-    if (srcErr) console.error('Failed to save source_text:', srcErr.message);
-  }
-
-  // Skill-based extraction (classify → extract → validate)
-  let extraction;
-  let overallConfidence: number;
-  let flags;
-
-  try {
-    const result = await extractWithSkill(sourceText, projectId);
-    extraction = result.extraction;
-    overallConfidence = result.overallConfidence;
-    flags = result.flags;
-  } catch (err) {
-    console.error('AI extraction failed for Drive file:', file.name, err);
-    if (recordId) {
-      await sb.from('pipeline_log').update({
-        status: 'intake',
-        validation_flags: [{
-          field: 'extraction',
-          issue: `AI extraction failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
-          severity: 'error',
-        }],
-      }).eq('id', recordId);
-    }
-    return { fileName: file.name, driveId: file.id, status: 'ai_extraction_failed', pipelineId };
-  }
-
-  const hasErrors = flags.some((f) => f.severity === 'error');
-  const hasWarnings = flags.some((f) => f.severity === 'warning');
-  const autoApproveEligible = overallConfidence >= 0.95 && !hasErrors && !hasWarnings;
-  const finalStatus = autoApproveEligible ? 'tier2_validated' : hasErrors ? 'tier2_flagged' : 'pending_review';
-
-  if (recordId) {
-    const { error: updateErr } = await sb.from('pipeline_log').update({
-      document_type: extraction.skillId || null,
-      status: finalStatus,
-      overall_confidence: overallConfidence,
-      extracted_data: extraction,
-      validation_flags: flags.length > 0 ? flags : null,
-      tier1_completed_at: new Date().toISOString(),
-      tier2_completed_at: new Date().toISOString(),
-    }).eq('id', recordId);
-    if (updateErr) console.error('Failed to update extraction results:', updateErr.message);
-  }
-
-  return {
-    fileName: file.name,
-    driveId: file.id,
-    status: finalStatus,
-    pipelineId,
-    projectId: projectId || '(unmatched)',
-  };
+  const host = request.headers.get('host') || 'localhost:3000';
+  const proto = host.includes('localhost') ? 'http' : 'https';
+  return `${proto}://${host}`;
 }

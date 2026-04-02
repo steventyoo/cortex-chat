@@ -74,7 +74,7 @@ export async function GET(request: NextRequest) {
       rejected: items.filter((i: { status: string }) => i.status === 'rejected').length,
       flagged: items.filter((i: { status: string }) => i.status === 'tier2_flagged').length,
       processing: items.filter((i: { status: string }) =>
-        i.status === 'tier1_extracting' || i.status === 'tier2_validating'
+        i.status === 'queued' || i.status === 'processing' || i.status === 'tier1_extracting' || i.status === 'tier2_validating'
       ).length,
     };
 

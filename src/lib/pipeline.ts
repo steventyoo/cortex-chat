@@ -2,6 +2,9 @@
 
 export type PipelineStatus =
   | 'intake'
+  | 'queued'
+  | 'processing'
+  | 'failed'
   | 'tier1_extracting'
   | 'tier1_complete'
   | 'tier2_validating'
@@ -130,6 +133,12 @@ export function getStatusDisplay(status: PipelineStatus): { label: string; color
   switch (status) {
     case 'intake':
       return { label: 'Intake', color: 'text-gray-600', bgColor: 'bg-gray-100' };
+    case 'queued':
+      return { label: 'Queued', color: 'text-purple-600', bgColor: 'bg-purple-100' };
+    case 'processing':
+      return { label: 'Processing…', color: 'text-yellow-700', bgColor: 'bg-yellow-100' };
+    case 'failed':
+      return { label: 'Failed', color: 'text-red-700', bgColor: 'bg-red-100' };
     case 'tier1_extracting':
       return { label: 'AI Extracting', color: 'text-yellow-700', bgColor: 'bg-yellow-100' };
     case 'tier1_complete':
