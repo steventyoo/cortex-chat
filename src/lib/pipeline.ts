@@ -47,7 +47,7 @@ export interface ValidationFlag {
 }
 
 export interface PipelineItem {
-  id: string; // Airtable record ID
+  id: string;
   pipelineId: string;
   projectId: string;
   fileName: string;
@@ -70,6 +70,12 @@ export interface PipelineItem {
   tier2CompletedAt: string | null;
   reviewedAt: string | null;
   pushedAt: string | null;
+  driveFileId: string | null;
+  driveWebViewLink: string | null;
+  driveFolderPath: string | null;
+  driveModifiedTime: string | null;
+  storagePath: string | null;
+  isLatestVersion: boolean;
 }
 
 // Generate a pipeline ID
@@ -204,5 +210,11 @@ export function parsePipelineItem(record: { id: string; fields: Record<string, u
     tier2CompletedAt: f['Tier2 Completed At'] ? String(f['Tier2 Completed At']) : null,
     reviewedAt: f['Reviewed At'] ? String(f['Reviewed At']) : null,
     pushedAt: f['Pushed At'] ? String(f['Pushed At']) : null,
+    driveFileId: f['Drive File ID'] ? String(f['Drive File ID']) : null,
+    driveWebViewLink: f['Drive Web View Link'] ? String(f['Drive Web View Link']) : null,
+    driveFolderPath: f['Drive Folder Path'] ? String(f['Drive Folder Path']) : null,
+    driveModifiedTime: f['Drive Modified Time'] ? String(f['Drive Modified Time']) : null,
+    storagePath: f['Storage Path'] ? String(f['Storage Path']) : null,
+    isLatestVersion: f['Is Latest Version'] !== false,
   };
 }
