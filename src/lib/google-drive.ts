@@ -27,7 +27,8 @@ export interface DriveFile {
   webViewLink: string;
   size: number;
   parentFolderId: string;
-  parentFolderName: string; // project folder name
+  parentFolderName: string;
+  folderPath: string; // full path from root, e.g. "1705 SES / Contracts"
 }
 
 export interface DriveFolder {
@@ -107,7 +108,8 @@ export async function listProjectFolders(rootFolderIdOverride?: string): Promise
  */
 export async function listFilesInFolder(
   folderId: string,
-  folderName: string
+  folderName: string,
+  folderPath: string = folderName
 ): Promise<DriveFile[]> {
   const drive = getDriveClient();
   const files: DriveFile[] = [];
@@ -132,6 +134,7 @@ export async function listFilesInFolder(
         size: Number(f.size || 0),
         parentFolderId: folderId,
         parentFolderName: folderName,
+        folderPath,
       });
     }
     pageToken = res.data.nextPageToken || undefined;
@@ -142,28 +145,29 @@ export async function listFilesInFolder(
 
 /**
  * List ALL files across all folders (recursive), tagged with their
- * top-level project folder name. Nested sub-folders inherit the
- * project name from their closest top-level ancestor.
+ * top-level project folder name and full folder path from root.
+ * Nested sub-folders inherit the project name from their closest
+ * top-level ancestor.
  */
 export async function listAllDriveFiles(rootFolderIdOverride?: string): Promise<DriveFile[]> {
   const rootId = rootFolderIdOverride || getRootFolderId();
   const allFiles: DriveFile[] = [];
 
-  async function crawl(folderId: string, projectName: string): Promise<void> {
+  async function crawl(folderId: string, projectName: string, currentPath: string): Promise<void> {
     const [files, subfolders] = await Promise.all([
-      listFilesInFolder(folderId, projectName),
+      listFilesInFolder(folderId, projectName, currentPath),
       listSubfolders(folderId),
     ]);
     allFiles.push(...files);
     await Promise.all(
-      subfolders.map((sf) => crawl(sf.id, projectName))
+      subfolders.map((sf) => crawl(sf.id, projectName, `${currentPath} / ${sf.name}`))
     );
   }
 
   const topFolders = await listProjectFolders(rootId);
 
-  const rootFilesPromise = listFilesInFolder(rootId, '_Root');
-  const subCrawls = topFolders.map((folder) => crawl(folder.id, folder.name));
+  const rootFilesPromise = listFilesInFolder(rootId, '_Root', '_Root');
+  const subCrawls = topFolders.map((folder) => crawl(folder.id, folder.name, folder.name));
 
   const [rootFiles] = await Promise.all([rootFilesPromise, ...subCrawls]);
   allFiles.push(...rootFiles);
@@ -416,4 +420,34 @@ export function isSupportedFileType(mimeType: string): boolean {
     EMAIL_TYPES.some((t) => mimeType === t) ||
     GOOGLE_DOC_TYPES.some((t) => mimeType.startsWith(t))
   );
+}
+
+/**
+ * Download the raw bytes of a Drive file (for uploading to Supabase Storage).
+ * Google Docs/Sheets/Slides are exported as their equivalent MIME type.
+ */
+export async function downloadFileRaw(
+  fileId: string,
+  mimeType: string
+): Promise<{ buffer: Buffer; effectiveMimeType: string }> {
+  const drive = getDriveClient();
+
+  if (GOOGLE_DOC_TYPES.some((t) => mimeType.startsWith(t))) {
+    const exportMime = mimeType.includes('spreadsheet')
+      ? 'text/csv'
+      : mimeType.includes('presentation')
+        ? 'application/pdf'
+        : 'text/plain';
+    const res = await drive.files.export(
+      { fileId, mimeType: exportMime },
+      { responseType: 'arraybuffer' }
+    );
+    return { buffer: Buffer.from(res.data as ArrayBuffer), effectiveMimeType: exportMime };
+  }
+
+  const res = await drive.files.get(
+    { fileId, alt: 'media' },
+    { responseType: 'arraybuffer' }
+  );
+  return { buffer: Buffer.from(res.data as ArrayBuffer), effectiveMimeType: mimeType };
 }

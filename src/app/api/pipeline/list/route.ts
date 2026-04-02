@@ -13,10 +13,15 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('projectId');
   const status = searchParams.get('status');
+  const showAllVersions = searchParams.get('allVersions') === 'true';
 
   try {
     const sb = getSupabase();
     let query = sb.from('pipeline_log').select('*').eq('org_id', session.orgId).neq('status', 'deleted').order('created_at', { ascending: false }).limit(100);
+
+    if (!showAllVersions) {
+      query = query.neq('is_latest_version', false);
+    }
 
     if (projectId) query = query.eq('project_id', projectId);
     if (status) {
@@ -64,6 +69,12 @@ export async function GET(request: NextRequest) {
       fields['Tier2 Completed At'] = row.tier2_completed_at;
       fields['Reviewed At'] = row.reviewed_at;
       fields['Pushed At'] = row.pushed_at;
+      fields['Drive File ID'] = row.drive_file_id;
+      fields['Drive Web View Link'] = row.drive_web_view_link;
+      fields['Drive Folder Path'] = row.drive_folder_path;
+      fields['Drive Modified Time'] = row.drive_modified_time;
+      fields['Storage Path'] = row.storage_path;
+      fields['Is Latest Version'] = row.is_latest_version;
       return parsePipelineItem({ id: String(row.id), fields });
     });
 

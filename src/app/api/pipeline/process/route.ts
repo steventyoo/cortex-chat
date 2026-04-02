@@ -4,7 +4,7 @@ import { extractWithSkill } from '@/lib/skills';
 import { parseFileBuffer, extractTextWithClaude } from '@/lib/file-parser';
 import { ValidationFlag } from '@/lib/pipeline';
 import { getQStashReceiver, ProcessPayload } from '@/lib/qstash';
-import { downloadFileContent } from '@/lib/google-drive';
+import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
 import { extractText as pdfExtractText } from 'unpdf';
 
 export const maxDuration = 300;
@@ -24,15 +24,20 @@ export async function POST(request: NextRequest) {
       const receiver = getQStashReceiver();
       await receiver.verify({ signature, body, url: `${getBaseUrl(request)}/api/pipeline/process` });
     } catch (err) {
-      console.error('QStash signature verification failed:', err);
+      console.error('[process] QStash signature verification failed:', err);
       return Response.json({ error: 'Invalid signature' }, { status: 401 });
     }
   }
 
   const payload: ProcessPayload = JSON.parse(body);
-  const { recordId, orgId, projectId, fileName, mimeType, storagePath, driveFileId } = payload;
+  const {
+    recordId, orgId, projectId, fileName, mimeType, storagePath,
+    driveFileId, driveModifiedTime, driveWebViewLink, driveFolderPath,
+  } = payload;
   const t0 = Date.now();
   const timing: Record<string, number> = {};
+
+  console.log(`[process] START record=${recordId} file="${fileName}" mime=${mimeType} drive=${driveFileId || 'n/a'}`);
 
   const sb = getSupabase();
 
@@ -40,42 +45,101 @@ export async function POST(request: NextRequest) {
 
   let tStep = Date.now();
   let sourceText: string;
+  let finalStoragePath = storagePath;
 
   if (driveFileId) {
+    // --- Drive file: download raw bytes → upload to Supabase Storage ---
+    let rawBuffer: Buffer | null = null;
+
     try {
+      console.log(`[process] Downloading raw file from Drive: drive_id=${driveFileId}`);
+      const { buffer, effectiveMimeType } = await downloadFileRaw(driveFileId, mimeType);
+      rawBuffer = buffer;
+      timing.drive_raw_download = Date.now() - tStep;
+      console.log(`[process] Drive raw download complete: ${buffer.length} bytes, effectiveMime=${effectiveMimeType}`);
+
+      // Upload to Supabase Storage for redundancy
+      tStep = Date.now();
+      const ext = fileName.includes('.') ? fileName.split('.').pop() : 'bin';
+      const storageDest = `${orgId}/drive/${driveFileId}/${Date.now()}.${ext}`;
+      console.log(`[process] Uploading to Supabase Storage: bucket=${DOCUMENTS_BUCKET} path=${storageDest}`);
+      const { error: uploadErr } = await sb.storage
+        .from(DOCUMENTS_BUCKET)
+        .upload(storageDest, buffer, {
+          contentType: effectiveMimeType,
+          upsert: true,
+        });
+      if (uploadErr) {
+        console.warn(`[process] Storage upload failed (non-fatal): ${uploadErr.message}`);
+      } else {
+        finalStoragePath = storageDest;
+        console.log(`[process] Storage upload OK: path=${storageDest}`);
+      }
+      timing.storage_upload = Date.now() - tStep;
+    } catch (err) {
+      console.error(`[process] Drive raw download failed for ${recordId}:`, err);
+    }
+
+    // --- Extract text content ---
+    tStep = Date.now();
+    try {
+      console.log(`[process] Extracting text from Drive file: method=downloadFileContent`);
       const content = await downloadFileContent(driveFileId, mimeType);
-      timing.drive_download = Date.now() - tStep;
+      timing.drive_content_download = Date.now() - tStep;
 
       tStep = Date.now();
       if (content.text) {
         sourceText = content.text;
+        console.log(`[process] Text extracted directly: ${sourceText.length} chars`);
       } else if (content.base64 && content.method === 'pdf') {
-        const pdfBuffer = Buffer.from(content.base64, 'base64');
+        const pdfBuffer = rawBuffer || Buffer.from(content.base64, 'base64');
         try {
           const { text: localText } = await pdfExtractText(new Uint8Array(pdfBuffer), { mergePages: true });
           const trimmed = (localText as string).trim();
           if (trimmed.length > 100) {
             sourceText = trimmed;
+            console.log(`[process] PDF text via unpdf: ${sourceText.length} chars`);
           } else {
+            console.log(`[process] unpdf returned sparse text (${trimmed.length} chars), falling back to Claude OCR`);
             sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
           }
         } catch {
+          console.log(`[process] unpdf failed, falling back to Claude OCR`);
           sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
         }
       } else if (content.base64 && content.method === 'image') {
+        console.log(`[process] Image OCR via Claude`);
         sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
       } else {
         throw new Error(`Could not extract text from Drive file (method=${content.method})`);
       }
       timing.text_extraction = Date.now() - tStep;
     } catch (err) {
-      console.error(`[process] Drive download/parse failed for ${recordId}:`, err);
+      console.error(`[process] Drive text extraction failed for ${recordId}:`, err);
       await markFailed(sb, recordId, 'drive_download', err);
-      return Response.json({ error: 'Failed to download from Drive' }, { status: 500 });
+      return Response.json({ error: 'Failed to extract text from Drive file' }, { status: 500 });
     }
+
+    // Persist Drive metadata on the record
+    tStep = Date.now();
+    const driveMetaUpdate: Record<string, unknown> = {};
+    if (finalStoragePath) driveMetaUpdate.storage_path = finalStoragePath;
+    if (driveModifiedTime) driveMetaUpdate.drive_modified_time = driveModifiedTime;
+    if (driveWebViewLink) driveMetaUpdate.drive_web_view_link = driveWebViewLink;
+    if (driveFolderPath) driveMetaUpdate.drive_folder_path = driveFolderPath;
+    if (driveFileId) driveMetaUpdate.drive_file_id = driveFileId;
+
+    if (Object.keys(driveMetaUpdate).length > 0) {
+      const { error: metaErr } = await sb.from('pipeline_log').update(driveMetaUpdate).eq('id', recordId);
+      if (metaErr) console.warn(`[process] Drive metadata update failed (non-fatal): ${metaErr.message}`);
+      else console.log(`[process] Drive metadata saved: ${JSON.stringify(driveMetaUpdate)}`);
+    }
+    timing.drive_meta_save = Date.now() - tStep;
   } else {
+    // --- Direct upload: download from Supabase Storage ---
     let fileBuffer: Buffer;
     try {
+      console.log(`[process] Downloading from Supabase Storage: path=${storagePath}`);
       const { data, error } = await sb.storage
         .from(DOCUMENTS_BUCKET)
         .download(storagePath);
@@ -83,6 +147,7 @@ export async function POST(request: NextRequest) {
         throw new Error(error?.message || 'No data returned from storage');
       }
       fileBuffer = Buffer.from(await data.arrayBuffer());
+      console.log(`[process] Storage download complete: ${fileBuffer.length} bytes`);
     } catch (err) {
       console.error(`[process] Failed to download file for ${recordId}:`, err);
       await markFailed(sb, recordId, 'storage_download', err);
@@ -94,6 +159,7 @@ export async function POST(request: NextRequest) {
     try {
       const result = await parseFileBuffer(fileBuffer, mimeType, fileName);
       sourceText = result.text;
+      console.log(`[process] File parsed: ${sourceText.length} chars`);
     } catch (err) {
       console.error(`[process] File parsing failed for ${recordId}:`, err);
       await markFailed(sb, recordId, 'text_extraction', err);
@@ -107,6 +173,7 @@ export async function POST(request: NextRequest) {
     source_text: sourceText.substring(0, 500000),
   }).eq('id', recordId);
   timing.save_source_text = Date.now() - tStep;
+  console.log(`[process] Source text saved: ${Math.min(sourceText.length, 500000)} chars`);
 
   tStep = Date.now();
   let extraction;
@@ -114,10 +181,12 @@ export async function POST(request: NextRequest) {
   let flags: ValidationFlag[];
 
   try {
+    console.log(`[process] Starting AI extraction: project=${projectId || 'none'} org=${orgId}`);
     const result = await extractWithSkill(sourceText, projectId || '', orgId);
     extraction = result.extraction;
     overallConfidence = result.overallConfidence;
     flags = result.flags;
+    console.log(`[process] AI extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} flags=${flags.length}`);
   } catch (err) {
     console.error(`[process] AI extraction failed for ${recordId}:`, err);
     await markFailed(sb, recordId, 'ai_extraction', err);
@@ -142,13 +211,14 @@ export async function POST(request: NextRequest) {
       tier1_completed_at: new Date().toISOString(),
       tier2_completed_at: new Date().toISOString(),
     }).eq('id', recordId);
+    console.log(`[process] Final status saved: ${finalStatus}`);
   } catch (err) {
     console.error(`[process] Failed to update pipeline record ${recordId}:`, err);
   }
   timing.db_final_update = Date.now() - tStep;
   timing.total = Date.now() - t0;
 
-  console.log(`[process] ${fileName} (${recordId}) → ${finalStatus} — ` +
+  console.log(`[process] DONE record=${recordId} file="${fileName}" status=${finalStatus} — ` +
     Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
 
   return Response.json({ success: true, recordId, status: finalStatus, timing });

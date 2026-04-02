@@ -89,19 +89,29 @@ export async function GET(request: NextRequest) {
       if (orgRow?.org_id) orgId = orgRow.org_id;
     }
 
-    const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles(orgId);
+    const { urls: processedFileUrls, nameKeys: processedNameKeys, driveVersions } = await getProcessedDriveFiles(orgId);
     timing.dedup_query = Date.now() - tStep;
 
-    const newFiles = supportedFiles.filter((f) => {
-      if (processedFileUrls.has(buildDriveFileUrl(f.id))) return false;
-      const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
-      if (processedNameKeys.has(nameKey)) return false;
-      return true;
-    });
+    const newFiles: typeof supportedFiles = [];
+    const updatedFiles: Array<{ file: typeof supportedFiles[0]; previousRecordId: number }> = [];
 
-    if (newFiles.length === 0) {
+    for (const f of supportedFiles) {
+      const existing = driveVersions.get(f.id);
+      if (existing) {
+        if (existing.modifiedTime && f.modifiedTime > existing.modifiedTime) {
+          updatedFiles.push({ file: f, previousRecordId: existing.recordId });
+        }
+        continue;
+      }
+      if (processedFileUrls.has(buildDriveFileUrl(f.id))) continue;
+      const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
+      if (processedNameKeys.has(nameKey)) continue;
+      newFiles.push(f);
+    }
+
+    if (newFiles.length === 0 && updatedFiles.length === 0) {
       timing.total = Date.now() - t0;
-      console.log(`[scan-drive] No new files (${supportedFiles.length} total, ${processedFileUrls.size} processed) — ${fmtTiming(timing)}`);
+      console.log(`[scan-drive] No changes (${supportedFiles.length} total, ${processedFileUrls.size} processed) — ${fmtTiming(timing)}`);
       return Response.json({
         message: 'No new files found',
         totalDriveFiles: allDriveFiles.length,
@@ -110,6 +120,9 @@ export async function GET(request: NextRequest) {
         timing,
       });
     }
+
+    console.log(`[scan-drive] Found ${newFiles.length} new, ${updatedFiles.length} updated files`);
+
 
     tStep = Date.now();
     const projects = await fetchProjectList();
@@ -123,6 +136,7 @@ export async function GET(request: NextRequest) {
     timing.fetch_projects = Date.now() - tStep;
 
     const filesToQueue = newFiles.slice(0, MAX_FILES_PER_RUN);
+    const updatedToQueue = updatedFiles.slice(0, Math.max(0, MAX_FILES_PER_RUN - filesToQueue.length));
     const baseUrl = getBaseUrl(request);
     const sb = getSupabase();
     const now = new Date().toISOString();
@@ -133,10 +147,90 @@ export async function GET(request: NextRequest) {
       status: string;
       pipelineId?: string;
       projectId?: string;
+      isUpdate?: boolean;
       error?: string;
     }> = [];
 
     tStep = Date.now();
+
+    // Queue updated files first (mark old version, create new entry)
+    for (const { file, previousRecordId } of updatedToQueue) {
+      try {
+        console.log(`[scan-drive] Updated file detected: ${file.name} (drive_id=${file.id}, prev_record=${previousRecordId})`);
+
+        await sb
+          .from('pipeline_log')
+          .update({ is_latest_version: false })
+          .eq('id', previousRecordId);
+
+        let projectId = '';
+        if (file.parentFolderName && file.parentFolderName !== '_Root') {
+          projectId = matchProject(file.parentFolderName, folderLookup);
+        }
+
+        const pipelineId = generatePipelineId();
+        const driveFileUrl = buildDriveFileUrl(file.id);
+
+        const { data: createData, error: createError } = await sb
+          .from('pipeline_log')
+          .insert({
+            pipeline_id: pipelineId,
+            ...(projectId ? { project_id: projectId } : {}),
+            org_id: orgId,
+            file_name: file.name,
+            file_url: driveFileUrl,
+            status: 'queued',
+            created_at: now,
+            ai_model: 'haiku-classify+sonnet-extract',
+            drive_file_id: file.id,
+            drive_modified_time: file.modifiedTime,
+            drive_web_view_link: file.webViewLink,
+            drive_folder_path: file.folderPath,
+            is_latest_version: true,
+          })
+          .select('id')
+          .single();
+
+        if (createError) throw new Error(`DB insert failed: ${createError.message}`);
+
+        const recordId = String(createData.id);
+        const payload: ProcessPayload = {
+          recordId,
+          orgId,
+          projectId: projectId || null,
+          fileName: file.name,
+          mimeType: file.mimeType,
+          storagePath: '',
+          driveFileId: file.id,
+          driveModifiedTime: file.modifiedTime,
+          driveWebViewLink: file.webViewLink,
+          driveFolderPath: file.folderPath,
+        };
+
+        const msgId = await publishProcessJob(payload, baseUrl);
+        console.log(`[scan-drive] Queued update for ${file.name} → qstash_msg=${msgId}`);
+
+        results.push({
+          fileName: file.name,
+          driveId: file.id,
+          status: 'queued',
+          pipelineId,
+          projectId: projectId || '(unmatched)',
+          isUpdate: true,
+        });
+      } catch (err) {
+        console.error(`[scan-drive] Failed to queue update for ${file.name}:`, err);
+        results.push({
+          fileName: file.name,
+          driveId: file.id,
+          status: 'error',
+          isUpdate: true,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    }
+
+    // Queue new files
     for (const file of filesToQueue) {
       try {
         let projectId = '';
@@ -158,6 +252,11 @@ export async function GET(request: NextRequest) {
             status: 'queued',
             created_at: now,
             ai_model: 'haiku-classify+sonnet-extract',
+            drive_file_id: file.id,
+            drive_modified_time: file.modifiedTime,
+            drive_web_view_link: file.webViewLink,
+            drive_folder_path: file.folderPath,
+            is_latest_version: true,
           })
           .select('id')
           .single();
@@ -176,6 +275,9 @@ export async function GET(request: NextRequest) {
           mimeType: file.mimeType,
           storagePath: '',
           driveFileId: file.id,
+          driveModifiedTime: file.modifiedTime,
+          driveWebViewLink: file.webViewLink,
+          driveFolderPath: file.folderPath,
         };
 
         const msgId = await publishProcessJob(payload, baseUrl);
@@ -201,13 +303,16 @@ export async function GET(request: NextRequest) {
     timing.queue_files = Date.now() - tStep;
     timing.total = Date.now() - t0;
 
-    console.log(`[scan-drive] Queued ${results.filter((r) => r.status === 'queued').length}/${filesToQueue.length} files — ${fmtTiming(timing)}`);
+    const queuedCount = results.filter((r) => r.status === 'queued').length;
+    const updateCount = results.filter((r) => r.isUpdate && r.status === 'queued').length;
+    console.log(`[scan-drive] Queued ${queuedCount} files (${updateCount} updates) — ${fmtTiming(timing)}`);
 
     return Response.json({
-      message: `Queued ${results.filter((r) => r.status === 'queued').length} file(s) for processing`,
+      message: `Queued ${queuedCount} file(s) for processing${updateCount > 0 ? ` (${updateCount} update${updateCount > 1 ? 's' : ''})` : ''}`,
       totalDriveFiles: allDriveFiles.length,
       supportedFiles: supportedFiles.length,
       newFilesFound: newFiles.length,
+      updatedFilesFound: updatedFiles.length,
       queued: results,
       remainingNewFiles: Math.max(0, newFiles.length - MAX_FILES_PER_RUN),
       timing,
@@ -247,15 +352,20 @@ function matchProject(folderName: string, lookup: Map<string, string>): string {
   return projectId;
 }
 
-async function getProcessedDriveFiles(orgId: string): Promise<{ urls: Set<string>; nameKeys: Set<string> }> {
+async function getProcessedDriveFiles(orgId: string): Promise<{
+  urls: Set<string>;
+  nameKeys: Set<string>;
+  driveVersions: Map<string, { modifiedTime: string; recordId: number }>;
+}> {
   const urls = new Set<string>();
   const nameKeys = new Set<string>();
+  const driveVersions = new Map<string, { modifiedTime: string; recordId: number }>();
   const sb = getSupabase();
 
   try {
     let query = sb
       .from('pipeline_log')
-      .select('file_url, file_name, project_id')
+      .select('id, file_url, file_name, project_id, drive_file_id, drive_modified_time, is_latest_version')
       .neq('status', 'deleted');
 
     if (orgId) {
@@ -269,12 +379,18 @@ async function getProcessedDriveFiles(orgId: string): Promise<{ urls: Set<string
       if (row.file_name) {
         nameKeys.add(`${String(row.file_name).toLowerCase()}|${String(row.project_id || '').toLowerCase()}`);
       }
+      if (row.drive_file_id && row.is_latest_version) {
+        driveVersions.set(String(row.drive_file_id), {
+          modifiedTime: row.drive_modified_time || '',
+          recordId: row.id,
+        });
+      }
     }
   } catch (err) {
-    console.error('Failed to fetch processed file IDs:', err);
+    console.error('[scan-drive] Failed to fetch processed file IDs:', err);
   }
 
-  return { urls, nameKeys };
+  return { urls, nameKeys, driveVersions };
 }
 
 function fmtTiming(t: Record<string, number>): string {

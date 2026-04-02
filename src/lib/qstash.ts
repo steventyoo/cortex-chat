@@ -31,6 +31,9 @@ export interface ProcessPayload {
   mimeType: string;
   storagePath: string;
   driveFileId?: string;
+  driveModifiedTime?: string;
+  driveWebViewLink?: string;
+  driveFolderPath?: string;
 }
 
 export async function publishProcessJob(
