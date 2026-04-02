@@ -93,12 +93,13 @@ export async function GET(request: NextRequest) {
     timing.dedup_query = Date.now() - tStep;
 
     const newFiles: typeof supportedFiles = [];
-    const updatedFiles: Array<{ file: typeof supportedFiles[0]; previousRecordId: number }> = [];
+    const updatedFiles: Array<{ file: typeof supportedFiles[0]; previousRecordId: string }> = [];
 
     for (const f of supportedFiles) {
       const existing = driveVersions.get(f.id);
       if (existing) {
-        if (existing.modifiedTime && f.modifiedTime > existing.modifiedTime) {
+        if (existing.modifiedTime && f.modifiedTime && isDriveFileNewer(f.modifiedTime, existing.modifiedTime)) {
+          console.log(`[scan-drive] Version change detected for ${f.name}: drive=${f.modifiedTime} > stored=${existing.modifiedTime}`);
           updatedFiles.push({ file: f, previousRecordId: existing.recordId });
         }
         continue;
@@ -355,17 +356,17 @@ function matchProject(folderName: string, lookup: Map<string, string>): string {
 async function getProcessedDriveFiles(orgId: string): Promise<{
   urls: Set<string>;
   nameKeys: Set<string>;
-  driveVersions: Map<string, { modifiedTime: string; recordId: number }>;
+  driveVersions: Map<string, { modifiedTime: string; recordId: string }>;
 }> {
   const urls = new Set<string>();
   const nameKeys = new Set<string>();
-  const driveVersions = new Map<string, { modifiedTime: string; recordId: number }>();
+  const driveVersions = new Map<string, { modifiedTime: string; recordId: string; createdAt: string }>();
   const sb = getSupabase();
 
   try {
     let query = sb
       .from('pipeline_log')
-      .select('id, file_url, file_name, project_id, drive_file_id, drive_modified_time, is_latest_version')
+      .select('id, file_url, file_name, project_id, drive_file_id, drive_modified_time, is_latest_version, created_at')
       .neq('status', 'deleted');
 
     if (orgId) {
@@ -380,10 +381,16 @@ async function getProcessedDriveFiles(orgId: string): Promise<{
         nameKeys.add(`${String(row.file_name).toLowerCase()}|${String(row.project_id || '').toLowerCase()}`);
       }
       if (row.drive_file_id && row.is_latest_version) {
-        driveVersions.set(String(row.drive_file_id), {
-          modifiedTime: row.drive_modified_time || '',
-          recordId: row.id,
-        });
+        const driveId = String(row.drive_file_id);
+        const existing = driveVersions.get(driveId);
+        const rowCreatedAt = row.created_at || '';
+        if (!existing || rowCreatedAt > existing.createdAt) {
+          driveVersions.set(driveId, {
+            modifiedTime: row.drive_modified_time || '',
+            recordId: String(row.id),
+            createdAt: rowCreatedAt,
+          });
+        }
       }
     }
   } catch (err) {
@@ -391,6 +398,13 @@ async function getProcessedDriveFiles(orgId: string): Promise<{
   }
 
   return { urls, nameKeys, driveVersions };
+}
+
+function isDriveFileNewer(driveTime: string, storedTime: string): boolean {
+  const driveMs = new Date(driveTime).getTime();
+  const storedMs = new Date(storedTime).getTime();
+  if (isNaN(driveMs) || isNaN(storedMs)) return false;
+  return driveMs > storedMs;
 }
 
 function fmtTiming(t: Record<string, number>): string {
