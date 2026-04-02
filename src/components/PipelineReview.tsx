@@ -13,6 +13,16 @@ import {
 const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false });
 
 type ViewMode = 'list' | 'review';
+type ListView = 'recent' | 'categories' | 'drive';
+
+interface CategoryInfo {
+  id: string;
+  key: string;
+  label: string;
+  priority: string;
+  sort_order: number;
+  is_default: boolean;
+}
 
 const MONEY_FIELDS = ['budget', 'actual', 'variance', 'cost', 'amount', 'total', 'jtd', 'job to date', 'price', 'value', 'subtotal', 'proposed', 'approved amount', 'labor', 'material', 'ohp', 'revenue', 'expense'];
 const PERCENT_FIELDS = ['percent', 'complete', 'pct', 'rate', 'ratio', 'ohp rate'];
@@ -97,6 +107,9 @@ export default function PipelineReview() {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedItem, setSelectedItem] = useState<PipelineItem | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [listView, setListView] = useState<ListView>('recent');
+  const [categories, setCategories] = useState<CategoryInfo[]>([]);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
 
   // Upload state
   const [showUpload, setShowUpload] = useState(false);
@@ -166,6 +179,7 @@ export default function PipelineReview() {
         const data = await res.json();
         setItems(data.items);
         setStats(data.stats);
+        if (data.categories) setCategories(data.categories);
       }
     } catch (err) {
       console.error('Failed to fetch pipeline items:', err);
@@ -657,8 +671,20 @@ export default function PipelineReview() {
     if (filterStatus === 'approved') {
       return item.status === 'approved' || item.status === 'pushed';
     }
+    if (filterStatus === 'processing') {
+      return item.status === 'queued' || item.status === 'processing' || item.status === 'tier1_extracting' || item.status === 'tier2_validating';
+    }
     return item.status === filterStatus;
   });
+
+  const toggleSection = useCallback((key: string) => {
+    setExpandedSections(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   // ─── REVIEW VIEW ───────────────────────────────────────────
   if (viewMode === 'review' && selectedItem) {
@@ -1236,14 +1262,18 @@ export default function PipelineReview() {
 
         {/* Stats bar */}
         {stats && (
-          <div className="flex gap-4">
+          <div className="flex gap-4 mb-3">
             <StatPill label="Pending Review" value={stats.pendingReview} color="blue" onClick={() => setFilterStatus('pending_review')} active={filterStatus === 'pending_review'} />
             <StatPill label="Flagged" value={stats.flagged} color="red" onClick={() => setFilterStatus('tier2_flagged')} active={filterStatus === 'tier2_flagged'} />
+            <StatPill label="Processing" value={stats.processing} color="amber" onClick={() => setFilterStatus('processing')} active={filterStatus === 'processing'} />
             <StatPill label="Approved" value={stats.approved} color="green" onClick={() => setFilterStatus('approved')} active={filterStatus === 'approved'} />
             <StatPill label="Rejected" value={stats.rejected} color="gray" onClick={() => setFilterStatus('rejected')} active={filterStatus === 'rejected'} />
             <StatPill label="All" value={stats.total} color="slate" onClick={() => setFilterStatus('all')} active={filterStatus === 'all'} />
           </div>
         )}
+
+        {/* View toggle */}
+        <ViewToggle value={listView} onChange={setListView} />
       </div>
 
       {/* Drive setup panel */}
@@ -1637,6 +1667,33 @@ export default function PipelineReview() {
               Click &quot;New Document&quot; to submit a document for processing
             </p>
           </div>
+        ) : listView === 'categories' ? (
+          <CategoryFolderView
+            items={filteredItems}
+            categories={categories}
+            expandedSections={expandedSections}
+            toggleSection={toggleSection}
+            openReview={openReview}
+            handleRetry={handleRetry}
+            handleMarkAsPushed={handleMarkAsPushed}
+            handleDelete={handleDelete}
+            retryingId={retryingId}
+            markingPushedId={markingPushedId}
+            deletingId={deletingId}
+          />
+        ) : listView === 'drive' ? (
+          <DrivePathFolderView
+            items={filteredItems}
+            expandedSections={expandedSections}
+            toggleSection={toggleSection}
+            openReview={openReview}
+            handleRetry={handleRetry}
+            handleMarkAsPushed={handleMarkAsPushed}
+            handleDelete={handleDelete}
+            retryingId={retryingId}
+            markingPushedId={markingPushedId}
+            deletingId={deletingId}
+          />
         ) : (
           <div className="divide-y divide-[#f0f0f0]">
             {/* Column headers */}
@@ -1648,129 +1705,17 @@ export default function PipelineReview() {
               <div className="w-[104px] flex-shrink-0 text-center">Actions</div>
             </div>
             {filteredItems.map((item) => (
-              <motion.div
+              <DocumentRow
                 key={item.id}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                onClick={() => openReview(item)}
-                role="button"
-                tabIndex={0}
-                className="w-full text-left px-6 py-4 hover:bg-[#fafafa] transition-colors flex items-center gap-4 cursor-pointer"
-              >
-                {/* Color-coded document type badge (left side) */}
-                <DocTypeBadge type={item.documentType} />
-
-                {/* Info */}
-                <div className="flex-1 min-w-0">
-                  <div className="text-[14px] font-medium text-[#1a1a1a] truncate">
-                    {item.fileName}
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[12px] text-[#999]">{item.pipelineId}</span>
-                    {item.projectId && (
-                      <>
-                        <span className="text-[10px] text-[#ddd]">·</span>
-                        <span className="text-[12px] text-[#999]">{item.projectId}</span>
-                      </>
-                    )}
-                    <span className="text-[10px] text-[#ddd]">·</span>
-                    <span className="text-[12px] text-[#999]">
-                      {new Date(item.createdAt).toLocaleDateString('en-US', {
-                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                      })}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Confidence */}
-                {item.overallConfidence != null && (
-                  <span className={`text-[12px] font-medium px-2.5 py-1 rounded-lg flex-shrink-0 ${getConfidenceColor(item.overallConfidence)}`}>
-                    {Math.round(item.overallConfidence * 100)}%
-                  </span>
-                )}
-
-                {/* Status */}
-                <StatusBadge status={item.status} />
-
-                {/* Processing spinner for queued/processing items */}
-                {(item.status === 'queued' || item.status === 'processing') && (
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <svg className="animate-spin w-3.5 h-3.5 text-yellow-600" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
-                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-                    </svg>
-                  </div>
-                )}
-
-                {/* Retry button for failed items */}
-                {item.status === 'failed' && (
-                  <button
-                    onClick={(e) => handleRetry(item.id, e)}
-                    disabled={retryingId === item.id}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors flex-shrink-0 disabled:opacity-50"
-                    title="Retry processing"
-                  >
-                    {retryingId === item.id ? (
-                      <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
-                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
-                        <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-                      </svg>
-                    ) : (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                        <path d="M1 4v6h6" />
-                        <path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
-                      </svg>
-                    )}
-                    Retry
-                  </button>
-                )}
-
-                {/* Mark as Pushed button — for items not yet pushed */}
-                {item.status !== 'pushed' && item.status !== 'rejected' && item.status !== 'queued' && item.status !== 'processing' && item.status !== 'failed' && (
-                  <button
-                    onClick={(e) => handleMarkAsPushed(item.id, item.fileName, e)}
-                    disabled={markingPushedId === item.id}
-                    className="p-1.5 rounded-lg text-[#ccc] hover:text-green-600 hover:bg-green-50 transition-colors flex-shrink-0 disabled:opacity-50"
-                    title="Mark as already pushed (data already in Airtable)"
-                  >
-                    {markingPushedId === item.id ? (
-                      <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
-                        <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-                      </svg>
-                    ) : (
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M9 12l2 2 4-4" />
-                        <circle cx="12" cy="12" r="10" />
-                      </svg>
-                    )}
-                  </button>
-                )}
-
-                {/* Delete button */}
-                <button
-                  onClick={(e) => handleDelete(item.id, item.fileName, e)}
-                  disabled={deletingId === item.id}
-                  className="p-1.5 rounded-lg text-[#ccc] hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0 disabled:opacity-50"
-                  title="Delete from pipeline"
-                >
-                  {deletingId === item.id ? (
-                    <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
-                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-                    </svg>
-                  ) : (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                    </svg>
-                  )}
-                </button>
-
-                {/* Arrow */}
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round" className="flex-shrink-0">
-                  <path d="M9 18l6-6-6-6" />
-                </svg>
-              </motion.div>
+                item={item}
+                openReview={openReview}
+                handleRetry={handleRetry}
+                handleMarkAsPushed={handleMarkAsPushed}
+                handleDelete={handleDelete}
+                retryingId={retryingId}
+                markingPushedId={markingPushedId}
+                deletingId={deletingId}
+              />
             ))}
           </div>
         )}
@@ -1844,6 +1789,7 @@ function StatPill({
   const colorClasses: Record<string, { base: string; active: string }> = {
     blue: { base: 'text-blue-600', active: 'bg-blue-100 text-blue-700' },
     red: { base: 'text-red-600', active: 'bg-red-100 text-red-700' },
+    amber: { base: 'text-amber-600', active: 'bg-amber-100 text-amber-700' },
     green: { base: 'text-green-600', active: 'bg-green-100 text-green-700' },
     gray: { base: 'text-gray-600', active: 'bg-gray-100 text-gray-700' },
     slate: { base: 'text-slate-600', active: 'bg-slate-100 text-slate-700' },
@@ -1861,6 +1807,472 @@ function StatPill({
       <span className="text-[16px] font-bold">{value}</span>
       {label}
     </button>
+  );
+}
+
+function ViewToggle({ value, onChange }: { value: ListView; onChange: (v: ListView) => void }) {
+  const options: { key: ListView; label: string }[] = [
+    { key: 'recent', label: 'Recent' },
+    { key: 'categories', label: 'Categories' },
+    { key: 'drive', label: 'Drive Folders' },
+  ];
+
+  return (
+    <div className="flex gap-1 p-0.5 bg-[#f5f5f5] rounded-lg w-fit">
+      {options.map((opt) => (
+        <button
+          key={opt.key}
+          onClick={() => onChange(opt.key)}
+          className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
+            value === opt.key
+              ? 'bg-white text-[#1a1a1a] shadow-sm'
+              : 'text-[#999] hover:text-[#666]'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+interface DocumentRowProps {
+  item: PipelineItem;
+  openReview: (item: PipelineItem) => void;
+  handleRetry: (recordId: string, e: React.MouseEvent) => void;
+  handleMarkAsPushed: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  handleDelete: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  retryingId: string | null;
+  markingPushedId: string | null;
+  deletingId: string | null;
+}
+
+function DocumentRow({
+  item,
+  openReview,
+  handleRetry,
+  handleMarkAsPushed,
+  handleDelete,
+  retryingId,
+  markingPushedId,
+  deletingId,
+}: DocumentRowProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      onClick={() => openReview(item)}
+      role="button"
+      tabIndex={0}
+      className="w-full text-left px-6 py-4 hover:bg-[#fafafa] transition-colors flex items-center gap-4 cursor-pointer"
+    >
+      <DocTypeBadge type={item.documentType} />
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-[14px] font-medium text-[#1a1a1a] truncate">{item.fileName}</span>
+          {item.driveWebViewLink && (
+            <a
+              href={item.driveWebViewLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="opacity-0 group-hover:opacity-100 text-[#999] hover:text-[#007aff] transition-opacity flex-shrink-0"
+              title="Open in Google Drive"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+            </a>
+          )}
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-[12px] text-[#999]">{item.pipelineId}</span>
+          {item.projectId && (
+            <>
+              <span className="text-[10px] text-[#ddd]">·</span>
+              <span className="text-[12px] text-[#999]">{item.projectId}</span>
+            </>
+          )}
+          <span className="text-[10px] text-[#ddd]">·</span>
+          <span className="text-[12px] text-[#999]">
+            {new Date(item.createdAt).toLocaleDateString('en-US', {
+              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+            })}
+          </span>
+        </div>
+      </div>
+
+      {item.overallConfidence != null && (
+        <span className={`text-[12px] font-medium px-2.5 py-1 rounded-lg flex-shrink-0 ${getConfidenceColor(item.overallConfidence)}`}>
+          {Math.round(item.overallConfidence * 100)}%
+        </span>
+      )}
+
+      <StatusBadge status={item.status} />
+
+      {(item.status === 'queued' || item.status === 'processing') && (
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <svg className="animate-spin w-3.5 h-3.5 text-yellow-600" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+            <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        </div>
+      )}
+
+      {item.status === 'failed' && (
+        <button
+          onClick={(e) => handleRetry(item.id, e)}
+          disabled={retryingId === item.id}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors flex-shrink-0 disabled:opacity-50"
+          title="Retry processing"
+        >
+          {retryingId === item.id ? (
+            <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M1 4v6h6" />
+              <path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
+            </svg>
+          )}
+          Retry
+        </button>
+      )}
+
+      {item.status !== 'pushed' && item.status !== 'rejected' && item.status !== 'queued' && item.status !== 'processing' && item.status !== 'failed' && (
+        <button
+          onClick={(e) => handleMarkAsPushed(item.id, item.fileName, e)}
+          disabled={markingPushedId === item.id}
+          className="p-1.5 rounded-lg text-[#ccc] hover:text-green-600 hover:bg-green-50 transition-colors flex-shrink-0 disabled:opacity-50"
+          title="Mark as already pushed (data already in Airtable)"
+        >
+          {markingPushedId === item.id ? (
+            <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 12l2 2 4-4" />
+              <circle cx="12" cy="12" r="10" />
+            </svg>
+          )}
+        </button>
+      )}
+
+      <button
+        onClick={(e) => handleDelete(item.id, item.fileName, e)}
+        disabled={deletingId === item.id}
+        className="p-1.5 rounded-lg text-[#ccc] hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0 disabled:opacity-50"
+        title="Delete from pipeline"
+      >
+        {deletingId === item.id ? (
+          <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+            <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+          </svg>
+        )}
+      </button>
+
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round" className="flex-shrink-0">
+        <path d="M9 18l6-6-6-6" />
+      </svg>
+    </motion.div>
+  );
+}
+
+function CollapsibleSection({
+  sectionKey,
+  label,
+  icon,
+  count,
+  borderColor,
+  expanded,
+  onToggle,
+  children,
+}: {
+  sectionKey: string;
+  label: string;
+  icon: React.ReactNode;
+  count: number;
+  borderColor: string;
+  expanded: boolean;
+  onToggle: (key: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`border-l-2 ${borderColor}`}>
+      <button
+        onClick={() => onToggle(sectionKey)}
+        className="w-full flex items-center gap-3 px-6 py-3 hover:bg-[#fafafa] transition-colors text-left"
+      >
+        {icon}
+        <span className="text-[14px] font-semibold text-[#1a1a1a] flex-1">{label}</span>
+        <span className="text-[11px] font-medium text-[#999] bg-[#f0f0f0] rounded-full px-2 py-0.5">{count}</span>
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#999"
+          strokeWidth="2"
+          strokeLinecap="round"
+          className={`flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+        >
+          <path d="M9 18l6-6-6-6" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="divide-y divide-[#f0f0f0]">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const PRIORITY_BORDER_COLORS: Record<string, string> = {
+  P1: 'border-blue-400',
+  P2: 'border-amber-400',
+  P3: 'border-gray-300',
+};
+
+function CategoryFolderView({
+  items,
+  categories,
+  expandedSections,
+  toggleSection,
+  openReview,
+  handleRetry,
+  handleMarkAsPushed,
+  handleDelete,
+  retryingId,
+  markingPushedId,
+  deletingId,
+}: {
+  items: PipelineItem[];
+  categories: CategoryInfo[];
+  expandedSections: Set<string>;
+  toggleSection: (key: string) => void;
+  openReview: (item: PipelineItem) => void;
+  handleRetry: (recordId: string, e: React.MouseEvent) => void;
+  handleMarkAsPushed: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  handleDelete: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  retryingId: string | null;
+  markingPushedId: string | null;
+  deletingId: string | null;
+}) {
+  const grouped = new Map<string, PipelineItem[]>();
+
+  for (const item of items) {
+    const key = item.categoryId || '__uncategorized';
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(item);
+  }
+
+  const sortedCategories = categories
+    .filter(c => grouped.has(c.id))
+    .sort((a, b) => a.sort_order - b.sort_order);
+
+  const uncategorized = grouped.get('__uncategorized');
+
+  return (
+    <div className="divide-y divide-[#e8e8e8]">
+      {sortedCategories.map((cat) => {
+        const catItems = grouped.get(cat.id) || [];
+        return (
+          <CollapsibleSection
+            key={cat.id}
+            sectionKey={`cat-${cat.id}`}
+            label={cat.label}
+            icon={
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[12px] ${
+                cat.priority === 'P1' ? 'bg-blue-100 text-blue-600'
+                  : cat.priority === 'P2' ? 'bg-amber-100 text-amber-600'
+                  : 'bg-gray-100 text-gray-500'
+              }`}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                </svg>
+              </div>
+            }
+            count={catItems.length}
+            borderColor={PRIORITY_BORDER_COLORS[cat.priority] || 'border-gray-300'}
+            expanded={expandedSections.has(`cat-${cat.id}`)}
+            onToggle={toggleSection}
+          >
+            {catItems.map((item) => (
+              <DocumentRow
+                key={item.id}
+                item={item}
+                openReview={openReview}
+                handleRetry={handleRetry}
+                handleMarkAsPushed={handleMarkAsPushed}
+                handleDelete={handleDelete}
+                retryingId={retryingId}
+                markingPushedId={markingPushedId}
+                deletingId={deletingId}
+              />
+            ))}
+          </CollapsibleSection>
+        );
+      })}
+
+      {uncategorized && uncategorized.length > 0 && (
+        <CollapsibleSection
+          sectionKey="cat-uncategorized"
+          label="Uncategorized"
+          icon={
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-gray-100 text-gray-400 text-[12px]">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+          }
+          count={uncategorized.length}
+          borderColor="border-gray-200"
+          expanded={expandedSections.has('cat-uncategorized')}
+          onToggle={toggleSection}
+        >
+          {uncategorized.map((item) => (
+            <DocumentRow
+              key={item.id}
+              item={item}
+              openReview={openReview}
+              handleRetry={handleRetry}
+              handleMarkAsPushed={handleMarkAsPushed}
+              handleDelete={handleDelete}
+              retryingId={retryingId}
+              markingPushedId={markingPushedId}
+              deletingId={deletingId}
+            />
+          ))}
+        </CollapsibleSection>
+      )}
+    </div>
+  );
+}
+
+function DrivePathFolderView({
+  items,
+  expandedSections,
+  toggleSection,
+  openReview,
+  handleRetry,
+  handleMarkAsPushed,
+  handleDelete,
+  retryingId,
+  markingPushedId,
+  deletingId,
+}: {
+  items: PipelineItem[];
+  expandedSections: Set<string>;
+  toggleSection: (key: string) => void;
+  openReview: (item: PipelineItem) => void;
+  handleRetry: (recordId: string, e: React.MouseEvent) => void;
+  handleMarkAsPushed: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  handleDelete: (recordId: string, fileName: string, e: React.MouseEvent) => void;
+  retryingId: string | null;
+  markingPushedId: string | null;
+  deletingId: string | null;
+}) {
+  const grouped = new Map<string, PipelineItem[]>();
+
+  for (const item of items) {
+    const key = item.driveFolderPath || '__manual';
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(item);
+  }
+
+  const sortedPaths = Array.from(grouped.keys())
+    .filter(k => k !== '__manual')
+    .sort((a, b) => a.localeCompare(b));
+
+  const manualItems = grouped.get('__manual');
+
+  return (
+    <div className="divide-y divide-[#e8e8e8]">
+      {sortedPaths.map((folderPath) => {
+        const pathItems = grouped.get(folderPath) || [];
+        return (
+          <CollapsibleSection
+            key={folderPath}
+            sectionKey={`drive-${folderPath}`}
+            label={folderPath}
+            icon={
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-[#4285f4]/10 text-[#4285f4] text-[12px]">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                </svg>
+              </div>
+            }
+            count={pathItems.length}
+            borderColor="border-[#4285f4]/40"
+            expanded={expandedSections.has(`drive-${folderPath}`)}
+            onToggle={toggleSection}
+          >
+            {pathItems.map((item) => (
+              <DocumentRow
+                key={item.id}
+                item={item}
+                openReview={openReview}
+                handleRetry={handleRetry}
+                handleMarkAsPushed={handleMarkAsPushed}
+                handleDelete={handleDelete}
+                retryingId={retryingId}
+                markingPushedId={markingPushedId}
+                deletingId={deletingId}
+              />
+            ))}
+          </CollapsibleSection>
+        );
+      })}
+
+      {manualItems && manualItems.length > 0 && (
+        <CollapsibleSection
+          sectionKey="drive-manual"
+          label="Manual Uploads"
+          icon={
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-gray-100 text-gray-500 text-[12px]">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M21 15V19a2 2 0 01-2 2H5a2 2 0 01-2-2V15" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </div>
+          }
+          count={manualItems.length}
+          borderColor="border-gray-200"
+          expanded={expandedSections.has('drive-manual')}
+          onToggle={toggleSection}
+        >
+          {manualItems.map((item) => (
+            <DocumentRow
+              key={item.id}
+              item={item}
+              openReview={openReview}
+              handleRetry={handleRetry}
+              handleMarkAsPushed={handleMarkAsPushed}
+              handleDelete={handleDelete}
+              retryingId={retryingId}
+              markingPushedId={markingPushedId}
+              deletingId={deletingId}
+            />
+          ))}
+        </CollapsibleSection>
+      )}
+    </div>
   );
 }
 
