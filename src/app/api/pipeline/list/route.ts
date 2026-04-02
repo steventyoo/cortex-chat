@@ -3,6 +3,15 @@ import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { parsePipelineItem } from '@/lib/pipeline';
 import { getSupabase } from '@/lib/supabase';
 
+interface CategoryRow {
+  id: string;
+  key: string;
+  label: string;
+  priority: string;
+  sort_order: number;
+  is_default: boolean;
+}
+
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
@@ -42,6 +51,21 @@ export async function GET(request: NextRequest) {
       console.error('Supabase error:', error.message);
       return Response.json({ error: 'Failed to fetch pipeline data' }, { status: 500 });
     }
+
+    const { data: catData } = await sb
+      .from('document_categories')
+      .select('id, key, label, priority, sort_order, is_default')
+      .eq('org_id', session.orgId)
+      .order('sort_order', { ascending: true });
+
+    const categories: CategoryRow[] = (catData || []).map((r: Record<string, unknown>) => ({
+      id: String(r.id),
+      key: String(r.key),
+      label: String(r.label),
+      priority: String(r.priority),
+      sort_order: Number(r.sort_order),
+      is_default: Boolean(r.is_default),
+    }));
 
     // Map Supabase rows to the Airtable-shaped records that parsePipelineItem expects
     const items = (data || []).map((row: Record<string, unknown>) => {
@@ -91,7 +115,7 @@ export async function GET(request: NextRequest) {
       ).length,
     };
 
-    return Response.json({ items, stats });
+    return Response.json({ items, stats, categories });
   } catch (err) {
     console.error('Pipeline list error:', err);
     return Response.json({ error: 'Internal server error' }, { status: 500 });
