@@ -38,10 +38,12 @@ export async function publishProcessJob(
   baseUrl: string
 ): Promise<string> {
   const client = getQStashClient();
+  const url = `${baseUrl.replace(/\/$/, '')}/api/pipeline/process`;
   const result = await client.publishJSON({
-    url: `${baseUrl}/api/pipeline/process`,
+    url,
     body: payload,
     retries: 3,
   });
+  console.log(`[qstash] Published to ${url} → msgId=${result.messageId}`);
   return result.messageId;
 }

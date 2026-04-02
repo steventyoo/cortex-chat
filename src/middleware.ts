@@ -19,8 +19,12 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Allow cron-triggered endpoints (auth handled inside the route)
-  if (pathname === '/api/pipeline/scan-drive') {
+  // Allow cron-triggered and QStash-triggered endpoints (auth handled inside the route)
+  if (
+    pathname === '/api/pipeline/scan-drive' ||
+    pathname === '/api/pipeline/process' ||
+    pathname === '/api/pipeline/recover'
+  ) {
     return NextResponse.next();
   }
 

@@ -504,14 +504,14 @@ export default function PipelineReview() {
       const res = await fetch('/api/pipeline/scan-drive');
       const data = await res.json();
       if (res.ok) {
-        const processed = data.processed?.length || 0;
+        const queued = data.queued?.filter((f: { status: string }) => f.status === 'queued').length || 0;
         const remaining = data.remainingNewFiles || 0;
         setScanResult(
-          processed > 0
-            ? `Found ${processed} new file${processed > 1 ? 's' : ''}${remaining > 0 ? ` (${remaining} more queued)` : ''}`
+          queued > 0
+            ? `Queued ${queued} file${queued > 1 ? 's' : ''} for processing${remaining > 0 ? ` (${remaining} more next run)` : ''}`
             : data.message || 'No new files found'
         );
-        if (processed > 0) await fetchItems();
+        if (queued > 0) await fetchItems();
       } else {
         setScanResult(data.error ? `${data.error}${data.hint ? ` — ${data.hint}` : ''}` : 'Scan failed');
       }
@@ -520,7 +520,6 @@ export default function PipelineReview() {
       setScanResult('Failed to connect to Drive');
     } finally {
       setScanning(false);
-      // Clear result after 5 seconds
       setTimeout(() => setScanResult(null), 5000);
     }
   };
