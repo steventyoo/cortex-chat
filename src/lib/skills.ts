@@ -12,6 +12,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getSupabase } from './supabase';
 import { ExtractionResult, ValidationFlag, computeOverallConfidence } from './pipeline';
+import {
+  ClassificationSchema,
+  buildClassificationTool,
+  buildExtractionTool,
+  buildGeneralExtractionTool,
+} from './extraction-schemas';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -188,38 +194,39 @@ Known document types:
 ${typeLines}
 
 Document text (first 2000 characters):
-${text.slice(0, 2000)}
-
-Respond with ONLY valid JSON (no markdown):
-{ "documentType": "skill_id_here", "confidence": 0.0-1.0, "reasoning": "brief explanation" }`;
+${text.slice(0, 2000)}`;
 
   try {
+    const tool = buildClassificationTool(knownSkills);
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 256,
       messages: [{ role: 'user', content: prompt }],
+      tools: [tool],
+      tool_choice: { type: 'tool', name: 'classify_document' },
     });
 
-    const responseText = response.content
-      .filter(b => b.type === 'text')
-      .map(b => b.type === 'text' ? b.text : '')
-      .join('');
+    const toolBlock = response.content.find(b => b.type === 'tool_use');
+    if (!toolBlock || toolBlock.type !== 'tool_use') {
+      throw new Error('No tool_use block in classification response');
+    }
 
-    let jsonStr = responseText.trim();
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) jsonStr = jsonMatch[1].trim();
-
-    const parsed = JSON.parse(jsonStr);
-    const skillId = String(parsed.documentType || '');
-    const confidence = Number(parsed.confidence || 0);
+    const parsed = ClassificationSchema.parse(toolBlock.input);
+    const skillId = parsed.documentType;
+    const confidence = parsed.confidence;
 
     const matchedSkill = knownSkills.find(s => s.skillId === skillId);
+
+    console.log(`[classify] tool_use result: type=${skillId} conf=${confidence.toFixed(2)} ` +
+      `matched=${matchedSkill ? matchedSkill.skillId : 'none'} ` +
+      `finalSkill=${confidence >= 0.7 && matchedSkill ? matchedSkill.skillId : '_general'} ` +
+      `reasoning="${parsed.reasoning}"`);
 
     return {
       documentType: matchedSkill?.displayName || skillId,
       skillId: confidence >= 0.7 && matchedSkill ? matchedSkill.skillId : '_general',
       confidence,
-      reasoning: String(parsed.reasoning || ''),
+      reasoning: parsed.reasoning,
     };
   } catch (err) {
     console.error('Classification failed:', err);
@@ -252,6 +259,13 @@ export function buildSkillPrompt(skill: DocumentSkill, sourceText: string): stri
       lines.push(fieldLine);
     }
     lines.push('');
+    lines.push('In addition to the defined fields above, extract any other relevant data you find into extra_fields.');
+    lines.push('Common extras include: parties, dates, amounts, identifiers, payment terms, insurance, scope items, addresses, and contact information.');
+    lines.push('');
+  } else {
+    lines.push('Extract all key-value pairs you can identify from this document.');
+    lines.push('Include: parties/names, dates, monetary amounts, identifiers/reference numbers, descriptions, scope items, addresses, contact info, and any other structured data.');
+    lines.push('');
   }
 
   if (skill.multiRecordConfig) {
@@ -276,14 +290,6 @@ export function buildSkillPrompt(skill: DocumentSkill, sourceText: string): stri
     }
   }
 
-  lines.push('## Response Format');
-  lines.push('Respond with ONLY valid JSON (no markdown, no explanation):');
-  lines.push('{');
-  lines.push(`  "documentType": "${skill.displayName}",`);
-  lines.push('  "documentTypeConfidence": 0.95,');
-  lines.push('  "fields": { "fieldName": { "value": "extracted value", "confidence": 0.95 } }');
-  lines.push('}');
-  lines.push('');
   lines.push('--- DOCUMENT TEXT ---');
   lines.push(sourceText);
   lines.push('--- END DOCUMENT ---');
@@ -319,28 +325,53 @@ export async function extractWithSkill(
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const extractionPrompt = buildSkillPrompt(skill, sourceText);
 
+  const isTypedSkill = skill.fieldDefinitions.length > 0;
+  const tool = isTypedSkill
+    ? buildExtractionTool(skill)
+    : buildGeneralExtractionTool();
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 8192,
     system: skill.systemPrompt,
     messages: [{ role: 'user', content: extractionPrompt }],
+    tools: [tool],
+    tool_choice: { type: 'tool', name: 'extract_document' },
   });
   const tExtract = Date.now() - tStep;
 
-  const responseText = response.content
-    .filter(b => b.type === 'text')
-    .map(b => b.type === 'text' ? b.text : '')
-    .join('');
+  const toolBlock = response.content.find(b => b.type === 'tool_use');
+  if (!toolBlock || toolBlock.type !== 'tool_use') {
+    throw new Error('No tool_use block in extraction response');
+  }
 
-  let jsonStr = responseText.trim();
-  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) jsonStr = jsonMatch[1].trim();
+  const rawExtraction = toolBlock.input as {
+    documentType: string;
+    documentTypeConfidence: number;
+    fields: Record<string, { value: string | number | null; confidence: number }>;
+    extra_fields?: Record<string, { value: string | number | null; confidence: number }>;
+  };
 
-  const extraction = JSON.parse(jsonStr) as ExtractionResult;
+  const schemaFieldNames = Object.keys(rawExtraction.fields);
+  const extraFieldNames = rawExtraction.extra_fields ? Object.keys(rawExtraction.extra_fields) : [];
+  console.log(`[extract] tool_use raw: docType="${rawExtraction.documentType}" ` +
+    `docTypeConf=${rawExtraction.documentTypeConfidence.toFixed(2)} ` +
+    `schemaFields=[${schemaFieldNames.join(', ')}] (${schemaFieldNames.length}) ` +
+    `extraFields=[${extraFieldNames.join(', ')}] (${extraFieldNames.length})`);
 
-  extraction.skillId = skill.skillId;
-  extraction.skillVersion = skill.version;
-  extraction.classifierConfidence = classification.confidence;
+  if (rawExtraction.extra_fields) {
+    rawExtraction.fields = { ...rawExtraction.fields, ...rawExtraction.extra_fields };
+    delete rawExtraction.extra_fields;
+  }
+
+  const extraction: ExtractionResult = {
+    documentType: rawExtraction.documentType,
+    documentTypeConfidence: rawExtraction.documentTypeConfidence,
+    fields: rawExtraction.fields,
+    skillId: skill.skillId,
+    skillVersion: skill.version,
+    classifierConfidence: classification.confidence,
+  };
 
   const overallConfidence = computeOverallConfidence(extraction);
 
@@ -385,10 +416,19 @@ export async function extractWithSkill(
   }
 
   const tTotal = Date.now() - t0;
-  console.log(`[extractWithSkill] skill=${skill.skillId} — ` +
+  const fieldCount = Object.keys(extraction.fields).length;
+  console.log(`[extractWithSkill] skill=${skill.skillId} mode=${isTypedSkill ? 'typed+extras' : 'general'} — ` +
     `listSkills=${tSkills}ms classify=${tClassify}ms getSkill=${tGetSkill}ms extract=${tExtract}ms total=${tTotal}ms ` +
-    `(inputChars=${sourceText.length} classConf=${classification.confidence})`);
+    `(inputChars=${sourceText.length} classConf=${classification.confidence} fields=${fieldCount})`);
 
+  const fieldSummary = Object.entries(extraction.fields)
+    .map(([k, v]) => `${k}=${v.value === null ? 'null' : `"${String(v.value).slice(0, 50)}"` }(${(v.confidence * 100).toFixed(0)}%)`)
+    .join(' | ');
+  console.log(`[extractWithSkill] fields: ${fieldSummary}`);
+
+  if (flags.length > 0) {
+    console.log(`[extractWithSkill] flags: ${flags.map(f => `${f.field}:${f.severity}:${f.issue}`).join(', ')}`);
+  }
   return { extraction, overallConfidence, flags };
 }
 
