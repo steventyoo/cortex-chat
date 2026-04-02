@@ -77,7 +77,19 @@ export async function GET(request: NextRequest) {
     timing.list_drive_files = Date.now() - tStep;
 
     tStep = Date.now();
-    const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles();
+    let orgId = session?.orgId || '';
+    if (!orgId && driveFolderId) {
+      const sb = getSupabase();
+      const { data: orgRow } = await sb
+        .from('organizations')
+        .select('org_id')
+        .eq('google_drive_folder_id', driveFolderId)
+        .limit(1)
+        .maybeSingle();
+      if (orgRow?.org_id) orgId = orgRow.org_id;
+    }
+
+    const { urls: processedFileUrls, nameKeys: processedNameKeys } = await getProcessedDriveFiles(orgId);
     timing.dedup_query = Date.now() - tStep;
 
     const newFiles = supportedFiles.filter((f) => {
@@ -109,18 +121,6 @@ export async function GET(request: NextRequest) {
       folderLookup.set(p.projectName.toLowerCase().replace(/\s+/g, '-'), p.projectId);
     }
     timing.fetch_projects = Date.now() - tStep;
-
-    let orgId = session?.orgId || '';
-    if (!orgId && driveFolderId) {
-      const sb = getSupabase();
-      const { data: orgRow } = await sb
-        .from('organizations')
-        .select('org_id')
-        .eq('google_drive_folder_id', driveFolderId)
-        .limit(1)
-        .maybeSingle();
-      if (orgRow?.org_id) orgId = orgRow.org_id;
-    }
 
     const filesToQueue = newFiles.slice(0, MAX_FILES_PER_RUN);
     const baseUrl = getBaseUrl(request);
@@ -247,16 +247,22 @@ function matchProject(folderName: string, lookup: Map<string, string>): string {
   return projectId;
 }
 
-async function getProcessedDriveFiles(): Promise<{ urls: Set<string>; nameKeys: Set<string> }> {
+async function getProcessedDriveFiles(orgId: string): Promise<{ urls: Set<string>; nameKeys: Set<string> }> {
   const urls = new Set<string>();
   const nameKeys = new Set<string>();
   const sb = getSupabase();
 
   try {
-    const { data } = await sb
+    let query = sb
       .from('pipeline_log')
       .select('file_url, file_name, project_id')
       .neq('status', 'deleted');
+
+    if (orgId) {
+      query = query.eq('org_id', orgId);
+    }
+
+    const { data } = await query;
 
     for (const row of data || []) {
       if (row.file_url) urls.add(String(row.file_url));
