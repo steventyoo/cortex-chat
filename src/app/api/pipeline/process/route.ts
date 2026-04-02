@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server';
-import { getSupabase } from '@/lib/supabase';
+import { getSupabase, lookupCategoryId } from '@/lib/supabase';
 import { extractWithSkill } from '@/lib/skills';
 import { parseFileBuffer, extractTextWithClaude } from '@/lib/file-parser';
-import { ValidationFlag } from '@/lib/pipeline';
+import { ValidationFlag, resolveCategoryKey, generateCanonicalName } from '@/lib/pipeline';
 import { getQStashReceiver, ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
 import { extractText as pdfExtractText } from 'unpdf';
@@ -199,6 +199,24 @@ export async function POST(request: NextRequest) {
   const autoApproveEligible = overallConfidence >= 0.95 && !hasErrors && !hasWarnings;
   const finalStatus = autoApproveEligible ? 'tier2_validated' : hasErrors ? 'tier2_flagged' : 'pending_review';
 
+  // Resolve document category from AI skill + folder hints
+  tStep = Date.now();
+  let categoryId: string | null = null;
+  let canonicalName: string | null = null;
+  try {
+    const folderName = driveFolderPath?.split(' / ').pop() || null;
+    const categoryKey = resolveCategoryKey(extraction.skillId || null, folderName);
+    categoryId = await lookupCategoryId(orgId, categoryKey);
+    if (!categoryId) {
+      categoryId = await lookupCategoryId(orgId, '17_misc');
+    }
+    canonicalName = generateCanonicalName('ORG', extraction.skillId || '_general', null, fileName);
+    console.log(`[process] Category resolved: key=${categoryKey} id=${categoryId} canonical=${canonicalName}`);
+  } catch (err) {
+    console.warn(`[process] Category resolution failed (non-fatal):`, err);
+  }
+  timing.category_resolve = Date.now() - tStep;
+
   tStep = Date.now();
   try {
     await sb.from('pipeline_log').update({
@@ -210,6 +228,8 @@ export async function POST(request: NextRequest) {
       ai_model: 'haiku-classify+sonnet-extract',
       tier1_completed_at: new Date().toISOString(),
       tier2_completed_at: new Date().toISOString(),
+      ...(categoryId ? { category_id: categoryId } : {}),
+      ...(canonicalName ? { canonical_name: canonicalName } : {}),
     }).eq('id', recordId);
     console.log(`[process] Final status saved: ${finalStatus}`);
   } catch (err) {

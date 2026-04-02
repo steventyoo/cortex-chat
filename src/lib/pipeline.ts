@@ -1,4 +1,112 @@
 // Pipeline types and utilities for document labeling
+import path from 'path';
+
+// ── Document Categories ────────────────────────────────────────
+
+export interface DefaultCategory {
+  key: string;
+  label: string;
+  priority: 'P1' | 'P2' | 'P3';
+  sort_order: number;
+  search_keywords: string;
+}
+
+export const DEFAULT_CATEGORIES: DefaultCategory[] = [
+  { key: '01_contract',             label: 'Contract',             priority: 'P1', sort_order: 1,  search_keywords: 'contract,agreement,scope of work,terms' },
+  { key: '02_bids_and_estimates',   label: 'Bids and Estimates',   priority: 'P2', sort_order: 2,  search_keywords: 'bid,estimate,proposal,quote,pricing' },
+  { key: '03_change_orders',        label: 'Change Orders',        priority: 'P1', sort_order: 3,  search_keywords: 'change order,CO,COR,modification,amendment' },
+  { key: '04_rfis',                 label: 'RFIs',                 priority: 'P2', sort_order: 4,  search_keywords: 'rfi,request for information,clarification' },
+  { key: '05_submittals',           label: 'Submittals',           priority: 'P3', sort_order: 5,  search_keywords: 'submittal,shop drawing,product data,sample' },
+  { key: '06_job_cost_reports',     label: 'Job Cost Reports',     priority: 'P1', sort_order: 6,  search_keywords: 'job cost,cost report,budget,expense,quickbooks' },
+  { key: '07_pay_applications',     label: 'Pay Applications',     priority: 'P2', sort_order: 7,  search_keywords: 'pay app,payment application,invoice,billing,AIA' },
+  { key: '08_labor_and_timesheets', label: 'Labor and Timesheets', priority: 'P2', sort_order: 8,  search_keywords: 'labor,timesheet,time card,hours,crew,clockshark' },
+  { key: '09_material_and_pos',     label: 'Material and POs',     priority: 'P3', sort_order: 9,  search_keywords: 'material,purchase order,PO,supplier,vendor' },
+  { key: '10_daily_reports',        label: 'Daily Reports',        priority: 'P3', sort_order: 10, search_keywords: 'daily report,field report,daily log,site report' },
+  { key: '11_punch_list',           label: 'Punch List',           priority: 'P3', sort_order: 11, search_keywords: 'punch list,deficiency,snag list,completion' },
+  { key: '12_closeout',             label: 'Closeout',             priority: 'P3', sort_order: 12, search_keywords: 'closeout,close out,as-built,final,turnover' },
+  { key: '13_warranty',             label: 'Warranty',             priority: 'P3', sort_order: 13, search_keywords: 'warranty,guarantee,defect,maintenance' },
+  { key: '14_back_charges',         label: 'Back Charges',         priority: 'P3', sort_order: 14, search_keywords: 'back charge,backcharge,deduction,offset' },
+  { key: '15_correspondence',       label: 'Correspondence',       priority: 'P3', sort_order: 15, search_keywords: 'letter,email,correspondence,notice,memo' },
+  { key: '16_photos',               label: 'Photos',               priority: 'P3', sort_order: 16, search_keywords: 'photo,image,picture,site photo,progress photo' },
+  { key: '17_misc',                 label: 'Miscellaneous',        priority: 'P3', sort_order: 17, search_keywords: 'misc,other,general,uncategorized' },
+];
+
+export const SKILL_TO_CATEGORY_KEY: Record<string, string> = {
+  contract:            '01_contract',
+  estimate:            '02_bids_and_estimates',
+  sub_bid:             '02_bids_and_estimates',
+  change_order:        '03_change_orders',
+  design_change:       '03_change_orders',
+  rfi:                 '04_rfis',
+  submittal:           '05_submittals',
+  job_cost:            '06_job_cost_reports',
+  project_admin:       '07_pay_applications',
+  production_activity: '08_labor_and_timesheets',
+  daily_report:        '10_daily_reports',
+  safety_inspection:   '17_misc',
+  _general:            '17_misc',
+};
+
+export const FOLDER_HINTS: Array<{ pattern: RegExp; categoryKey: string }> = [
+  { pattern: /contract/i,                          categoryKey: '01_contract' },
+  { pattern: /bids?|estimates?|proposals?/i,        categoryKey: '02_bids_and_estimates' },
+  { pattern: /change.?orders?|COR?s?/i,            categoryKey: '03_change_orders' },
+  { pattern: /rfis?|request.?for.?info/i,          categoryKey: '04_rfis' },
+  { pattern: /submittals?/i,                       categoryKey: '05_submittals' },
+  { pattern: /job.?cost|cost.?report|quickbooks/i,  categoryKey: '06_job_cost_reports' },
+  { pattern: /pay.?app|billing|invoice/i,          categoryKey: '07_pay_applications' },
+  { pattern: /labor|timesheet|time.?card/i,        categoryKey: '08_labor_and_timesheets' },
+  { pattern: /material|purchase.?order|POs?/i,     categoryKey: '09_material_and_pos' },
+  { pattern: /daily.?report|field.?report/i,       categoryKey: '10_daily_reports' },
+  { pattern: /punch.?list/i,                       categoryKey: '11_punch_list' },
+  { pattern: /closeout|close.?out|as.?built/i,     categoryKey: '12_closeout' },
+  { pattern: /warranty/i,                          categoryKey: '13_warranty' },
+  { pattern: /back.?charge/i,                      categoryKey: '14_back_charges' },
+  { pattern: /correspondence|letters?|memos?/i,    categoryKey: '15_correspondence' },
+  { pattern: /photos?|images?|pictures?/i,         categoryKey: '16_photos' },
+];
+
+export function matchFolderHint(folderName: string): string | null {
+  for (const hint of FOLDER_HINTS) {
+    if (hint.pattern.test(folderName)) return hint.categoryKey;
+  }
+  return null;
+}
+
+export function resolveCategoryKey(skillId: string | null, folderName?: string | null): string {
+  if (folderName) {
+    const hintKey = matchFolderHint(folderName);
+    if (hintKey) return hintKey;
+  }
+  if (skillId && SKILL_TO_CATEGORY_KEY[skillId]) {
+    return SKILL_TO_CATEGORY_KEY[skillId];
+  }
+  return '17_misc';
+}
+
+export function generateCanonicalName(
+  clientCode: string,
+  skillId: string,
+  dateStr: string | null,
+  originalFileName: string
+): string {
+  const ext = path.extname(originalFileName).toLowerCase() || '.pdf';
+  const descriptor = skillId.replace(/[^a-z0-9_]/gi, '_');
+  const datePart = dateStr || new Date().toISOString().slice(0, 10);
+  const code = clientCode.toUpperCase();
+  return `DATA_${code}_${descriptor}_${datePart}${ext}`;
+}
+
+export function generateClientCode(orgName: string): string {
+  const words = orgName.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return 'ORG';
+  if (words.length === 1) return words[0].substring(0, 6).toUpperCase();
+  const stopWords = new Set(['the', 'and', 'of', 'for', 'inc', 'llc', 'ltd', 'co', 'corp']);
+  const meaningful = words.filter(w => !stopWords.has(w.toLowerCase()));
+  if (meaningful.length === 0) return words[0].substring(0, 6).toUpperCase();
+  if (meaningful.length === 1) return meaningful[0].substring(0, 6).toUpperCase();
+  return meaningful.map(w => w[0]).join('').substring(0, 5).toUpperCase();
+}
 
 export type PipelineStatus =
   | 'intake'
@@ -76,6 +184,8 @@ export interface PipelineItem {
   driveModifiedTime: string | null;
   storagePath: string | null;
   isLatestVersion: boolean;
+  categoryId: string | null;
+  canonicalName: string | null;
 }
 
 // Generate a pipeline ID
@@ -216,5 +326,7 @@ export function parsePipelineItem(record: { id: string; fields: Record<string, u
     driveModifiedTime: f['Drive Modified Time'] ? String(f['Drive Modified Time']) : null,
     storagePath: f['Storage Path'] ? String(f['Storage Path']) : null,
     isLatestVersion: f['Is Latest Version'] !== false,
+    categoryId: f['Category ID'] ? String(f['Category ID']) : null,
+    canonicalName: f['Canonical Name'] ? String(f['Canonical Name']) : null,
   };
 }
