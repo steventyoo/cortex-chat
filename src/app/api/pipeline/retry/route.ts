@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
 
   const { data: record, error } = await sb
     .from('pipeline_log')
-    .select('id, org_id, project_id, file_name, file_url, status')
+    .select('id, org_id, project_id, file_name, file_url, status, storage_path, drive_file_id, drive_modified_time, drive_web_view_link, drive_folder_path')
     .eq('id', recordId)
     .eq('org_id', orgId)
     .single();
@@ -34,14 +34,16 @@ export async function POST(request: NextRequest) {
   }
 
   const fileUrl = record.file_url as string | null;
-  if (!fileUrl || !fileUrl.startsWith('storage://')) {
+  const storagePath = (record.storage_path as string | null)
+    || (fileUrl?.startsWith('storage://') ? fileUrl.replace('storage://', '') : null);
+  const driveFileId = record.drive_file_id as string | null;
+
+  if (!storagePath && !driveFileId) {
     return Response.json({ error: 'No stored file to reprocess' }, { status: 400 });
   }
 
-  const storagePath = fileUrl.replace('storage://', '');
   const fileName = record.file_name as string;
 
-  // Infer mimeType from file extension
   const ext = fileName.split('.').pop()?.toLowerCase() || '';
   const mimeMap: Record<string, string> = {
     pdf: 'application/pdf',
@@ -70,13 +72,20 @@ export async function POST(request: NextRequest) {
       projectId: (record.project_id as string) || null,
       fileName,
       mimeType,
-      storagePath,
+      storagePath: storagePath || '',
+      ...(driveFileId ? {
+        driveFileId,
+        driveModifiedTime: (record.drive_modified_time as string) || undefined,
+        driveWebViewLink: (record.drive_web_view_link as string) || undefined,
+        driveFolderPath: (record.drive_folder_path as string) || undefined,
+      } : {}),
     };
+    console.log(`[retry] Re-queuing ${recordId}: storagePath=${storagePath} driveFileId=${driveFileId}`);
     const messageId = await publishProcessJob(payload, baseUrl);
     console.log(`[retry] Re-queued ${recordId} — qstash_msg=${messageId}`);
     return Response.json({ success: true, recordId, qstashMessageId: messageId });
   } catch (err) {
-    console.error('Failed to re-queue processing:', err);
+    console.error('[retry] Failed to re-queue processing:', err);
     await sb.from('pipeline_log').update({
       status: 'failed',
       validation_flags: [{
