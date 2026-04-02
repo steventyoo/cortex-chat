@@ -6,6 +6,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { nanoid } from 'nanoid';
 import { ProjectData, ProjectSummary, ProjectHealth, ProjectAlert, HealthStatus } from './types';
+import { DEFAULT_CATEGORIES, generateClientCode } from './pipeline';
 
 // ── Client ────────────────────────────────────────────────────
 
@@ -131,6 +132,7 @@ export async function createOrganization(data: {
 }): Promise<OrgRecord> {
   const sb = getSupabase();
   const orgId = `org_${nanoid(10)}`;
+  const clientCode = generateClientCode(data.orgName);
   const { data: row, error } = await sb
     .from('organizations')
     .insert({
@@ -143,11 +145,47 @@ export async function createOrganization(data: {
       weekly_report_enabled: false,
       active: true,
       onboarding_complete: false,
+      client_code: clientCode,
     })
     .select()
     .single();
   if (error) throw new Error(`Failed to create org: ${error.message}`);
+
+  await seedDefaultCategories(orgId);
+
   return mapOrg(row);
+}
+
+export async function seedDefaultCategories(orgId: string): Promise<void> {
+  const sb = getSupabase();
+  const rows = DEFAULT_CATEGORIES.map((cat) => ({
+    org_id: orgId,
+    key: cat.key,
+    label: cat.label,
+    priority: cat.priority,
+    sort_order: cat.sort_order,
+    search_keywords: cat.search_keywords,
+    is_default: true,
+    created_by: null,
+  }));
+  const { error } = await sb.from('document_categories').insert(rows);
+  if (error) {
+    console.error(`[seed-categories] Failed for ${orgId}:`, error.message);
+  } else {
+    console.log(`[seed-categories] Seeded ${rows.length} default categories for ${orgId}`);
+  }
+}
+
+export async function lookupCategoryId(orgId: string, categoryKey: string): Promise<string | null> {
+  const sb = getSupabase();
+  const { data } = await sb
+    .from('document_categories')
+    .select('id')
+    .eq('org_id', orgId)
+    .eq('key', categoryKey)
+    .limit(1)
+    .maybeSingle();
+  return data?.id ? String(data.id) : null;
 }
 
 export async function updateOrganization(orgId: string, fields: Partial<{

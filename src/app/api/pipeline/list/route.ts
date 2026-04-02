@@ -75,6 +75,8 @@ export async function GET(request: NextRequest) {
       fields['Drive Modified Time'] = row.drive_modified_time;
       fields['Storage Path'] = row.storage_path;
       fields['Is Latest Version'] = row.is_latest_version;
+      fields['Category ID'] = row.category_id;
+      fields['Canonical Name'] = row.canonical_name;
       return parsePipelineItem({ id: String(row.id), fields });
     });
 
