@@ -30,6 +30,7 @@ export interface ProcessPayload {
   fileName: string;
   mimeType: string;
   storagePath: string;
+  driveFileId?: string;
 }
 
 export async function publishProcessJob(

@@ -74,82 +74,122 @@ function getRootFolderId(): string {
 // ─── Folder Operations ─────────────────────────────────────────
 
 /**
- * List all project sub-folders inside the root Drive folder.
- * Each sub-folder represents a project (e.g., "Compass Northgate M2").
- * Also includes a virtual "_Inbox" if it exists for unassigned docs.
+ * List all sub-folders inside a given folder, handling pagination.
  */
 export async function listProjectFolders(rootFolderIdOverride?: string): Promise<DriveFolder[]> {
   const drive = getDriveClient();
   const rootId = rootFolderIdOverride || getRootFolderId();
 
-  const res = await drive.files.list({
-    q: `'${rootId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-    fields: 'files(id, name)',
-    orderBy: 'name',
-  });
+  const folders: DriveFolder[] = [];
+  let pageToken: string | undefined;
 
-  return (res.data.files || []).map((f) => ({
-    id: f.id!,
-    name: f.name!,
-  }));
+  do {
+    const res = await drive.files.list({
+      q: `'${rootId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: 'nextPageToken, files(id, name)',
+      orderBy: 'name',
+      pageSize: 1000,
+      ...(pageToken ? { pageToken } : {}),
+    });
+    for (const f of res.data.files || []) {
+      folders.push({ id: f.id!, name: f.name! });
+    }
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  return folders;
 }
 
 // ─── File Operations ────────────────────────────────────────────
 
 /**
- * List all files inside a specific folder (non-recursive).
- * Returns actual files only (not sub-folders).
+ * List all files inside a specific folder (non-recursive), with full pagination.
  */
 export async function listFilesInFolder(
   folderId: string,
   folderName: string
 ): Promise<DriveFile[]> {
   const drive = getDriveClient();
+  const files: DriveFile[] = [];
+  let pageToken: string | undefined;
 
-  const res = await drive.files.list({
-    q: `'${folderId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
-    fields: 'files(id, name, mimeType, createdTime, modifiedTime, webViewLink, size)',
-    orderBy: 'createdTime desc',
-    pageSize: 100,
-  });
+  do {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
+      fields: 'nextPageToken, files(id, name, mimeType, createdTime, modifiedTime, webViewLink, size)',
+      orderBy: 'createdTime desc',
+      pageSize: 1000,
+      ...(pageToken ? { pageToken } : {}),
+    });
+    for (const f of res.data.files || []) {
+      files.push({
+        id: f.id!,
+        name: f.name!,
+        mimeType: f.mimeType!,
+        createdTime: f.createdTime!,
+        modifiedTime: f.modifiedTime!,
+        webViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+        size: Number(f.size || 0),
+        parentFolderId: folderId,
+        parentFolderName: folderName,
+      });
+    }
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken);
 
-  return (res.data.files || []).map((f) => ({
-    id: f.id!,
-    name: f.name!,
-    mimeType: f.mimeType!,
-    createdTime: f.createdTime!,
-    modifiedTime: f.modifiedTime!,
-    webViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
-    size: Number(f.size || 0),
-    parentFolderId: folderId,
-    parentFolderName: folderName,
-  }));
+  return files;
 }
 
 /**
- * List ALL files across all project folders + root.
- * Returns files tagged with their parent folder name (= project name).
+ * List ALL files across all folders (recursive), tagged with their
+ * top-level project folder name. Nested sub-folders inherit the
+ * project name from their closest top-level ancestor.
  */
 export async function listAllDriveFiles(rootFolderIdOverride?: string): Promise<DriveFile[]> {
   const rootId = rootFolderIdOverride || getRootFolderId();
-  const folders = await listProjectFolders(rootId);
-
-  // Fetch files from all folders + root in parallel
-  const results = await Promise.allSettled([
-    // Files directly in root folder (unassigned)
-    listFilesInFolder(rootId, '_Root'),
-    // Files in each project sub-folder
-    ...folders.map((folder) => listFilesInFolder(folder.id, folder.name)),
-  ]);
-
   const allFiles: DriveFile[] = [];
-  for (const result of results) {
-    if (result.status === 'fulfilled') {
-      allFiles.push(...result.value);
-    }
+
+  async function crawl(folderId: string, projectName: string): Promise<void> {
+    const [files, subfolders] = await Promise.all([
+      listFilesInFolder(folderId, projectName),
+      listSubfolders(folderId),
+    ]);
+    allFiles.push(...files);
+    await Promise.all(
+      subfolders.map((sf) => crawl(sf.id, projectName))
+    );
   }
 
+  const topFolders = await listProjectFolders(rootId);
+
+  const rootFilesPromise = listFilesInFolder(rootId, '_Root');
+  const subCrawls = topFolders.map((folder) => crawl(folder.id, folder.name));
+
+  const [rootFiles] = await Promise.all([rootFilesPromise, ...subCrawls]);
+  allFiles.push(...rootFiles);
+
   return allFiles;
+}
+
+async function listSubfolders(parentId: string): Promise<DriveFolder[]> {
+  const drive = getDriveClient();
+  const folders: DriveFolder[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await drive.files.list({
+      q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: 'nextPageToken, files(id, name)',
+      pageSize: 1000,
+      ...(pageToken ? { pageToken } : {}),
+    });
+    for (const f of res.data.files || []) {
+      folders.push({ id: f.id!, name: f.name! });
+    }
+    pageToken = res.data.nextPageToken || undefined;
+  } while (pageToken);
+
+  return folders;
 }
 
 // ─── Supported MIME Types ───────────────────────────────────────

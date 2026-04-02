@@ -1,9 +1,11 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { extractWithSkill } from '@/lib/skills';
-import { parseFileBuffer } from '@/lib/file-parser';
-import { computeOverallConfidence, ValidationFlag } from '@/lib/pipeline';
+import { parseFileBuffer, extractTextWithClaude } from '@/lib/file-parser';
+import { ValidationFlag } from '@/lib/pipeline';
 import { getQStashReceiver, ProcessPayload } from '@/lib/qstash';
+import { downloadFileContent } from '@/lib/google-drive';
+import { extractText as pdfExtractText } from 'unpdf';
 
 export const maxDuration = 300;
 
@@ -28,7 +30,7 @@ export async function POST(request: NextRequest) {
   }
 
   const payload: ProcessPayload = JSON.parse(body);
-  const { recordId, orgId, projectId, fileName, mimeType, storagePath } = payload;
+  const { recordId, orgId, projectId, fileName, mimeType, storagePath, driveFileId } = payload;
   const t0 = Date.now();
   const timing: Record<string, number> = {};
 
@@ -37,33 +39,68 @@ export async function POST(request: NextRequest) {
   await sb.from('pipeline_log').update({ status: 'processing' }).eq('id', recordId);
 
   let tStep = Date.now();
-  let fileBuffer: Buffer;
-  try {
-    const { data, error } = await sb.storage
-      .from(DOCUMENTS_BUCKET)
-      .download(storagePath);
-    if (error || !data) {
-      throw new Error(error?.message || 'No data returned from storage');
-    }
-    fileBuffer = Buffer.from(await data.arrayBuffer());
-  } catch (err) {
-    console.error(`[process] Failed to download file for ${recordId}:`, err);
-    await markFailed(sb, recordId, 'storage_download', err);
-    return Response.json({ error: 'Failed to download file' }, { status: 500 });
-  }
-  timing.storage_download = Date.now() - tStep;
-
-  tStep = Date.now();
   let sourceText: string;
-  try {
-    const result = await parseFileBuffer(fileBuffer, mimeType, fileName);
-    sourceText = result.text;
-  } catch (err) {
-    console.error(`[process] File parsing failed for ${recordId}:`, err);
-    await markFailed(sb, recordId, 'text_extraction', err);
-    return Response.json({ error: 'Failed to extract text' }, { status: 500 });
+
+  if (driveFileId) {
+    try {
+      const content = await downloadFileContent(driveFileId, mimeType);
+      timing.drive_download = Date.now() - tStep;
+
+      tStep = Date.now();
+      if (content.text) {
+        sourceText = content.text;
+      } else if (content.base64 && content.method === 'pdf') {
+        const pdfBuffer = Buffer.from(content.base64, 'base64');
+        try {
+          const { text: localText } = await pdfExtractText(new Uint8Array(pdfBuffer), { mergePages: true });
+          const trimmed = (localText as string).trim();
+          if (trimmed.length > 100) {
+            sourceText = trimmed;
+          } else {
+            sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+          }
+        } catch {
+          sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+        }
+      } else if (content.base64 && content.method === 'image') {
+        sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+      } else {
+        throw new Error(`Could not extract text from Drive file (method=${content.method})`);
+      }
+      timing.text_extraction = Date.now() - tStep;
+    } catch (err) {
+      console.error(`[process] Drive download/parse failed for ${recordId}:`, err);
+      await markFailed(sb, recordId, 'drive_download', err);
+      return Response.json({ error: 'Failed to download from Drive' }, { status: 500 });
+    }
+  } else {
+    let fileBuffer: Buffer;
+    try {
+      const { data, error } = await sb.storage
+        .from(DOCUMENTS_BUCKET)
+        .download(storagePath);
+      if (error || !data) {
+        throw new Error(error?.message || 'No data returned from storage');
+      }
+      fileBuffer = Buffer.from(await data.arrayBuffer());
+    } catch (err) {
+      console.error(`[process] Failed to download file for ${recordId}:`, err);
+      await markFailed(sb, recordId, 'storage_download', err);
+      return Response.json({ error: 'Failed to download file' }, { status: 500 });
+    }
+    timing.storage_download = Date.now() - tStep;
+
+    tStep = Date.now();
+    try {
+      const result = await parseFileBuffer(fileBuffer, mimeType, fileName);
+      sourceText = result.text;
+    } catch (err) {
+      console.error(`[process] File parsing failed for ${recordId}:`, err);
+      await markFailed(sb, recordId, 'text_extraction', err);
+      return Response.json({ error: 'Failed to extract text' }, { status: 500 });
+    }
+    timing.text_extraction = Date.now() - tStep;
   }
-  timing.text_extraction = Date.now() - tStep;
 
   tStep = Date.now();
   await sb.from('pipeline_log').update({
