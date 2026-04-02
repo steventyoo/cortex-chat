@@ -820,6 +820,11 @@ export default function PipelineReview() {
                   {Math.round(selectedItem.overallConfidence * 100)}% confidence
                 </span>
               )}
+              <div className="ml-auto flex items-center gap-2 text-[10px] text-[#999]">
+                <span className="flex items-center gap-0.5">🟢 ≥90%</span>
+                <span className="flex items-center gap-0.5">🟡 70-89%</span>
+                <span className="flex items-center gap-0.5">🔴 &lt;70%</span>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4">
@@ -988,122 +993,114 @@ export default function PipelineReview() {
                       const fieldDefs = skillData?.field_definitions;
                       const fieldEntries = Object.entries(extraction.fields || {});
 
-                      if (fieldDefs && fieldDefs.length > 0) {
-                        const extractedFieldNames = new Set(fieldEntries.map(([k]) => k));
-                        const allFields = [
-                          ...fieldDefs.map(fd => ({
-                            name: fd.name,
-                            def: fd,
-                            extracted: extraction.fields?.[fd.name] || null,
-                          })),
-                          ...fieldEntries
-                            .filter(([k]) => !fieldDefs.some(fd => fd.name === k))
-                            .map(([k, v]) => ({ name: k, def: null as SkillFieldDef | null, extracted: v })),
-                        ];
+                      const renderField = (fieldName: string, def: SkillFieldDef | null, extracted: { value: string | number | null; confidence: number } | null) => {
+                        const confidence = extracted?.confidence ?? 0;
+                        const isEnum = def?.type === 'enum' && def.options && def.options.length > 0;
+                        const isBoolean = def?.type === 'boolean';
 
-                        return allFields.map(({ name: fieldName, def, extracted }) => {
-                          const confidence = extracted?.confidence ?? 0;
-                          const isEnum = def?.type === 'enum' && def.options && def.options.length > 0;
-                          const isBoolean = def?.type === 'boolean';
-
-                          return (
-                            <div key={fieldName} className="flex items-start gap-2 group">
-                              <div className="flex-1">
-                                <label className="flex items-center gap-1.5 text-[12px] font-medium text-[#555] mb-1">
-                                  {fieldName}
-                                  {def?.required && <span className="text-red-400 text-[10px]">*</span>}
-                                  <span className="text-[10px]">
-                                    {extracted ? getConfidenceIndicator(confidence) : ''}
+                        return (
+                          <div key={fieldName} className="flex items-start gap-2 group">
+                            <div className="flex-1">
+                              <label className="flex items-center gap-1.5 text-[12px] font-medium text-[#555] mb-1">
+                                {fieldName}
+                                {def?.required && <span className="text-red-400 text-[10px]">*</span>}
+                                <span className="text-[10px]">
+                                  {extracted ? getConfidenceIndicator(confidence) : ''}
+                                </span>
+                                {def?.description && (
+                                  <span className="text-[10px] text-[#bbb] truncate max-w-[120px]" title={def.description}>
+                                    {def.description}
                                   </span>
-                                  {def?.description && (
-                                    <span className="text-[10px] text-[#bbb] truncate max-w-[120px]" title={def.description}>
-                                      {def.description}
-                                    </span>
-                                  )}
-                                </label>
-                                {isEnum ? (
-                                  <select
-                                    value={editedFields[fieldName] ?? ''}
-                                    onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
-                                    className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
-                                      confidence < 0.7 ? 'border-red-200 bg-red-50/50'
-                                        : confidence < 0.9 ? 'border-amber-200 bg-amber-50/50'
-                                        : 'border-[#e0e0e0] bg-white'
-                                    } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
-                                  >
-                                    <option value="">— Select —</option>
-                                    {def!.options!.map((opt) => (
-                                      <option key={opt} value={opt}>{opt}</option>
-                                    ))}
-                                  </select>
-                                ) : isBoolean ? (
-                                  <select
-                                    value={editedFields[fieldName] ?? ''}
-                                    onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
-                                    className="w-full px-3 py-1.5 rounded-lg border border-[#e0e0e0] bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30"
-                                  >
-                                    <option value="">— Select —</option>
-                                    <option value="true">Yes</option>
-                                    <option value="false">No</option>
-                                  </select>
-                                ) : (
-                                  <input
-                                    type={def?.type === 'date' ? 'date' : def?.type === 'number' ? 'number' : 'text'}
-                                    value={editedFields[fieldName] ?? ''}
-                                    onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
-                                    className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
-                                      confidence < 0.7 ? 'border-red-200 bg-red-50/50'
-                                        : confidence < 0.9 ? 'border-amber-200 bg-amber-50/50'
-                                        : 'border-[#e0e0e0] bg-white'
-                                    } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
-                                  />
                                 )}
-                              </div>
-                              <button
-                                onClick={() => handleRemoveField(fieldName)}
-                                className="mt-6 p-1 rounded text-[#ddd] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
-                                title={`Remove ${fieldName}`}
-                              >
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                                  <path d="M18 6L6 18M6 6l12 12" />
-                                </svg>
-                              </button>
+                              </label>
+                              {isEnum ? (
+                                <select
+                                  value={editedFields[fieldName] ?? ''}
+                                  onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
+                                  className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
+                                    confidence < 0.7 ? 'border-red-200 bg-red-50/50'
+                                      : confidence < 0.9 ? 'border-amber-200 bg-amber-50/50'
+                                      : 'border-[#e0e0e0] bg-white'
+                                  } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
+                                >
+                                  <option value="">— Select —</option>
+                                  {def!.options!.map((opt) => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                  ))}
+                                </select>
+                              ) : isBoolean ? (
+                                <select
+                                  value={editedFields[fieldName] ?? ''}
+                                  onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
+                                  className="w-full px-3 py-1.5 rounded-lg border border-[#e0e0e0] bg-white text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/30"
+                                >
+                                  <option value="">— Select —</option>
+                                  <option value="true">Yes</option>
+                                  <option value="false">No</option>
+                                </select>
+                              ) : (
+                                <input
+                                  type={def?.type === 'date' ? 'date' : def?.type === 'number' ? 'number' : 'text'}
+                                  value={editedFields[fieldName] ?? ''}
+                                  onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
+                                  className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
+                                    confidence < 0.7 ? 'border-red-200 bg-red-50/50'
+                                      : confidence < 0.9 ? 'border-amber-200 bg-amber-50/50'
+                                      : 'border-[#e0e0e0] bg-white'
+                                  } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
+                                />
+                              )}
                             </div>
-                          );
-                        });
+                            <button
+                              onClick={() => handleRemoveField(fieldName)}
+                              className="mt-6 p-1 rounded text-[#ddd] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                              title={`Remove ${fieldName}`}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <path d="M18 6L6 18M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        );
+                      };
+
+                      if (fieldDefs && fieldDefs.length > 0) {
+                        const schemaFields = fieldDefs.map(fd => ({
+                          name: fd.name,
+                          def: fd,
+                          extracted: extraction.fields?.[fd.name] || null,
+                        }));
+                        const extraFields = fieldEntries
+                          .filter(([k]) => !fieldDefs.some(fd => fd.name === k))
+                          .map(([k, v]) => ({ name: k, def: null as SkillFieldDef | null, extracted: v }));
+
+                        return (
+                          <>
+                            <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider mb-2">
+                              Schema Fields ({schemaFields.length})
+                            </p>
+                            {schemaFields.map(({ name, def, extracted }) => renderField(name, def, extracted))}
+                            {extraFields.length > 0 && (
+                              <>
+                                <div className="border-t border-dashed border-[#e0e0e0] my-3" />
+                                <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider mb-2">
+                                  Discovered Fields ({extraFields.length})
+                                </p>
+                                {extraFields.map(({ name, def, extracted }) => renderField(name, def, extracted))}
+                              </>
+                            )}
+                          </>
+                        );
                       }
 
-                      return fieldEntries.map(([fieldName, fieldData]) => (
-                        <div key={fieldName} className="flex items-start gap-2 group">
-                          <div className="flex-1">
-                            <label className="flex items-center gap-1.5 text-[12px] font-medium text-[#555] mb-1">
-                              {fieldName}
-                              <span className="text-[10px]">
-                                {getConfidenceIndicator(fieldData.confidence)}
-                              </span>
-                            </label>
-                            <input
-                              type="text"
-                              value={editedFields[fieldName] ?? ''}
-                              onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
-                              className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
-                                fieldData.confidence < 0.7 ? 'border-red-200 bg-red-50/50'
-                                  : fieldData.confidence < 0.9 ? 'border-amber-200 bg-amber-50/50'
-                                  : 'border-[#e0e0e0] bg-white'
-                              } focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]`}
-                            />
-                          </div>
-                          <button
-                            onClick={() => handleRemoveField(fieldName)}
-                            className="mt-6 p-1 rounded text-[#ddd] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
-                            title={`Remove ${fieldName}`}
-                          >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                              <path d="M18 6L6 18M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                      ));
+                      return (
+                        <>
+                          <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider mb-2">
+                            Discovered Fields ({fieldEntries.length})
+                          </p>
+                          {fieldEntries.map(([fieldName, fieldData]) => renderField(fieldName, null, fieldData))}
+                        </>
+                      );
                     })()}
                   </div>
                 </div>
