@@ -19,7 +19,7 @@ export const ExtractedFieldSchema = z.object({
 export const ClassificationSchema = z.object({
   documentType: z.string(),
   confidence: z.number().min(0).max(1),
-  reasoning: z.string(),
+  reasoning: z.string().optional().default(''),
 });
 
 export type ClassificationOutput = z.infer<typeof ClassificationSchema>;
