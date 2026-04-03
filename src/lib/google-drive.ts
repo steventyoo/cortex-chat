@@ -336,7 +336,7 @@ export async function downloadFileContent(
     }
   }
 
-  // Word docs (.docx/.doc) → extract text from XML inside the ZIP
+  // Word docs (.docx/.doc) → extract text from XML inside the ZIP, or export via Drive for legacy .doc
   if (WORD_TYPES.some((t) => mimeType === t)) {
     try {
       const res = await drive.files.get(
@@ -348,7 +348,16 @@ export async function downloadFileContent(
       if (text) {
         return { text, base64: null, mimeType, method: 'word' };
       }
-      // Fallback: if we can't parse it, return as unsupported
+      // Legacy .doc or failed DOCX: ask Drive to export as plain text
+      console.log(`[downloadFileContent] DOCX extraction failed for ${fileId}, trying Drive export as text/plain`);
+      const exportRes = await drive.files.export(
+        { fileId, mimeType: 'text/plain' },
+        { responseType: 'arraybuffer' }
+      );
+      const exportedText = Buffer.from(exportRes.data as ArrayBuffer).toString('utf-8').trim();
+      if (exportedText.length > 0) {
+        return { text: exportedText, base64: null, mimeType: 'text/plain', method: 'word' };
+      }
       return { text: null, base64: null, mimeType, method: 'unsupported' };
     } catch (err) {
       console.error('Failed to download Word file:', err);
@@ -356,7 +365,7 @@ export async function downloadFileContent(
     }
   }
 
-  // PowerPoint (.pptx/.ppt) → extract text from XML inside the ZIP
+  // PowerPoint (.pptx/.ppt) → extract text from XML inside the ZIP, or export via Drive for legacy .ppt
   if (PPT_TYPES.some((t) => mimeType === t)) {
     try {
       const res = await drive.files.get(
@@ -367,6 +376,16 @@ export async function downloadFileContent(
       const text = extractTextFromPptx(buffer);
       if (text) {
         return { text, base64: null, mimeType, method: 'word' };
+      }
+      // Legacy .ppt or failed PPTX: ask Drive to export as plain text
+      console.log(`[downloadFileContent] PPTX extraction failed for ${fileId}, trying Drive export as text/plain`);
+      const exportRes = await drive.files.export(
+        { fileId, mimeType: 'text/plain' },
+        { responseType: 'arraybuffer' }
+      );
+      const exportedText = Buffer.from(exportRes.data as ArrayBuffer).toString('utf-8').trim();
+      if (exportedText.length > 0) {
+        return { text: exportedText, base64: null, mimeType: 'text/plain', method: 'word' };
       }
       return { text: null, base64: null, mimeType, method: 'unsupported' };
     } catch (err) {
