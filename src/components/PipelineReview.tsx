@@ -100,6 +100,30 @@ interface PipelineStats {
   processing: number;
 }
 
+interface GlobalStats {
+  total: number;
+  processing: number;
+  completed: number;
+  failed: number;
+  storedOnly: number;
+  pendingReview: number;
+  approved: number;
+  rejected: number;
+  flagged: number;
+  byStatus: Record<string, number>;
+  categoryCounts: Record<string, number>;
+  uncategorizedCount: number;
+}
+
+interface PaginationInfo {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
 export default function PipelineReview() {
   const [items, setItems] = useState<PipelineItem[]>([]);
   const [stats, setStats] = useState<PipelineStats | null>(null);
@@ -175,22 +199,54 @@ export default function PipelineReview() {
   const [newFieldRequired, setNewFieldRequired] = useState(false);
   const [savingField, setSavingField] = useState(false);
 
-  const fetchItems = useCallback(async () => {
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginationInfo | null>(null);
+
+  // Category drill-down state (for Categories tab)
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+
+  // Global stats for progress bar (polled separately, no limit)
+  const [globalStats, setGlobalStats] = useState<GlobalStats | null>(null);
+
+  // Stop ingest state
+  const [stoppingIngest, setStoppingIngest] = useState(false);
+
+  const fetchItems = useCallback(async (page?: number) => {
     setLoading(true);
     try {
-      const res = await fetch('/api/pipeline/list');
+      const p = page ?? currentPage;
+      const params = new URLSearchParams({ page: String(p), pageSize: '50' });
+      if (filterStatus && filterStatus !== 'all') {
+        const STATUS_PARAM_MAP: Record<string, string> = {
+          needs_action: 'pending_review',
+          processing: 'processing',
+          approved: 'approved',
+          pending_review: 'pending_review',
+          tier2_flagged: 'tier2_flagged',
+          rejected: 'rejected',
+          failed: 'failed',
+        };
+        const mapped = STATUS_PARAM_MAP[filterStatus];
+        if (mapped) params.set('status', mapped);
+      }
+      if (selectedCategoryId) {
+        params.set('categoryId', selectedCategoryId === '__uncategorized' ? 'null' : selectedCategoryId);
+      }
+      const res = await fetch(`/api/pipeline/list?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setItems(data.items);
         setStats(data.stats);
         if (data.categories) setCategories(data.categories);
+        if (data.pagination) setPagination(data.pagination);
       }
     } catch (err) {
       console.error('Failed to fetch pipeline items:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentPage, filterStatus, selectedCategoryId]);
 
   useEffect(() => {
     fetchItems();
@@ -204,19 +260,53 @@ export default function PipelineReview() {
     if (!hasInProgress) return;
 
     const interval = setInterval(() => {
-      fetch('/api/pipeline/list')
+      const params = new URLSearchParams({ page: String(currentPage), pageSize: '50' });
+      fetch(`/api/pipeline/list?${params.toString()}`)
         .then((r) => r.ok ? r.json() : null)
         .then((data) => {
           if (data) {
             setItems(data.items);
             setStats(data.stats);
+            if (data.pagination) setPagination(data.pagination);
           }
         })
         .catch(() => {});
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [items]);
+  }, [items, currentPage]);
+
+  // Fetch global stats for the progress bar
+  const fetchGlobalStats = useCallback(async () => {
+    try {
+      const res = await fetch('/api/pipeline/stats');
+      if (res.ok) {
+        const data = await res.json();
+        setGlobalStats(data);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { fetchGlobalStats(); }, [fetchGlobalStats]);
+
+  // Poll global stats while processing is active
+  useEffect(() => {
+    if (!globalStats || globalStats.processing === 0) return;
+    const interval = setInterval(fetchGlobalStats, 4000);
+    return () => clearInterval(interval);
+  }, [globalStats, fetchGlobalStats]);
+
+  // Reset to page 1 when filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterStatus, selectedCategoryId]);
+
+  // Reset category selection when leaving categories view
+  useEffect(() => {
+    if (listView !== 'categories') {
+      setSelectedCategoryId(null);
+    }
+  }, [listView]);
 
   useEffect(() => {
     fetch('/api/skills').then(r => r.json()).then(d => {
@@ -529,7 +619,10 @@ export default function PipelineReview() {
             ? `Queued ${queued} file${queued > 1 ? 's' : ''} for processing${remaining > 0 ? ` (${remaining} more next run)` : ''}`
             : data.message || 'No new files found'
         );
-        if (queued > 0) await fetchItems();
+        if (queued > 0) {
+          await fetchItems();
+          fetchGlobalStats();
+        }
       } else {
         setScanResult(data.error ? `${data.error}${data.hint ? ` — ${data.hint}` : ''}` : 'Scan failed');
       }
@@ -538,6 +631,28 @@ export default function PipelineReview() {
       setScanResult('Failed to connect to Drive');
     } finally {
       setScanning(false);
+      setTimeout(() => setScanResult(null), 5000);
+    }
+  };
+
+  const handleStopIngest = async () => {
+    if (!confirm('Stop all document ingestion? This will cancel all queued and processing documents.')) return;
+    setStoppingIngest(true);
+    try {
+      const res = await fetch('/api/pipeline/stop-ingest', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setScanResult(data.message || 'Ingestion stopped');
+        await fetchItems();
+        fetchGlobalStats();
+      } else {
+        setScanResult(data.error || 'Failed to stop ingestion');
+      }
+    } catch (err) {
+      console.error('Stop ingest error:', err);
+      setScanResult('Failed to stop ingestion');
+    } finally {
+      setStoppingIngest(false);
       setTimeout(() => setScanResult(null), 5000);
     }
   };
@@ -1340,15 +1455,16 @@ export default function PipelineReview() {
           </div>
         </div>
 
-        {/* Stats bar */}
-        {stats && (
-          <div className="flex gap-4 mb-3">
-            <StatPill label="Pending Review" value={stats.pendingReview} color="blue" onClick={() => setFilterStatus('pending_review')} active={filterStatus === 'pending_review'} />
-            <StatPill label="Flagged" value={stats.flagged} color="red" onClick={() => setFilterStatus('tier2_flagged')} active={filterStatus === 'tier2_flagged'} />
-            <StatPill label="Processing" value={stats.processing} color="amber" onClick={() => setFilterStatus('processing')} active={filterStatus === 'processing'} />
-            <StatPill label="Approved" value={stats.approved} color="green" onClick={() => setFilterStatus('approved')} active={filterStatus === 'approved'} />
-            <StatPill label="Rejected" value={stats.rejected} color="gray" onClick={() => setFilterStatus('rejected')} active={filterStatus === 'rejected'} />
-            <StatPill label="All" value={stats.total} color="slate" onClick={() => setFilterStatus('all')} active={filterStatus === 'all'} />
+        {/* Stats bar — use global stats for accurate totals */}
+        {(globalStats || stats) && (
+          <div className="flex flex-wrap gap-3 mb-3">
+            <StatPill label="Pending Review" value={globalStats?.pendingReview ?? stats?.pendingReview ?? 0} color="blue" onClick={() => setFilterStatus('pending_review')} active={filterStatus === 'pending_review'} />
+            <StatPill label="Flagged" value={globalStats?.flagged ?? stats?.flagged ?? 0} color="red" onClick={() => setFilterStatus('tier2_flagged')} active={filterStatus === 'tier2_flagged'} />
+            <StatPill label="Processing" value={globalStats?.processing ?? stats?.processing ?? 0} color="amber" onClick={() => setFilterStatus('processing')} active={filterStatus === 'processing'} />
+            <StatPill label="Approved" value={globalStats?.approved ?? stats?.approved ?? 0} color="green" onClick={() => setFilterStatus('approved')} active={filterStatus === 'approved'} />
+            <StatPill label="Rejected" value={globalStats?.rejected ?? stats?.rejected ?? 0} color="gray" onClick={() => setFilterStatus('rejected')} active={filterStatus === 'rejected'} />
+            <StatPill label="Failed" value={globalStats?.failed ?? 0} color="red" onClick={() => setFilterStatus('failed')} active={filterStatus === 'failed'} />
+            <StatPill label="All" value={globalStats?.total ?? stats?.total ?? 0} color="slate" onClick={() => setFilterStatus('all')} active={filterStatus === 'all'} />
           </div>
         )}
 
@@ -1505,6 +1621,20 @@ export default function PipelineReview() {
           </span>
         </div>
       )}
+
+      {/* Ingestion progress bar — always show when stats available */}
+      <AnimatePresence>
+        {globalStats && globalStats.total > 0 && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="border-b border-[#e8e8e8] overflow-hidden"
+          >
+            <IngestionProgressBar stats={globalStats} onStopIngest={handleStopIngest} stopping={stoppingIngest} />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Scan result notification */}
       <AnimatePresence>
@@ -1748,21 +1878,65 @@ export default function PipelineReview() {
             </p>
           </div>
         ) : listView === 'categories' ? (
-          <CategoryFolderView
-            items={filteredItems}
-            categories={categories}
-            expandedSections={expandedSections}
-            toggleSection={toggleSection}
-            openReview={openReview}
-            handleRetry={handleRetry}
-            handleMarkAsPushed={handleMarkAsPushed}
-            handleDelete={handleDelete}
-            handleMove={handleMove}
-            retryingId={retryingId}
-            markingPushedId={markingPushedId}
-            deletingId={deletingId}
-            movingId={movingId}
-          />
+          selectedCategoryId ? (
+            <div>
+              {/* Back button + category name */}
+              <div className="px-6 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-3">
+                <button
+                  onClick={() => setSelectedCategoryId(null)}
+                  className="flex items-center gap-1.5 text-[13px] text-[#555] hover:text-[#1a1a1a] transition-colors"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M19 12H5M12 19l-7-7 7-7" />
+                  </svg>
+                  Back
+                </button>
+                <span className="text-[14px] font-semibold text-[#1a1a1a]">
+                  {selectedCategoryId === '__uncategorized'
+                    ? 'Uncategorized'
+                    : categories.find(c => c.id === selectedCategoryId)?.label || 'Category'}
+                </span>
+                {pagination && (
+                  <span className="text-[12px] text-[#999]">
+                    {pagination.totalItems} document{pagination.totalItems !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+              {/* Document list for this category */}
+              <div className="divide-y divide-[#f0f0f0]">
+                <div className="px-6 py-2.5 flex items-center gap-4 bg-[#f7f7f5] border-b border-[#e8e8e8] text-[11px] font-semibold text-[#999] uppercase tracking-wider">
+                  <div className="w-10 flex-shrink-0">Type</div>
+                  <div className="flex-1 min-w-0">Document</div>
+                  <div className="w-14 flex-shrink-0 text-right">Confidence</div>
+                  <div className="w-24 flex-shrink-0 text-center">Status</div>
+                  <div className="w-[104px] flex-shrink-0 text-center">Actions</div>
+                </div>
+                {filteredItems.map((item) => (
+                  <DocumentRow
+                    key={item.id}
+                    item={item}
+                    categories={categories}
+                    openReview={openReview}
+                    handleRetry={handleRetry}
+                    handleMarkAsPushed={handleMarkAsPushed}
+                    handleDelete={handleDelete}
+                    handleMove={handleMove}
+                    retryingId={retryingId}
+                    markingPushedId={markingPushedId}
+                    deletingId={deletingId}
+                    movingId={movingId}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <CategoryFolderList
+              categories={categories}
+              categoryCounts={globalStats?.categoryCounts || {}}
+              uncategorizedCount={globalStats?.uncategorizedCount || 0}
+              onSelectCategory={(catId) => { setSelectedCategoryId(catId); setCurrentPage(1); }}
+            />
+          )
         ) : listView === 'drive' ? (
           <DrivePathFolderView
             items={filteredItems}
@@ -1808,6 +1982,14 @@ export default function PipelineReview() {
           </div>
         )}
       </div>
+
+      {/* Pagination controls */}
+      {pagination && pagination.totalPages > 1 && (
+        <PaginationControls
+          pagination={pagination}
+          onPageChange={(p) => { setCurrentPage(p); fetchItems(p); }}
+        />
+      )}
     </div>
   );
 }
@@ -2355,6 +2537,81 @@ function CategoryFolderView({
   );
 }
 
+const PRIORITY_BORDER_COLORS_LIST: Record<string, string> = {
+  P1: 'border-l-blue-500',
+  P2: 'border-l-amber-500',
+  P3: 'border-l-gray-300',
+};
+
+function CategoryFolderList({
+  categories,
+  categoryCounts,
+  uncategorizedCount,
+  onSelectCategory,
+}: {
+  categories: CategoryInfo[];
+  categoryCounts: Record<string, number>;
+  uncategorizedCount: number;
+  onSelectCategory: (catId: string) => void;
+}) {
+  const sorted = [...categories].sort((a, b) => a.sort_order - b.sort_order);
+
+  return (
+    <div className="divide-y divide-[#e8e8e8]">
+      {sorted.map((cat) => {
+        const count = categoryCounts[cat.id] || 0;
+        return (
+          <button
+            key={cat.id}
+            onClick={() => onSelectCategory(cat.id)}
+            className={`w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 ${
+              PRIORITY_BORDER_COLORS_LIST[cat.priority] || 'border-l-gray-200'
+            }`}
+          >
+            <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[12px] ${
+              cat.priority === 'P1' ? 'bg-blue-100 text-blue-600'
+                : cat.priority === 'P2' ? 'bg-amber-100 text-amber-600'
+                : 'bg-gray-100 text-gray-500'
+            }`}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+              </svg>
+            </div>
+            <span className="flex-1 text-[14px] font-medium text-[#1a1a1a]">{cat.label}</span>
+            {count > 0 && (
+              <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{count}</span>
+            )}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
+        );
+      })}
+
+      {/* Uncategorized folder */}
+      {uncategorizedCount > 0 && (
+        <button
+          onClick={() => onSelectCategory('__uncategorized')}
+          className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-gray-200"
+        >
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-gray-100 text-gray-400 text-[12px]">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+          <span className="flex-1 text-[14px] font-medium text-[#777]">Uncategorized</span>
+          <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{uncategorizedCount}</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+}
+
 function DrivePathFolderView({
   items,
   categories,
@@ -2692,7 +2949,7 @@ function parseCSVRows(csvText: string): string[][] {
       if (char === '"') {
         if (inQuotes && line[i + 1] === '"') {
           current += '"';
-          i++; // Skip escaped quote
+          i++;
         } else {
           inQuotes = !inQuotes;
         }
@@ -2703,9 +2960,190 @@ function parseCSVRows(csvText: string): string[][] {
         current += char;
       }
     }
-    cells.push(current); // Push last cell
+    cells.push(current);
     rows.push(cells);
   }
 
   return rows;
+}
+
+// ─── Ingestion Progress Bar ─────────────────────────────────
+
+function IngestionProgressBar({ stats, onStopIngest, stopping }: { stats: GlobalStats; onStopIngest: () => void; stopping?: boolean }) {
+  const done = stats.completed + stats.failed + stats.storedOnly;
+  const inFlight = stats.processing;
+  const total = stats.total;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const byStatus = stats.byStatus || {};
+  const isActive = inFlight > 0;
+
+  return (
+    <div className={`px-6 py-3 ${isActive ? 'bg-gradient-to-r from-blue-50 to-indigo-50' : 'bg-[#f8f9fa]'}`}>
+      <div className="flex items-center gap-4 mb-2">
+        <div className="flex items-center gap-2">
+          {isActive && (
+            <div className="relative w-4 h-4">
+              <svg className="animate-spin w-4 h-4 text-blue-600" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-20" />
+                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+              </svg>
+            </div>
+          )}
+          <span className="text-[13px] font-semibold text-[#1a1a1a]">
+            {isActive ? 'Ingesting documents' : 'Ingestion Summary'}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 text-[12px] text-[#555]">
+          {isActive && (
+            <>
+              <span>
+                <span className="font-bold text-blue-700">{inFlight}</span> processing
+              </span>
+              <span className="text-[#ccc]">&middot;</span>
+            </>
+          )}
+          <span>
+            <span className="font-bold text-green-700">{stats.completed}</span> completed
+          </span>
+          {(byStatus.failed || 0) > 0 && (
+            <>
+              <span className="text-[#ccc]">&middot;</span>
+              <span>
+                <span className="font-bold text-red-600">{byStatus.failed}</span> failed
+              </span>
+            </>
+          )}
+          {stats.storedOnly > 0 && (
+            <>
+              <span className="text-[#ccc]">&middot;</span>
+              <span>
+                <span className="font-bold text-indigo-600">{stats.storedOnly}</span> stored (large)
+              </span>
+            </>
+          )}
+          <span className="text-[#ccc]">&middot;</span>
+          <span>
+            <span className="font-bold text-[#333]">{total}</span> total
+          </span>
+        </div>
+        <div className="ml-auto flex items-center gap-3">
+          <span className="text-[12px] font-bold text-blue-700">{pct}%</span>
+          {isActive && (
+            <button
+              onClick={onStopIngest}
+              disabled={stopping}
+              className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-red-100 text-red-700 hover:bg-red-200 transition-colors border border-red-200 disabled:opacity-50"
+            >
+              {stopping ? 'Stopping...' : 'Stop Ingest'}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="h-2 bg-white/60 rounded-full overflow-hidden border border-blue-100">
+        <div className="h-full flex transition-all duration-700 ease-out">
+          {/* Completed portion */}
+          <div
+            className="bg-gradient-to-r from-green-400 to-green-500 transition-all duration-700"
+            style={{ width: `${total > 0 ? (stats.completed / total) * 100 : 0}%` }}
+          />
+          {/* Failed portion */}
+          {(byStatus.failed || 0) > 0 && (
+            <div
+              className="bg-red-400 transition-all duration-700"
+              style={{ width: `${(byStatus.failed / total) * 100}%` }}
+            />
+          )}
+          {/* Stored only portion */}
+          {stats.storedOnly > 0 && (
+            <div
+              className="bg-indigo-300 transition-all duration-700"
+              style={{ width: `${(stats.storedOnly / total) * 100}%` }}
+            />
+          )}
+          {/* Processing portion (animated) */}
+          {isActive && (
+            <div
+              className="bg-gradient-to-r from-blue-400 to-blue-500 animate-pulse transition-all duration-700"
+              style={{ width: `${total > 0 ? (inFlight / total) * 100 : 0}%` }}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Pagination Controls ────────────────────────────────────
+
+function PaginationControls({
+  pagination,
+  onPageChange,
+}: {
+  pagination: PaginationInfo;
+  onPageChange: (page: number) => void;
+}) {
+  const { page, totalPages, totalItems, pageSize } = pagination;
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, totalItems);
+
+  const pageNumbers = (() => {
+    const pages: (number | 'ellipsis')[] = [];
+    if (totalPages <= 7) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      if (page > 3) pages.push('ellipsis');
+      for (let i = Math.max(2, page - 1); i <= Math.min(totalPages - 1, page + 1); i++) {
+        pages.push(i);
+      }
+      if (page < totalPages - 2) pages.push('ellipsis');
+      pages.push(totalPages);
+    }
+    return pages;
+  })();
+
+  return (
+    <div className="px-6 py-3 border-t border-[#e8e8e8] bg-[#fafafa] flex items-center justify-between">
+      <span className="text-[12px] text-[#999]">
+        Showing {from}–{to} of {totalItems.toLocaleString()} documents
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onPageChange(page - 1)}
+          disabled={page <= 1}
+          className="px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-[#555] hover:bg-white hover:shadow-sm border border-transparent hover:border-[#e0e0e0] transition-all disabled:opacity-30 disabled:pointer-events-none"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+        {pageNumbers.map((p, i) =>
+          p === 'ellipsis' ? (
+            <span key={`e-${i}`} className="px-1 text-[12px] text-[#999]">&hellip;</span>
+          ) : (
+            <button
+              key={p}
+              onClick={() => onPageChange(p)}
+              className={`min-w-[32px] px-2 py-1.5 rounded-lg text-[12px] font-medium transition-all ${
+                p === page
+                  ? 'bg-[#1a1a1a] text-white shadow-sm'
+                  : 'text-[#555] hover:bg-white hover:shadow-sm border border-transparent hover:border-[#e0e0e0]'
+              }`}
+            >
+              {p}
+            </button>
+          )
+        )}
+        <button
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages}
+          className="px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-[#555] hover:bg-white hover:shadow-sm border border-transparent hover:border-[#e0e0e0] transition-all disabled:opacity-30 disabled:pointer-events-none"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
 }

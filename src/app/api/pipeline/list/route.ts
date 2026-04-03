@@ -12,6 +12,12 @@ interface CategoryRow {
   is_default: boolean;
 }
 
+const STATUS_GROUPS: Record<string, string[]> = {
+  approved: ['approved', 'pushed'],
+  pending_review: ['pending_review', 'tier2_validated'],
+  processing: ['queued', 'processing', 'tier1_extracting', 'tier2_validating'],
+};
+
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
@@ -23,30 +29,58 @@ export async function GET(request: NextRequest) {
   const projectId = searchParams.get('projectId');
   const status = searchParams.get('status');
   const showAllVersions = searchParams.get('allVersions') === 'true';
+  const categoryId = searchParams.get('categoryId');
+  const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+  const pageSize = Math.min(200, Math.max(1, parseInt(searchParams.get('pageSize') || '50', 10)));
 
   try {
     const sb = getSupabase();
-    let query = sb.from('pipeline_log').select('*').eq('org_id', session.orgId).neq('status', 'deleted').order('created_at', { ascending: false }).limit(100);
 
-    if (!showAllVersions) {
-      query = query.neq('is_latest_version', false);
-    }
-
-    if (projectId) query = query.eq('project_id', projectId);
-    if (status) {
-      const STATUS_GROUPS: Record<string, string[]> = {
-        approved: ['approved', 'pushed'],
-        pending_review: ['pending_review', 'tier2_validated'],
-      };
-      const statuses = STATUS_GROUPS[status];
-      if (statuses) {
-        query = query.in('status', statuses);
+    // --- Count query (for pagination metadata) ---
+    let countQ = sb.from('pipeline_log').select('*', { count: 'exact', head: true })
+      .eq('org_id', session.orgId)
+      .neq('status', 'deleted');
+    if (!showAllVersions) countQ = countQ.neq('is_latest_version', false);
+    if (projectId) countQ = countQ.eq('project_id', projectId);
+    if (categoryId) {
+      if (categoryId === 'null') {
+        countQ = countQ.is('category_id', null);
       } else {
-        query = query.eq('status', status);
+        countQ = countQ.eq('category_id', categoryId);
       }
     }
+    if (status) {
+      const group = STATUS_GROUPS[status];
+      if (group) { countQ = countQ.in('status', group); }
+      else { countQ = countQ.eq('status', status); }
+    }
+    const { count: totalCount } = await countQ;
 
-    const { data, error } = await query;
+    // --- Data query (paginated) ---
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let dataQ = sb.from('pipeline_log').select('*')
+      .eq('org_id', session.orgId)
+      .neq('status', 'deleted')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (!showAllVersions) dataQ = dataQ.neq('is_latest_version', false);
+    if (projectId) dataQ = dataQ.eq('project_id', projectId);
+    if (categoryId) {
+      if (categoryId === 'null') {
+        dataQ = dataQ.is('category_id', null);
+      } else {
+        dataQ = dataQ.eq('category_id', categoryId);
+      }
+    }
+    if (status) {
+      const group = STATUS_GROUPS[status];
+      if (group) { dataQ = dataQ.in('status', group); }
+      else { dataQ = dataQ.eq('status', status); }
+    }
+
+    const { data, error } = await dataQ;
     if (error) {
       console.error('Supabase error:', error.message);
       return Response.json({ error: 'Failed to fetch pipeline data' }, { status: 500 });
@@ -67,10 +101,8 @@ export async function GET(request: NextRequest) {
       is_default: Boolean(r.is_default),
     }));
 
-    // Map Supabase rows to the Airtable-shaped records that parsePipelineItem expects
     const items = (data || []).map((row: Record<string, unknown>) => {
       const fields: Record<string, unknown> = {};
-      // Map snake_case columns to Title Case field names for parsePipelineItem
       fields['Pipeline ID'] = row.pipeline_id;
       fields['Project ID'] = row.project_id;
       fields['File Name'] = row.file_name;
@@ -105,6 +137,16 @@ export async function GET(request: NextRequest) {
       return parsePipelineItem({ id: String(row.id), fields });
     });
 
+    const totalPages = Math.ceil((totalCount || 0) / pageSize);
+    const pagination = {
+      page,
+      pageSize,
+      totalItems: totalCount || 0,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    };
+
     const stats = {
       total: items.length,
       pendingReview: items.filter((i: { status: string }) => i.status === 'pending_review').length,
@@ -116,7 +158,7 @@ export async function GET(request: NextRequest) {
       ).length,
     };
 
-    return Response.json({ items, stats, categories });
+    return Response.json({ items, stats, categories, pagination });
   } catch (err) {
     console.error('Pipeline list error:', err);
     return Response.json({ error: 'Internal server error' }, { status: 500 });
