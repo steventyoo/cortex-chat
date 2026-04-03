@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
 
     const { data, error } = await sb
       .from('pipeline_log')
-      .select('status, category_id')
+      .select('status, category_id, drive_folder_path')
       .eq('org_id', session.orgId)
       .neq('status', 'deleted')
       .neq('is_latest_version', false);
@@ -28,6 +28,7 @@ export async function GET(request: NextRequest) {
     const total = rows.length;
     const counts: Record<string, number> = {};
     const categoryCounts: Record<string, number> = {};
+    const drivePathCounts: Record<string, number> = {};
     const uncategorizedCount = { value: 0 };
 
     for (const row of rows) {
@@ -39,6 +40,11 @@ export async function GET(request: NextRequest) {
         categoryCounts[catId] = (categoryCounts[catId] || 0) + 1;
       } else {
         uncategorizedCount.value++;
+      }
+
+      const drivePath = row.drive_folder_path as string | null;
+      if (drivePath) {
+        drivePathCounts[drivePath] = (drivePathCounts[drivePath] || 0) + 1;
       }
     }
 
@@ -62,6 +68,7 @@ export async function GET(request: NextRequest) {
       byStatus: counts,
       categoryCounts,
       uncategorizedCount: uncategorizedCount.value,
+      drivePathCounts,
     });
   } catch (err) {
     console.error('Stats error:', err);

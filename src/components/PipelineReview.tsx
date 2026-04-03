@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -113,6 +113,7 @@ interface GlobalStats {
   byStatus: Record<string, number>;
   categoryCounts: Record<string, number>;
   uncategorizedCount: number;
+  drivePathCounts: Record<string, number>;
 }
 
 interface PaginationInfo {
@@ -206,6 +207,9 @@ export default function PipelineReview() {
   // Category drill-down state (for Categories tab)
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
 
+  // Drive folder drill-down state (for Drive Folders tab)
+  const [selectedDrivePath, setSelectedDrivePath] = useState<string | null>(null);
+
   // Global stats for progress bar (polled separately, no limit)
   const [globalStats, setGlobalStats] = useState<GlobalStats | null>(null);
 
@@ -233,6 +237,9 @@ export default function PipelineReview() {
       if (selectedCategoryId) {
         params.set('categoryId', selectedCategoryId === '__uncategorized' ? 'null' : selectedCategoryId);
       }
+      if (selectedDrivePath) {
+        params.set('driveFolderPath', selectedDrivePath);
+      }
       const res = await fetch(`/api/pipeline/list?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
@@ -246,7 +253,7 @@ export default function PipelineReview() {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, filterStatus, selectedCategoryId]);
+  }, [currentPage, filterStatus, selectedCategoryId, selectedDrivePath]);
 
   useEffect(() => {
     fetchItems();
@@ -299,13 +306,12 @@ export default function PipelineReview() {
   // Reset to page 1 when filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterStatus, selectedCategoryId]);
+  }, [filterStatus, selectedCategoryId, selectedDrivePath]);
 
-  // Reset category selection when leaving categories view
+  // Reset category/drive selection when leaving their views
   useEffect(() => {
-    if (listView !== 'categories') {
-      setSelectedCategoryId(null);
-    }
+    if (listView !== 'categories') setSelectedCategoryId(null);
+    if (listView !== 'drive') setSelectedDrivePath(null);
   }, [listView]);
 
   useEffect(() => {
@@ -1938,21 +1944,64 @@ export default function PipelineReview() {
             />
           )
         ) : listView === 'drive' ? (
-          <DrivePathFolderView
-            items={filteredItems}
-            categories={categories}
-            expandedSections={expandedSections}
-            toggleSection={toggleSection}
-            openReview={openReview}
-            handleRetry={handleRetry}
-            handleMarkAsPushed={handleMarkAsPushed}
-            handleDelete={handleDelete}
-            handleMove={handleMove}
-            retryingId={retryingId}
-            markingPushedId={markingPushedId}
-            deletingId={deletingId}
-            movingId={movingId}
-          />
+          selectedDrivePath ? (
+            <div>
+              {/* Back button + path name */}
+              <div className="px-6 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-3">
+                <button
+                  onClick={() => setSelectedDrivePath(null)}
+                  className="flex items-center gap-1.5 text-[13px] text-[#555] hover:text-[#1a1a1a] transition-colors"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M19 12H5M12 19l-7-7 7-7" />
+                  </svg>
+                  Back
+                </button>
+                <div className="flex items-center gap-1.5 text-[13px] text-[#1a1a1a] font-medium min-w-0">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4285f4" strokeWidth="2" strokeLinecap="round">
+                    <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                  </svg>
+                  <span className="truncate">{selectedDrivePath}</span>
+                </div>
+                {pagination && (
+                  <span className="text-[12px] text-[#999] flex-shrink-0">
+                    {pagination.totalItems} document{pagination.totalItems !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+              {/* Document list for this drive path */}
+              <div className="divide-y divide-[#f0f0f0]">
+                <div className="px-6 py-2.5 flex items-center gap-4 bg-[#f7f7f5] border-b border-[#e8e8e8] text-[11px] font-semibold text-[#999] uppercase tracking-wider">
+                  <div className="w-10 flex-shrink-0">Type</div>
+                  <div className="flex-1 min-w-0">Document</div>
+                  <div className="w-14 flex-shrink-0 text-right">Confidence</div>
+                  <div className="w-24 flex-shrink-0 text-center">Status</div>
+                  <div className="w-[104px] flex-shrink-0 text-center">Actions</div>
+                </div>
+                {filteredItems.map((item) => (
+                  <DocumentRow
+                    key={item.id}
+                    item={item}
+                    categories={categories}
+                    openReview={openReview}
+                    handleRetry={handleRetry}
+                    handleMarkAsPushed={handleMarkAsPushed}
+                    handleDelete={handleDelete}
+                    handleMove={handleMove}
+                    retryingId={retryingId}
+                    markingPushedId={markingPushedId}
+                    deletingId={deletingId}
+                    movingId={movingId}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <DriveTreeView
+              drivePathCounts={globalStats?.drivePathCounts || {}}
+              onSelectPath={(path) => { setSelectedDrivePath(path); setCurrentPage(1); }}
+            />
+          )
         ) : (
           <div className="divide-y divide-[#f0f0f0]">
             {/* Column headers */}
@@ -2609,6 +2658,223 @@ function CategoryFolderList({
         </button>
       )}
     </div>
+  );
+}
+
+// ─── Drive Tree View (nested folder structure) ────────────────
+
+interface TreeNode {
+  name: string;
+  fullPath: string;
+  directCount: number;
+  totalCount: number;
+  children: TreeNode[];
+}
+
+function buildDriveTree(pathCounts: Record<string, number>): TreeNode[] {
+  const root: TreeNode[] = [];
+  const nodeMap = new Map<string, TreeNode>();
+
+  const sortedPaths = Object.keys(pathCounts).sort();
+
+  for (const fullPath of sortedPaths) {
+    const segments = fullPath.split(' / ');
+    let currentPath = '';
+
+    for (let i = 0; i < segments.length; i++) {
+      const prevPath = currentPath;
+      currentPath = i === 0 ? segments[i] : `${currentPath} / ${segments[i]}`;
+
+      if (!nodeMap.has(currentPath)) {
+        const node: TreeNode = {
+          name: segments[i],
+          fullPath: currentPath,
+          directCount: 0,
+          totalCount: 0,
+          children: [],
+        };
+        nodeMap.set(currentPath, node);
+
+        if (i === 0) {
+          root.push(node);
+        } else {
+          const parent = nodeMap.get(prevPath);
+          if (parent) parent.children.push(node);
+        }
+      }
+    }
+
+    const node = nodeMap.get(fullPath);
+    if (node) {
+      node.directCount = pathCounts[fullPath];
+    }
+  }
+
+  function computeTotals(node: TreeNode): number {
+    let total = node.directCount;
+    for (const child of node.children) {
+      total += computeTotals(child);
+    }
+    node.totalCount = total;
+    return total;
+  }
+
+  for (const rootNode of root) {
+    computeTotals(rootNode);
+  }
+
+  return root;
+}
+
+function DriveTreeView({
+  drivePathCounts,
+  onSelectPath,
+}: {
+  drivePathCounts: Record<string, number>;
+  onSelectPath: (path: string) => void;
+}) {
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+
+  const tree = useMemo(() => buildDriveTree(drivePathCounts), [drivePathCounts]);
+
+  const toggleExpand = useCallback((path: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedNodes(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  if (tree.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <p className="text-[14px] font-medium text-[#1a1a1a]">No Drive files</p>
+        <p className="text-[13px] text-[#999] mt-1">
+          Scan Google Drive to see folder structure here
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="divide-y divide-[#e8e8e8]">
+      {tree.map((node) => (
+        <DriveTreeNode
+          key={node.fullPath}
+          node={node}
+          depth={0}
+          expandedNodes={expandedNodes}
+          toggleExpand={toggleExpand}
+          onSelectPath={onSelectPath}
+        />
+      ))}
+    </div>
+  );
+}
+
+function DriveTreeNode({
+  node,
+  depth,
+  expandedNodes,
+  toggleExpand,
+  onSelectPath,
+}: {
+  node: TreeNode;
+  depth: number;
+  expandedNodes: Set<string>;
+  toggleExpand: (path: string, e: React.MouseEvent) => void;
+  onSelectPath: (path: string) => void;
+}) {
+  const isExpanded = expandedNodes.has(node.fullPath);
+  const hasChildren = node.children.length > 0;
+
+  return (
+    <>
+      <div
+        className="flex items-center gap-2 hover:bg-[#f7f7f5] transition-colors cursor-pointer"
+        style={{ paddingLeft: `${24 + depth * 20}px`, paddingRight: 24, paddingTop: 10, paddingBottom: 10 }}
+      >
+        {/* Expand/collapse toggle */}
+        {hasChildren ? (
+          <button
+            onClick={(e) => toggleExpand(node.fullPath, e)}
+            className="w-5 h-5 flex items-center justify-center rounded hover:bg-[#e8e8e8] transition-colors flex-shrink-0"
+          >
+            <svg
+              width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="2" strokeLinecap="round"
+              className={`transition-transform duration-150 ${isExpanded ? 'rotate-90' : ''}`}
+            >
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
+        ) : (
+          <div className="w-5 h-5 flex-shrink-0" />
+        )}
+
+        {/* Folder icon */}
+        <div className={`w-6 h-6 rounded flex items-center justify-center flex-shrink-0 ${
+          depth === 0 ? 'bg-[#4285f4]/10 text-[#4285f4]' : 'bg-gray-100 text-gray-400'
+        }`}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+          </svg>
+        </div>
+
+        {/* Folder name — clicking navigates to see docs */}
+        <button
+          onClick={() => node.directCount > 0 ? onSelectPath(node.fullPath) : toggleExpand(node.fullPath, { stopPropagation: () => {} } as React.MouseEvent)}
+          className="flex-1 text-left min-w-0"
+        >
+          <span className={`text-[13px] truncate block ${
+            depth === 0 ? 'font-semibold text-[#1a1a1a]' : 'font-medium text-[#333]'
+          }`}>
+            {node.name}
+          </span>
+        </button>
+
+        {/* Counts */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {node.directCount > 0 && (
+            <button
+              onClick={() => onSelectPath(node.fullPath)}
+              className="text-[11px] text-[#4285f4] bg-[#4285f4]/8 px-2 py-0.5 rounded-full font-medium hover:bg-[#4285f4]/15 transition-colors"
+            >
+              {node.directCount} file{node.directCount !== 1 ? 's' : ''}
+            </button>
+          )}
+          {hasChildren && (
+            <span className="text-[11px] text-[#999] bg-[#f0f0f0] px-2 py-0.5 rounded-full font-medium">
+              {node.totalCount} total
+            </span>
+          )}
+        </div>
+
+        {/* Chevron for navigation */}
+        {node.directCount > 0 && (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round" className="flex-shrink-0">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        )}
+      </div>
+
+      {/* Children (when expanded) */}
+      {isExpanded && hasChildren && (
+        <div>
+          {node.children.map((child) => (
+            <DriveTreeNode
+              key={child.fullPath}
+              node={child}
+              depth={depth + 1}
+              expandedNodes={expandedNodes}
+              toggleExpand={toggleExpand}
+              onSelectPath={onSelectPath}
+            />
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
