@@ -29,6 +29,13 @@ export const DEFAULT_CATEGORIES: DefaultCategory[] = [
   { key: '15_correspondence',       label: 'Correspondence',       priority: 'P3', sort_order: 15, search_keywords: 'letter,email,correspondence,notice,memo' },
   { key: '16_photos',               label: 'Photos',               priority: 'P3', sort_order: 16, search_keywords: 'photo,image,picture,site photo,progress photo' },
   { key: '17_misc',                 label: 'Miscellaneous',        priority: 'P3', sort_order: 17, search_keywords: 'misc,other,general,uncategorized' },
+  // Company-wide (non-project-specific) categories
+  { key: '20_financials',           label: 'Company Financials',   priority: 'P2', sort_order: 20, search_keywords: 'P&L,profit and loss,trial balance,AR aging,accounts receivable,financial statement,quickbooks export' },
+  { key: '21_bid_log',              label: 'Bid Log',              priority: 'P2', sort_order: 21, search_keywords: 'bid log,bid tracker,bid history,win loss,bid tabulation' },
+  { key: '22_gc_contacts',          label: 'GC Contacts',          priority: 'P3', sort_order: 22, search_keywords: 'GC contact,general contractor,PM contact,contact list,vendor list' },
+  { key: '23_employee_roster',      label: 'Employee Roster',      priority: 'P3', sort_order: 23, search_keywords: 'employee,roster,crew list,personnel,classification,rate sheet' },
+  { key: '24_insurance_and_bonding', label: 'Insurance & Bonding', priority: 'P2', sort_order: 24, search_keywords: 'insurance policy,bonding capacity,COI,surety,claims history,general liability' },
+  { key: '25_equipment',            label: 'Equipment',            priority: 'P3', sort_order: 25, search_keywords: 'equipment,tool,vehicle,fleet,rental,utilization,asset' },
 ];
 
 export const SKILL_TO_CATEGORY_KEY: Record<string, string> = {
@@ -44,6 +51,11 @@ export const SKILL_TO_CATEGORY_KEY: Record<string, string> = {
   production_activity: '08_labor_and_timesheets',
   daily_report:        '10_daily_reports',
   safety_inspection:   '17_misc',
+  financials:          '20_financials',
+  bid_log:             '21_bid_log',
+  employee_roster:     '23_employee_roster',
+  insurance_policy:    '24_insurance_and_bonding',
+  equipment:           '25_equipment',
   _general:            '17_misc',
 };
 
@@ -64,6 +76,13 @@ export const FOLDER_HINTS: Array<{ pattern: RegExp; categoryKey: string }> = [
   { pattern: /back.?charge/i,                      categoryKey: '14_back_charges' },
   { pattern: /correspondence|letters?|memos?/i,    categoryKey: '15_correspondence' },
   { pattern: /photos?|images?|pictures?/i,         categoryKey: '16_photos' },
+  // Company-wide folder hints
+  { pattern: /quickbooks|financials?|P.?L|trial.?balance|AR.?aging/i, categoryKey: '20_financials' },
+  { pattern: /bid.?log|bid.?track|win.?loss/i,    categoryKey: '21_bid_log' },
+  { pattern: /GC.?contact|contractor.?list/i,      categoryKey: '22_gc_contacts' },
+  { pattern: /employee|roster|personnel|crew.?list/i, categoryKey: '23_employee_roster' },
+  { pattern: /insurance.?and.?bond|bonding.?capacity|policies/i, categoryKey: '24_insurance_and_bonding' },
+  { pattern: /equipment|fleet|tool.?list|asset.?list/i, categoryKey: '25_equipment' },
 ];
 
 export function matchFolderHint(folderName: string): string | null {
