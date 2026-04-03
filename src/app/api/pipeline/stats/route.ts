@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { getSupabase } from '@/lib/supabase';
 
+const BATCH_SIZE = 1000;
+
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
@@ -12,40 +14,49 @@ export async function GET(request: NextRequest) {
   try {
     const sb = getSupabase();
 
-    const { data, error } = await sb
-      .from('pipeline_log')
-      .select('status, category_id, drive_folder_path')
-      .eq('org_id', session.orgId)
-      .neq('status', 'deleted')
-      .neq('is_latest_version', false);
-
-    if (error) {
-      console.error('Stats query error:', error.message);
-      return Response.json({ error: 'Failed to fetch stats' }, { status: 500 });
-    }
-
-    const rows = data || [];
-    const total = rows.length;
     const counts: Record<string, number> = {};
     const categoryCounts: Record<string, number> = {};
     const drivePathCounts: Record<string, number> = {};
-    const uncategorizedCount = { value: 0 };
+    let uncategorizedCount = 0;
+    let total = 0;
+    let offset = 0;
 
-    for (const row of rows) {
-      const s = row.status as string;
-      counts[s] = (counts[s] || 0) + 1;
+    while (true) {
+      const { data, error } = await sb
+        .from('pipeline_log')
+        .select('status, category_id, drive_folder_path')
+        .eq('org_id', session.orgId)
+        .neq('status', 'deleted')
+        .neq('is_latest_version', false)
+        .range(offset, offset + BATCH_SIZE - 1);
 
-      const catId = row.category_id as string | null;
-      if (catId) {
-        categoryCounts[catId] = (categoryCounts[catId] || 0) + 1;
-      } else {
-        uncategorizedCount.value++;
+      if (error) {
+        console.error('Stats query error:', error.message);
+        return Response.json({ error: 'Failed to fetch stats' }, { status: 500 });
       }
 
-      const drivePath = row.drive_folder_path as string | null;
-      if (drivePath) {
-        drivePathCounts[drivePath] = (drivePathCounts[drivePath] || 0) + 1;
+      const rows = data || [];
+      total += rows.length;
+
+      for (const row of rows) {
+        const s = row.status as string;
+        counts[s] = (counts[s] || 0) + 1;
+
+        const catId = row.category_id as string | null;
+        if (catId) {
+          categoryCounts[catId] = (categoryCounts[catId] || 0) + 1;
+        } else {
+          uncategorizedCount++;
+        }
+
+        const drivePath = row.drive_folder_path as string | null;
+        if (drivePath) {
+          drivePathCounts[drivePath] = (drivePathCounts[drivePath] || 0) + 1;
+        }
       }
+
+      if (rows.length < BATCH_SIZE) break;
+      offset += BATCH_SIZE;
     }
 
     const processing = (counts.queued || 0) + (counts.processing || 0) +
@@ -67,7 +78,7 @@ export async function GET(request: NextRequest) {
       flagged: counts.tier2_flagged || 0,
       byStatus: counts,
       categoryCounts,
-      uncategorizedCount: uncategorizedCount.value,
+      uncategorizedCount,
       drivePathCounts,
     });
   } catch (err) {
