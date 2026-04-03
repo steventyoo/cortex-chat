@@ -16,6 +16,9 @@ import {
   EMAIL_TYPES as SHARED_EMAIL_TYPES,
 } from './file-parser';
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const WordExtractor = require('word-extractor');
+
 // ─── Types ──────────────────────────────────────────────────────
 
 export interface DriveFile {
@@ -336,7 +339,7 @@ export async function downloadFileContent(
     }
   }
 
-  // Word docs (.docx/.doc) → extract text from XML inside the ZIP, or export via Drive for legacy .doc
+  // Word docs (.docx/.doc) → DOCX via ZIP XML, legacy .doc via word-extractor
   if (WORD_TYPES.some((t) => mimeType === t)) {
     try {
       const res = await drive.files.get(
@@ -348,16 +351,15 @@ export async function downloadFileContent(
       if (text) {
         return { text, base64: null, mimeType, method: 'word' };
       }
-      // Legacy .doc or failed DOCX: ask Drive to export as plain text
-      console.log(`[downloadFileContent] DOCX extraction failed for ${fileId}, trying Drive export as text/plain`);
-      const exportRes = await drive.files.export(
-        { fileId, mimeType: 'text/plain' },
-        { responseType: 'arraybuffer' }
-      );
-      const exportedText = Buffer.from(exportRes.data as ArrayBuffer).toString('utf-8').trim();
-      if (exportedText.length > 0) {
-        return { text: exportedText, base64: null, mimeType: 'text/plain', method: 'word' };
+      // Legacy .doc: use word-extractor for OLE2 binary format
+      console.log(`[downloadFileContent] DOCX extraction failed for ${fileId}, trying word-extractor for legacy .doc`);
+      const extractor = new WordExtractor();
+      const doc = await extractor.extract(buffer);
+      const legacyText = doc.getBody()?.trim();
+      if (legacyText && legacyText.length > 0) {
+        return { text: legacyText, base64: null, mimeType: 'application/msword', method: 'word' };
       }
+      console.log(`[downloadFileContent] word-extractor returned empty body for ${fileId}`);
       return { text: null, base64: null, mimeType, method: 'unsupported' };
     } catch (err) {
       console.error('Failed to download Word file:', err);
@@ -365,7 +367,7 @@ export async function downloadFileContent(
     }
   }
 
-  // PowerPoint (.pptx/.ppt) → extract text from XML inside the ZIP, or export via Drive for legacy .ppt
+  // PowerPoint (.pptx/.ppt) → PPTX via ZIP XML; legacy .ppt not supported locally
   if (PPT_TYPES.some((t) => mimeType === t)) {
     try {
       const res = await drive.files.get(
@@ -377,16 +379,7 @@ export async function downloadFileContent(
       if (text) {
         return { text, base64: null, mimeType, method: 'word' };
       }
-      // Legacy .ppt or failed PPTX: ask Drive to export as plain text
-      console.log(`[downloadFileContent] PPTX extraction failed for ${fileId}, trying Drive export as text/plain`);
-      const exportRes = await drive.files.export(
-        { fileId, mimeType: 'text/plain' },
-        { responseType: 'arraybuffer' }
-      );
-      const exportedText = Buffer.from(exportRes.data as ArrayBuffer).toString('utf-8').trim();
-      if (exportedText.length > 0) {
-        return { text: exportedText, base64: null, mimeType: 'text/plain', method: 'word' };
-      }
+      console.log(`[downloadFileContent] PPTX extraction failed for ${fileId}, legacy .ppt not supported`);
       return { text: null, base64: null, mimeType, method: 'unsupported' };
     } catch (err) {
       console.error('Failed to download PowerPoint file:', err);
