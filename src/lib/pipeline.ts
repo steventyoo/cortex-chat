@@ -85,6 +85,16 @@ export const FOLDER_HINTS: Array<{ pattern: RegExp; categoryKey: string }> = [
   { pattern: /equipment|fleet|tool.?list|asset.?list/i, categoryKey: '25_equipment' },
 ];
 
+const COMPANY_WIDE_KEY_PREFIX = '20';
+
+export function isCompanyWideCategory(key: string): boolean {
+  return key >= COMPANY_WIDE_KEY_PREFIX;
+}
+
+export const COMPANY_WIDE_CATEGORY_KEYS = new Set(
+  DEFAULT_CATEGORIES.filter(c => isCompanyWideCategory(c.key)).map(c => c.key)
+);
+
 export function matchFolderHint(folderName: string): string | null {
   for (const hint of FOLDER_HINTS) {
     if (hint.pattern.test(folderName)) return hint.categoryKey;

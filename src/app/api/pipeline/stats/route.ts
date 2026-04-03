@@ -14,9 +14,23 @@ export async function GET(request: NextRequest) {
   try {
     const sb = getSupabase();
 
+    // Fetch categories for this org to build key lookups
+    const { data: catData } = await sb
+      .from('document_categories')
+      .select('id, key')
+      .eq('org_id', session.orgId);
+    const catIdToKey = new Map<string, string>();
+    for (const c of catData || []) {
+      catIdToKey.set(String(c.id), String(c.key));
+    }
+
     const counts: Record<string, number> = {};
     const categoryCounts: Record<string, number> = {};
     const drivePathCounts: Record<string, number> = {};
+    // projectCategoryCounts[projectName][categoryId] = count
+    const projectCategoryCounts: Record<string, Record<string, number>> = {};
+    const projectTotalCounts: Record<string, number> = {};
+    let companyWideTotalCount = 0;
     let uncategorizedCount = 0;
     let total = 0;
     let offset = 0;
@@ -53,6 +67,29 @@ export async function GET(request: NextRequest) {
         if (drivePath) {
           drivePathCounts[drivePath] = (drivePathCounts[drivePath] || 0) + 1;
         }
+
+        // Determine if this category is company-wide
+        const catKey = catId ? catIdToKey.get(catId) : null;
+        const isCompanyWide = catKey ? catKey >= '20' : false;
+
+        if (isCompanyWide) {
+          companyWideTotalCount++;
+          // Company-wide docs go under a special "__company_wide" project bucket
+          if (!projectCategoryCounts['__company_wide']) projectCategoryCounts['__company_wide'] = {};
+          if (catId) {
+            projectCategoryCounts['__company_wide'][catId] = (projectCategoryCounts['__company_wide'][catId] || 0) + 1;
+          }
+        } else if (catId || drivePath) {
+          // Project-specific: group by top-level drive folder
+          const projectName = drivePath ? drivePath.split(' / ')[0] : '__no_project';
+          projectTotalCounts[projectName] = (projectTotalCounts[projectName] || 0) + 1;
+          if (catId) {
+            if (!projectCategoryCounts[projectName]) projectCategoryCounts[projectName] = {};
+            projectCategoryCounts[projectName][catId] = (projectCategoryCounts[projectName][catId] || 0) + 1;
+          }
+        } else {
+          // No category and no drive path — counts toward uncategorized (already counted above)
+        }
       }
 
       if (rows.length < BATCH_SIZE) break;
@@ -80,6 +117,9 @@ export async function GET(request: NextRequest) {
       categoryCounts,
       uncategorizedCount,
       drivePathCounts,
+      projectCategoryCounts,
+      projectTotalCounts,
+      companyWideTotalCount,
     });
   } catch (err) {
     console.error('Stats error:', err);

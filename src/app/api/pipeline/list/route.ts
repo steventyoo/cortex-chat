@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
   const showAllVersions = searchParams.get('allVersions') === 'true';
   const categoryId = searchParams.get('categoryId');
   const driveFolderPath = searchParams.get('driveFolderPath');
+  const projectFolder = searchParams.get('projectFolder');
   const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
   const pageSize = Math.min(200, Math.max(1, parseInt(searchParams.get('pageSize') || '50', 10)));
 
@@ -57,6 +58,17 @@ export async function GET(request: NextRequest) {
     }
     if (driveFolderPath) {
       countQ = countQ.eq('drive_folder_path', driveFolderPath);
+    }
+    if (projectFolder) {
+      if (projectFolder === '__company_wide') {
+        // Handled via categoryId filter from the UI
+      } else if (projectFolder === '__no_project') {
+        countQ = countQ.is('drive_folder_path', null);
+      } else if (projectFolder === '__uncategorized') {
+        // No project folder filter needed — categoryId=null handles it
+      } else {
+        countQ = countQ.or(`drive_folder_path.eq.${projectFolder},drive_folder_path.like.${projectFolder} / %`);
+      }
     }
     const { count: totalCount } = await countQ;
 
@@ -85,6 +97,17 @@ export async function GET(request: NextRequest) {
     }
     if (driveFolderPath) {
       dataQ = dataQ.eq('drive_folder_path', driveFolderPath);
+    }
+    if (projectFolder) {
+      if (projectFolder === '__company_wide') {
+        // Handled via categoryId filter from the UI
+      } else if (projectFolder === '__no_project') {
+        dataQ = dataQ.is('drive_folder_path', null);
+      } else if (projectFolder === '__uncategorized') {
+        // No project folder filter needed — categoryId=null handles it
+      } else {
+        dataQ = dataQ.or(`drive_folder_path.eq.${projectFolder},drive_folder_path.like.${projectFolder} / %`);
+      }
     }
 
     const { data, error } = await dataQ;

@@ -114,6 +114,9 @@ interface GlobalStats {
   categoryCounts: Record<string, number>;
   uncategorizedCount: number;
   drivePathCounts: Record<string, number>;
+  projectCategoryCounts: Record<string, Record<string, number>>;
+  projectTotalCounts: Record<string, number>;
+  companyWideTotalCount: number;
 }
 
 interface PaginationInfo {
@@ -205,6 +208,7 @@ export default function PipelineReview() {
   const [pagination, setPagination] = useState<PaginationInfo | null>(null);
 
   // Category drill-down state (for Categories tab)
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
 
   // Drive folder drill-down state (for Drive Folders tab)
@@ -237,6 +241,9 @@ export default function PipelineReview() {
       if (selectedCategoryId) {
         params.set('categoryId', selectedCategoryId === '__uncategorized' ? 'null' : selectedCategoryId);
       }
+      if (selectedProject) {
+        params.set('projectFolder', selectedProject);
+      }
       if (selectedDrivePath) {
         params.set('driveFolderPath', selectedDrivePath);
       }
@@ -253,7 +260,7 @@ export default function PipelineReview() {
     } finally {
       setLoading(false);
     }
-  }, [currentPage, filterStatus, selectedCategoryId, selectedDrivePath]);
+  }, [currentPage, filterStatus, selectedCategoryId, selectedProject, selectedDrivePath]);
 
   useEffect(() => {
     fetchItems();
@@ -306,11 +313,14 @@ export default function PipelineReview() {
   // Reset to page 1 when filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [filterStatus, selectedCategoryId, selectedDrivePath]);
+  }, [filterStatus, selectedCategoryId, selectedProject, selectedDrivePath]);
 
   // Reset category/drive selection when leaving their views
   useEffect(() => {
-    if (listView !== 'categories') setSelectedCategoryId(null);
+    if (listView !== 'categories') {
+      setSelectedProject(null);
+      setSelectedCategoryId(null);
+    }
     if (listView !== 'drive') setSelectedDrivePath(null);
   }, [listView]);
 
@@ -1886,10 +1896,18 @@ export default function PipelineReview() {
         ) : listView === 'categories' ? (
           selectedCategoryId ? (
             <div>
-              {/* Back button + category name */}
-              <div className="px-6 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-3">
+              {/* Back button + project > category breadcrumb */}
+              <div className="px-6 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-2">
                 <button
-                  onClick={() => setSelectedCategoryId(null)}
+                  onClick={() => {
+                    if (selectedProject === '__uncategorized') {
+                      setSelectedProject(null);
+                      setSelectedCategoryId(null);
+                    } else {
+                      setSelectedCategoryId(null);
+                    }
+                    setCurrentPage(1);
+                  }}
                   className="flex items-center gap-1.5 text-[13px] text-[#555] hover:text-[#1a1a1a] transition-colors"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -1897,18 +1915,23 @@ export default function PipelineReview() {
                   </svg>
                   Back
                 </button>
+                <span className="text-[12px] text-[#999]">/</span>
+                <span className="text-[13px] text-[#999]">
+                  {selectedProject === '__company_wide' ? 'Company-Wide' : selectedProject === '__no_project' ? 'No Project' : selectedProject === '__uncategorized' ? '' : selectedProject}
+                </span>
+                {selectedProject !== '__uncategorized' && <span className="text-[12px] text-[#999]">/</span>}
                 <span className="text-[14px] font-semibold text-[#1a1a1a]">
                   {selectedCategoryId === '__uncategorized'
                     ? 'Uncategorized'
                     : categories.find(c => c.id === selectedCategoryId)?.label || 'Category'}
                 </span>
                 {pagination && (
-                  <span className="text-[12px] text-[#999]">
+                  <span className="text-[12px] text-[#999] ml-1">
                     {pagination.totalItems} document{pagination.totalItems !== 1 ? 's' : ''}
                   </span>
                 )}
               </div>
-              {/* Document list for this category */}
+              {/* Document list for this project + category */}
               <div className="divide-y divide-[#f0f0f0]">
                 <div className="px-6 py-2.5 flex items-center gap-4 bg-[#f7f7f5] border-b border-[#e8e8e8] text-[11px] font-semibold text-[#999] uppercase tracking-wider">
                   <div className="w-10 flex-shrink-0">Type</div>
@@ -1935,12 +1958,28 @@ export default function PipelineReview() {
                 ))}
               </div>
             </div>
-          ) : (
-            <CategoryFolderList
+          ) : selectedProject ? (
+            <ProjectCategoryList
+              projectName={selectedProject}
               categories={categories}
-              categoryCounts={globalStats?.categoryCounts || {}}
-              uncategorizedCount={globalStats?.uncategorizedCount || 0}
+              projectCategoryCounts={globalStats?.projectCategoryCounts?.[selectedProject] || {}}
               onSelectCategory={(catId) => { setSelectedCategoryId(catId); setCurrentPage(1); }}
+              onBack={() => { setSelectedProject(null); setCurrentPage(1); }}
+            />
+          ) : (
+            <ProjectFolderList
+              projectTotalCounts={globalStats?.projectTotalCounts || {}}
+              companyWideTotalCount={globalStats?.companyWideTotalCount || 0}
+              uncategorizedCount={globalStats?.uncategorizedCount || 0}
+              onSelectProject={(proj) => {
+                if (proj === '__uncategorized') {
+                  setSelectedProject('__uncategorized');
+                  setSelectedCategoryId('__uncategorized');
+                } else {
+                  setSelectedProject(proj);
+                }
+                setCurrentPage(1);
+              }}
             />
           )
         ) : listView === 'drive' ? (
@@ -2595,55 +2634,86 @@ const PRIORITY_BORDER_COLORS_LIST: Record<string, string> = {
   P3: 'border-l-gray-300',
 };
 
-function CategoryFolderList({
-  categories,
-  categoryCounts,
+function ProjectFolderList({
+  projectTotalCounts,
+  companyWideTotalCount,
   uncategorizedCount,
-  onSelectCategory,
+  onSelectProject,
 }: {
-  categories: CategoryInfo[];
-  categoryCounts: Record<string, number>;
+  projectTotalCounts: Record<string, number>;
+  companyWideTotalCount: number;
   uncategorizedCount: number;
-  onSelectCategory: (catId: string) => void;
+  onSelectProject: (project: string) => void;
 }) {
-  const sorted = [...categories].sort((a, b) => a.sort_order - b.sort_order);
+  const sortedProjects = Object.entries(projectTotalCounts)
+    .filter(([key]) => key !== '__no_project')
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  const noProjectCount = projectTotalCounts['__no_project'] || 0;
 
   return (
     <div className="divide-y divide-[#e8e8e8]">
-      {sorted.map((cat) => {
-        const count = categoryCounts[cat.id] || 0;
-        return (
-          <button
-            key={cat.id}
-            onClick={() => onSelectCategory(cat.id)}
-            className={`w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 ${
-              PRIORITY_BORDER_COLORS_LIST[cat.priority] || 'border-l-gray-200'
-            }`}
-          >
-            <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[12px] ${
-              cat.priority === 'P1' ? 'bg-blue-100 text-blue-600'
-                : cat.priority === 'P2' ? 'bg-amber-100 text-amber-600'
-                : 'bg-gray-100 text-gray-500'
-            }`}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-              </svg>
-            </div>
-            <span className="flex-1 text-[14px] font-medium text-[#1a1a1a]">{cat.label}</span>
-            {count > 0 && (
-              <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{count}</span>
-            )}
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
-              <path d="M9 18l6-6-6-6" />
+      {sortedProjects.map(([project, count]) => (
+        <button
+          key={project}
+          onClick={() => onSelectProject(project)}
+          className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-blue-500"
+        >
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-blue-100 text-blue-600 text-[12px]">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
             </svg>
-          </button>
-        );
-      })}
+          </div>
+          <span className="flex-1 text-[14px] font-medium text-[#1a1a1a]">{project}</span>
+          {count > 0 && (
+            <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{count}</span>
+          )}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      ))}
 
-      {/* Uncategorized folder */}
+      {companyWideTotalCount > 0 && (
+        <button
+          onClick={() => onSelectProject('__company_wide')}
+          className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-amber-500"
+        >
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-amber-100 text-amber-600 text-[12px]">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" />
+              <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" />
+            </svg>
+          </div>
+          <span className="flex-1 text-[14px] font-medium text-[#1a1a1a]">Company-Wide</span>
+          <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{companyWideTotalCount}</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      )}
+
+      {noProjectCount > 0 && (
+        <button
+          onClick={() => onSelectProject('__no_project')}
+          className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-gray-300"
+        >
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-gray-100 text-gray-500 text-[12px]">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+            </svg>
+          </div>
+          <span className="flex-1 text-[14px] font-medium text-[#777]">No Project</span>
+          <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{noProjectCount}</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      )}
+
       {uncategorizedCount > 0 && (
         <button
-          onClick={() => onSelectCategory('__uncategorized')}
+          onClick={() => onSelectProject('__uncategorized')}
           className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-gray-200"
         >
           <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-gray-100 text-gray-400 text-[12px]">
@@ -2660,6 +2730,97 @@ function CategoryFolderList({
           </svg>
         </button>
       )}
+
+      {sortedProjects.length === 0 && companyWideTotalCount === 0 && noProjectCount === 0 && uncategorizedCount === 0 && (
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <p className="text-[14px] font-medium text-[#1a1a1a]">No projects yet</p>
+          <p className="text-[13px] text-[#999] mt-1">
+            Scan Google Drive or upload documents to see projects here
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectCategoryList({
+  projectName,
+  categories,
+  projectCategoryCounts,
+  onSelectCategory,
+  onBack,
+}: {
+  projectName: string;
+  categories: CategoryInfo[];
+  projectCategoryCounts: Record<string, number>;
+  onSelectCategory: (catId: string) => void;
+  onBack: () => void;
+}) {
+  const isCompanyWide = projectName === '__company_wide';
+  const displayName = isCompanyWide ? 'Company-Wide' : projectName === '__no_project' ? 'No Project' : projectName;
+
+  const COMPANY_WIDE_KEYS = new Set(['20_financials', '21_bid_log', '22_gc_contacts', '23_employee_roster', '24_insurance_and_bonding', '25_equipment']);
+  const filteredCategories = isCompanyWide
+    ? categories.filter(c => COMPANY_WIDE_KEYS.has(c.key))
+    : categories.filter(c => !COMPANY_WIDE_KEYS.has(c.key));
+
+  const sorted = [...filteredCategories].sort((a, b) => a.sort_order - b.sort_order);
+  const totalDocs = Object.values(projectCategoryCounts).reduce((sum, n) => sum + n, 0);
+
+  return (
+    <div>
+      <div className="px-6 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-3">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 text-[13px] text-[#555] hover:text-[#1a1a1a] transition-colors"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+          Back
+        </button>
+        <span className="text-[14px] font-semibold text-[#1a1a1a]">{displayName}</span>
+        <span className="text-[12px] text-[#999]">
+          {totalDocs} document{totalDocs !== 1 ? 's' : ''}
+        </span>
+      </div>
+      <div className="divide-y divide-[#e8e8e8]">
+        {sorted.map((cat) => {
+          const count = projectCategoryCounts[cat.id] || 0;
+          return (
+            <button
+              key={cat.id}
+              onClick={() => onSelectCategory(cat.id)}
+              className={`w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 ${
+                PRIORITY_BORDER_COLORS_LIST[cat.priority] || 'border-l-gray-200'
+              }`}
+            >
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[12px] ${
+                cat.priority === 'P1' ? 'bg-blue-100 text-blue-600'
+                  : cat.priority === 'P2' ? 'bg-amber-100 text-amber-600'
+                  : 'bg-gray-100 text-gray-500'
+              }`}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                </svg>
+              </div>
+              <span className="flex-1 text-[14px] font-medium text-[#1a1a1a]">{cat.label}</span>
+              {count > 0 && (
+                <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{count}</span>
+              )}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </button>
+          );
+        })}
+
+        {sorted.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <p className="text-[13px] text-[#999]">No categorized documents in this project</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
