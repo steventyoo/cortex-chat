@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get('status');
   const showAllVersions = searchParams.get('allVersions') === 'true';
   const categoryId = searchParams.get('categoryId');
+  const driveFolderPath = searchParams.get('driveFolderPath');
   const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
   const pageSize = Math.min(200, Math.max(1, parseInt(searchParams.get('pageSize') || '50', 10)));
 
@@ -53,6 +54,9 @@ export async function GET(request: NextRequest) {
       const group = STATUS_GROUPS[status];
       if (group) { countQ = countQ.in('status', group); }
       else { countQ = countQ.eq('status', status); }
+    }
+    if (driveFolderPath) {
+      countQ = countQ.eq('drive_folder_path', driveFolderPath);
     }
     const { count: totalCount } = await countQ;
 
@@ -78,6 +82,9 @@ export async function GET(request: NextRequest) {
       const group = STATUS_GROUPS[status];
       if (group) { dataQ = dataQ.in('status', group); }
       else { dataQ = dataQ.eq('status', status); }
+    }
+    if (driveFolderPath) {
+      dataQ = dataQ.eq('drive_folder_path', driveFolderPath);
     }
 
     const { data, error } = await dataQ;
