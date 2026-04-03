@@ -2032,8 +2032,11 @@ export default function PipelineReview() {
         )}
       </div>
 
-      {/* Pagination controls */}
-      {pagination && pagination.totalPages > 1 && (
+      {/* Pagination controls — only show when viewing a document list, not folder listings */}
+      {pagination && pagination.totalPages > 1 && !(
+        (listView === 'categories' && !selectedCategoryId) ||
+        (listView === 'drive' && !selectedDrivePath)
+      ) && (
         <PaginationControls
           pagination={pagination}
           onPageChange={(p) => { setCurrentPage(p); fetchItems(p); }}
