@@ -34,6 +34,7 @@ export interface ProcessPayload {
   driveModifiedTime?: string;
   driveWebViewLink?: string;
   driveFolderPath?: string;
+  forceProcess?: boolean;
 }
 
 export async function publishProcessJob(
@@ -46,7 +47,62 @@ export async function publishProcessJob(
     url,
     body: payload,
     retries: 3,
+    flowControl: { key: FLOW_CONTROL_KEY, parallelism: PROCESS_PARALLELISM },
   });
   console.log(`[qstash] Published to ${url} → msgId=${result.messageId}`);
+  return result.messageId;
+}
+
+const FLOW_CONTROL_KEY = 'cortex-pipeline-process';
+const PROCESS_PARALLELISM = 5;
+
+export async function publishProcessBatch(
+  payloads: ProcessPayload[],
+  baseUrl: string
+): Promise<string[]> {
+  if (payloads.length === 0) return [];
+  if (payloads.length === 1) {
+    const msgId = await publishProcessJob(payloads[0], baseUrl);
+    return [msgId];
+  }
+  const client = getQStashClient();
+  const url = `${baseUrl.replace(/\/$/, '')}/api/pipeline/process`;
+  const batch = payloads.map((payload) => ({
+    url,
+    body: payload,
+    retries: 3,
+    flowControl: { key: FLOW_CONTROL_KEY, parallelism: PROCESS_PARALLELISM },
+  }));
+  const results = await client.batchJSON(batch);
+  const ids = results.map((r) => {
+    const msgId = Array.isArray(r) ? r[0]?.messageId : r.messageId;
+    return msgId || 'unknown';
+  });
+  console.log(`[qstash] Batch published ${ids.length} jobs (parallelism=${PROCESS_PARALLELISM}) to ${url}`);
+  return ids;
+}
+
+export interface ScanContinuationPayload {
+  continuation: true;
+  orgId: string;
+  driveFolderId: string;
+}
+
+export async function publishScanContinuation(
+  baseUrl: string,
+  orgId: string,
+  driveFolderId: string,
+  delaySec: number = 5
+): Promise<string> {
+  const client = getQStashClient();
+  const url = `${baseUrl.replace(/\/$/, '')}/api/pipeline/scan-drive`;
+  const body: ScanContinuationPayload = { continuation: true, orgId, driveFolderId };
+  const result = await client.publishJSON({
+    url,
+    body,
+    retries: 2,
+    delay: delaySec,
+  });
+  console.log(`[qstash] Scheduled scan continuation for org=${orgId} folder=${driveFolderId} in ${delaySec}s → msgId=${result.messageId}`);
   return result.messageId;
 }

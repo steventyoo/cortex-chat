@@ -90,12 +90,18 @@ export function buildExtractionTool(
   skill: DocumentSkill,
 ): Anthropic.Messages.Tool {
   const fieldProperties: Record<string, unknown> = {};
-  const requiredFields: string[] = [];
+  const seen = new Set<string>();
 
   for (const fd of skill.fieldDefinitions) {
+    if (seen.has(fd.name)) {
+      console.warn(`[schema] Skipping duplicate field "${fd.name}" in skill ${skill.skillId}`);
+      continue;
+    }
+    seen.add(fd.name);
     fieldProperties[fd.name] = fieldTypeToJsonSchema(fd);
-    requiredFields.push(fd.name);
   }
+
+  const requiredFields = Object.keys(fieldProperties);
 
   return {
     name: 'extract_document',

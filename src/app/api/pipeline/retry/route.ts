@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Record not found' }, { status: 404 });
   }
 
-  if (record.status !== 'failed' && record.status !== 'queued') {
+  if (record.status !== 'failed' && record.status !== 'queued' && record.status !== 'stored_only') {
     return Response.json({ error: `Cannot retry record with status "${record.status}"` }, { status: 400 });
   }
 
@@ -73,6 +73,7 @@ export async function POST(request: NextRequest) {
       fileName,
       mimeType,
       storagePath: storagePath || '',
+      ...(record.status === 'stored_only' ? { forceProcess: true } : {}),
       ...(driveFileId ? {
         driveFileId,
         driveModifiedTime: (record.drive_modified_time as string) || undefined,

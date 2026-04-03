@@ -20,9 +20,10 @@ import {
 import { generatePipelineId } from '@/lib/pipeline';
 import { fetchProjectList, getSupabase, getOrganization } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { publishProcessJob, ProcessPayload } from '@/lib/qstash';
+import { publishProcessBatch, publishScanContinuation, ProcessPayload, ScanContinuationPayload } from '@/lib/qstash';
+import { getQStashReceiver } from '@/lib/qstash';
 
-const MAX_FILES_PER_RUN = 10;
+const MAX_FILES_PER_RUN = 50;
 
 export const maxDuration = 120;
 
@@ -67,257 +68,10 @@ export async function GET(request: NextRequest) {
     }, { status: 503 });
   }
 
+  const orgId = session?.orgId || '';
+
   try {
-    const t0 = Date.now();
-    const timing: Record<string, number> = {};
-
-    let tStep = Date.now();
-    const allDriveFiles = await listAllDriveFiles(driveFolderId);
-    const supportedFiles = allDriveFiles.filter((f) => isSupportedFileType(f.mimeType));
-    timing.list_drive_files = Date.now() - tStep;
-
-    tStep = Date.now();
-    let orgId = session?.orgId || '';
-    if (!orgId && driveFolderId) {
-      const sb = getSupabase();
-      const { data: orgRow } = await sb
-        .from('organizations')
-        .select('org_id')
-        .eq('google_drive_folder_id', driveFolderId)
-        .limit(1)
-        .maybeSingle();
-      if (orgRow?.org_id) orgId = orgRow.org_id;
-    }
-
-    const { urls: processedFileUrls, nameKeys: processedNameKeys, driveVersions } = await getProcessedDriveFiles(orgId);
-    timing.dedup_query = Date.now() - tStep;
-
-    const newFiles: typeof supportedFiles = [];
-    const updatedFiles: Array<{ file: typeof supportedFiles[0]; previousRecordId: string }> = [];
-
-    for (const f of supportedFiles) {
-      const existing = driveVersions.get(f.id);
-      if (existing) {
-        if (existing.modifiedTime && f.modifiedTime && isDriveFileNewer(f.modifiedTime, existing.modifiedTime)) {
-          console.log(`[scan-drive] Version change detected for ${f.name}: drive=${f.modifiedTime} > stored=${existing.modifiedTime}`);
-          updatedFiles.push({ file: f, previousRecordId: existing.recordId });
-        }
-        continue;
-      }
-      if (processedFileUrls.has(buildDriveFileUrl(f.id))) continue;
-      const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
-      if (processedNameKeys.has(nameKey)) continue;
-      newFiles.push(f);
-    }
-
-    if (newFiles.length === 0 && updatedFiles.length === 0) {
-      timing.total = Date.now() - t0;
-      console.log(`[scan-drive] No changes (${supportedFiles.length} total, ${processedFileUrls.size} processed) — ${fmtTiming(timing)}`);
-      return Response.json({
-        message: 'No new files found',
-        totalDriveFiles: allDriveFiles.length,
-        supportedFiles: supportedFiles.length,
-        alreadyProcessed: processedFileUrls.size,
-        timing,
-      });
-    }
-
-    console.log(`[scan-drive] Found ${newFiles.length} new, ${updatedFiles.length} updated files`);
-
-
-    tStep = Date.now();
-    const projects = await fetchProjectList();
-    const folderLookup = new Map<string, string>();
-    for (const p of projects) {
-      folderLookup.set(p.projectName.toLowerCase(), p.projectId);
-      folderLookup.set(p.projectId.toLowerCase(), p.projectId);
-      folderLookup.set(p.projectId.toLowerCase().replace(/[-_]/g, ' '), p.projectId);
-      folderLookup.set(p.projectName.toLowerCase().replace(/\s+/g, '-'), p.projectId);
-    }
-    timing.fetch_projects = Date.now() - tStep;
-
-    const filesToQueue = newFiles.slice(0, MAX_FILES_PER_RUN);
-    const updatedToQueue = updatedFiles.slice(0, Math.max(0, MAX_FILES_PER_RUN - filesToQueue.length));
-    const baseUrl = getBaseUrl(request);
-    const sb = getSupabase();
-    const now = new Date().toISOString();
-
-    const results: Array<{
-      fileName: string;
-      driveId: string;
-      status: string;
-      pipelineId?: string;
-      projectId?: string;
-      isUpdate?: boolean;
-      error?: string;
-    }> = [];
-
-    tStep = Date.now();
-
-    // Queue updated files first (mark old version, create new entry)
-    for (const { file, previousRecordId } of updatedToQueue) {
-      try {
-        console.log(`[scan-drive] Updated file detected: ${file.name} (drive_id=${file.id}, prev_record=${previousRecordId})`);
-
-        await sb
-          .from('pipeline_log')
-          .update({ is_latest_version: false })
-          .eq('id', previousRecordId);
-
-        let projectId = '';
-        if (file.parentFolderName && file.parentFolderName !== '_Root') {
-          projectId = matchProject(file.parentFolderName, folderLookup);
-        }
-
-        const pipelineId = generatePipelineId();
-        const driveFileUrl = buildDriveFileUrl(file.id);
-
-        const { data: createData, error: createError } = await sb
-          .from('pipeline_log')
-          .insert({
-            pipeline_id: pipelineId,
-            ...(projectId ? { project_id: projectId } : {}),
-            org_id: orgId,
-            file_name: file.name,
-            file_url: driveFileUrl,
-            status: 'queued',
-            created_at: now,
-            ai_model: 'haiku-classify+sonnet-extract',
-            drive_file_id: file.id,
-            drive_modified_time: file.modifiedTime,
-            drive_web_view_link: file.webViewLink,
-            drive_folder_path: file.folderPath,
-            is_latest_version: true,
-          })
-          .select('id')
-          .single();
-
-        if (createError) throw new Error(`DB insert failed: ${createError.message}`);
-
-        const recordId = String(createData.id);
-        const payload: ProcessPayload = {
-          recordId,
-          orgId,
-          projectId: projectId || null,
-          fileName: file.name,
-          mimeType: file.mimeType,
-          storagePath: '',
-          driveFileId: file.id,
-          driveModifiedTime: file.modifiedTime,
-          driveWebViewLink: file.webViewLink,
-          driveFolderPath: file.folderPath,
-        };
-
-        const msgId = await publishProcessJob(payload, baseUrl);
-        console.log(`[scan-drive] Queued update for ${file.name} → qstash_msg=${msgId}`);
-
-        results.push({
-          fileName: file.name,
-          driveId: file.id,
-          status: 'queued',
-          pipelineId,
-          projectId: projectId || '(unmatched)',
-          isUpdate: true,
-        });
-      } catch (err) {
-        console.error(`[scan-drive] Failed to queue update for ${file.name}:`, err);
-        results.push({
-          fileName: file.name,
-          driveId: file.id,
-          status: 'error',
-          isUpdate: true,
-          error: err instanceof Error ? err.message : 'Unknown error',
-        });
-      }
-    }
-
-    // Queue new files
-    for (const file of filesToQueue) {
-      try {
-        let projectId = '';
-        if (file.parentFolderName && file.parentFolderName !== '_Root') {
-          projectId = matchProject(file.parentFolderName, folderLookup);
-        }
-
-        const pipelineId = generatePipelineId();
-        const driveFileUrl = buildDriveFileUrl(file.id);
-
-        const { data: createData, error: createError } = await sb
-          .from('pipeline_log')
-          .insert({
-            pipeline_id: pipelineId,
-            ...(projectId ? { project_id: projectId } : {}),
-            org_id: orgId,
-            file_name: file.name,
-            file_url: driveFileUrl,
-            status: 'queued',
-            created_at: now,
-            ai_model: 'haiku-classify+sonnet-extract',
-            drive_file_id: file.id,
-            drive_modified_time: file.modifiedTime,
-            drive_web_view_link: file.webViewLink,
-            drive_folder_path: file.folderPath,
-            is_latest_version: true,
-          })
-          .select('id')
-          .single();
-
-        if (createError) {
-          throw new Error(`DB insert failed: ${createError.message}`);
-        }
-
-        const recordId = String(createData.id);
-
-        const payload: ProcessPayload = {
-          recordId,
-          orgId,
-          projectId: projectId || null,
-          fileName: file.name,
-          mimeType: file.mimeType,
-          storagePath: '',
-          driveFileId: file.id,
-          driveModifiedTime: file.modifiedTime,
-          driveWebViewLink: file.webViewLink,
-          driveFolderPath: file.folderPath,
-        };
-
-        const msgId = await publishProcessJob(payload, baseUrl);
-        console.log(`[scan-drive] Queued ${file.name} → qstash_msg=${msgId}`);
-
-        results.push({
-          fileName: file.name,
-          driveId: file.id,
-          status: 'queued',
-          pipelineId,
-          projectId: projectId || '(unmatched)',
-        });
-      } catch (err) {
-        console.error(`[scan-drive] Failed to queue ${file.name}:`, err);
-        results.push({
-          fileName: file.name,
-          driveId: file.id,
-          status: 'error',
-          error: err instanceof Error ? err.message : 'Unknown error',
-        });
-      }
-    }
-    timing.queue_files = Date.now() - tStep;
-    timing.total = Date.now() - t0;
-
-    const queuedCount = results.filter((r) => r.status === 'queued').length;
-    const updateCount = results.filter((r) => r.isUpdate && r.status === 'queued').length;
-    console.log(`[scan-drive] Queued ${queuedCount} files (${updateCount} updates) — ${fmtTiming(timing)}`);
-
-    return Response.json({
-      message: `Queued ${queuedCount} file(s) for processing${updateCount > 0 ? ` (${updateCount} update${updateCount > 1 ? 's' : ''})` : ''}`,
-      totalDriveFiles: allDriveFiles.length,
-      supportedFiles: supportedFiles.length,
-      newFilesFound: newFiles.length,
-      updatedFilesFound: updatedFiles.length,
-      queued: results,
-      remainingNewFiles: Math.max(0, newFiles.length - MAX_FILES_PER_RUN),
-      timing,
-    });
+    return await runScan(request, orgId, driveFolderId);
   } catch (err) {
     console.error('Drive scan error:', err);
     const detail = err instanceof Error ? err.message : 'Unknown';
@@ -332,6 +86,322 @@ export async function GET(request: NextRequest) {
       { error: 'Drive scan failed', detail, ...(hint && { hint }) },
       { status: 500 }
     );
+  }
+}
+
+// ─── Core scan logic shared by GET (manual/cron) and POST (QStash continuation) ───
+
+async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: string): Promise<Response> {
+  const t0 = Date.now();
+  const timing: Record<string, number> = {};
+
+  let tStep = Date.now();
+  const allDriveFiles = await listAllDriveFiles(driveFolderId);
+  const supportedFiles = allDriveFiles.filter((f) => isSupportedFileType(f.mimeType));
+  timing.list_drive_files = Date.now() - tStep;
+
+  tStep = Date.now();
+  let orgId = orgIdInput;
+  if (!orgId && driveFolderId) {
+    const sb = getSupabase();
+    const { data: orgRow } = await sb
+      .from('organizations')
+      .select('org_id')
+      .eq('google_drive_folder_id', driveFolderId)
+      .limit(1)
+      .maybeSingle();
+    if (orgRow?.org_id) orgId = orgRow.org_id;
+  }
+
+  const { urls: processedFileUrls, nameKeys: processedNameKeys, driveVersions } = await getProcessedDriveFiles(orgId);
+  timing.dedup_query = Date.now() - tStep;
+
+  const newFiles: typeof supportedFiles = [];
+  const updatedFiles: Array<{ file: typeof supportedFiles[0]; previousRecordId: string }> = [];
+
+  for (const f of supportedFiles) {
+    const existing = driveVersions.get(f.id);
+    if (existing) {
+      if (existing.modifiedTime && f.modifiedTime && isDriveFileNewer(f.modifiedTime, existing.modifiedTime)) {
+        console.log(`[scan-drive] Version change detected for ${f.name}: drive=${f.modifiedTime} > stored=${existing.modifiedTime}`);
+        updatedFiles.push({ file: f, previousRecordId: existing.recordId });
+      }
+      continue;
+    }
+    if (processedFileUrls.has(buildDriveFileUrl(f.id))) continue;
+    const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
+    if (processedNameKeys.has(nameKey)) continue;
+    newFiles.push(f);
+  }
+
+  if (newFiles.length === 0 && updatedFiles.length === 0) {
+    timing.total = Date.now() - t0;
+    console.log(`[scan-drive] No changes (${supportedFiles.length} total, ${processedFileUrls.size} processed) — ${fmtTiming(timing)}`);
+    return Response.json({
+      message: 'No new files found',
+      totalDriveFiles: allDriveFiles.length,
+      supportedFiles: supportedFiles.length,
+      alreadyProcessed: processedFileUrls.size,
+      timing,
+    });
+  }
+
+  console.log(`[scan-drive] Found ${newFiles.length} new, ${updatedFiles.length} updated files`);
+
+  tStep = Date.now();
+  const projects = await fetchProjectList();
+  const folderLookup = new Map<string, string>();
+  for (const p of projects) {
+    folderLookup.set(p.projectName.toLowerCase(), p.projectId);
+    folderLookup.set(p.projectId.toLowerCase(), p.projectId);
+    folderLookup.set(p.projectId.toLowerCase().replace(/[-_]/g, ' '), p.projectId);
+    folderLookup.set(p.projectName.toLowerCase().replace(/\s+/g, '-'), p.projectId);
+  }
+  timing.fetch_projects = Date.now() - tStep;
+
+  const filesToQueue = newFiles.slice(0, MAX_FILES_PER_RUN);
+  const updatedToQueue = updatedFiles.slice(0, Math.max(0, MAX_FILES_PER_RUN - filesToQueue.length));
+  const baseUrl = getBaseUrl(request);
+  const sb = getSupabase();
+  const now = new Date().toISOString();
+
+  const results: Array<{
+    fileName: string;
+    driveId: string;
+    status: string;
+    pipelineId?: string;
+    projectId?: string;
+    isUpdate?: boolean;
+    error?: string;
+  }> = [];
+
+  tStep = Date.now();
+
+  const payloadsToPublish: ProcessPayload[] = [];
+
+  for (const { file, previousRecordId } of updatedToQueue) {
+    try {
+      console.log(`[scan-drive] Updated file detected: ${file.name} (drive_id=${file.id}, prev_record=${previousRecordId})`);
+
+      await sb
+        .from('pipeline_log')
+        .update({ is_latest_version: false })
+        .eq('id', previousRecordId);
+
+      let projectId = '';
+      if (file.parentFolderName && file.parentFolderName !== '_Root') {
+        projectId = matchProject(file.parentFolderName, folderLookup);
+      }
+
+      const pipelineId = generatePipelineId();
+      const driveFileUrl = buildDriveFileUrl(file.id);
+
+      const { data: createData, error: createError } = await sb
+        .from('pipeline_log')
+        .insert({
+          pipeline_id: pipelineId,
+          ...(projectId ? { project_id: projectId } : {}),
+          org_id: orgId,
+          file_name: file.name,
+          file_url: driveFileUrl,
+          status: 'queued',
+          created_at: now,
+          ai_model: 'haiku-classify+sonnet-extract',
+          drive_file_id: file.id,
+          drive_modified_time: file.modifiedTime,
+          drive_web_view_link: file.webViewLink,
+          drive_folder_path: file.folderPath,
+          is_latest_version: true,
+        })
+        .select('id')
+        .single();
+
+      if (createError) throw new Error(`DB insert failed: ${createError.message}`);
+
+      const recordId = String(createData.id);
+      payloadsToPublish.push({
+        recordId,
+        orgId,
+        projectId: projectId || null,
+        fileName: file.name,
+        mimeType: file.mimeType,
+        storagePath: '',
+        driveFileId: file.id,
+        driveModifiedTime: file.modifiedTime,
+        driveWebViewLink: file.webViewLink,
+        driveFolderPath: file.folderPath,
+      });
+
+      results.push({
+        fileName: file.name,
+        driveId: file.id,
+        status: 'queued',
+        pipelineId,
+        projectId: projectId || '(unmatched)',
+        isUpdate: true,
+      });
+    } catch (err) {
+      console.error(`[scan-drive] Failed to queue update for ${file.name}:`, err);
+      results.push({
+        fileName: file.name,
+        driveId: file.id,
+        status: 'error',
+        isUpdate: true,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  }
+
+  for (const file of filesToQueue) {
+    try {
+      let projectId = '';
+      if (file.parentFolderName && file.parentFolderName !== '_Root') {
+        projectId = matchProject(file.parentFolderName, folderLookup);
+      }
+
+      const pipelineId = generatePipelineId();
+      const driveFileUrl = buildDriveFileUrl(file.id);
+
+      const { data: createData, error: createError } = await sb
+        .from('pipeline_log')
+        .insert({
+          pipeline_id: pipelineId,
+          ...(projectId ? { project_id: projectId } : {}),
+          org_id: orgId,
+          file_name: file.name,
+          file_url: driveFileUrl,
+          status: 'queued',
+          created_at: now,
+          ai_model: 'haiku-classify+sonnet-extract',
+          drive_file_id: file.id,
+          drive_modified_time: file.modifiedTime,
+          drive_web_view_link: file.webViewLink,
+          drive_folder_path: file.folderPath,
+          is_latest_version: true,
+        })
+        .select('id')
+        .single();
+
+      if (createError) {
+        throw new Error(`DB insert failed: ${createError.message}`);
+      }
+
+      const recordId = String(createData.id);
+
+      payloadsToPublish.push({
+        recordId,
+        orgId,
+        projectId: projectId || null,
+        fileName: file.name,
+        mimeType: file.mimeType,
+        storagePath: '',
+        driveFileId: file.id,
+        driveModifiedTime: file.modifiedTime,
+        driveWebViewLink: file.webViewLink,
+        driveFolderPath: file.folderPath,
+      });
+
+      results.push({
+        fileName: file.name,
+        driveId: file.id,
+        status: 'queued',
+        pipelineId,
+        projectId: projectId || '(unmatched)',
+      });
+    } catch (err) {
+      console.error(`[scan-drive] Failed to queue ${file.name}:`, err);
+      results.push({
+        fileName: file.name,
+        driveId: file.id,
+        status: 'error',
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  }
+
+  if (payloadsToPublish.length > 0) {
+    try {
+      await publishProcessBatch(payloadsToPublish, baseUrl);
+    } catch (err) {
+      console.error(`[scan-drive] Batch publish failed:`, err);
+      for (const r of results) {
+        if (r.status === 'queued') r.status = 'error';
+      }
+    }
+  }
+
+  timing.queue_files = Date.now() - tStep;
+  timing.total = Date.now() - t0;
+
+  const queuedCount = results.filter((r) => r.status === 'queued').length;
+  const updateCount = results.filter((r) => r.isUpdate && r.status === 'queued').length;
+  const remainingNew = Math.max(0, newFiles.length - MAX_FILES_PER_RUN);
+  const remainingUpdated = Math.max(0, updatedFiles.length - Math.max(0, MAX_FILES_PER_RUN - filesToQueue.length));
+  const totalRemaining = remainingNew + remainingUpdated;
+
+  console.log(`[scan-drive] Queued ${queuedCount} files (${updateCount} updates), ${totalRemaining} remaining — ${fmtTiming(timing)}`);
+
+  if (totalRemaining > 0) {
+    try {
+      await publishScanContinuation(baseUrl, orgId, driveFolderId, 5);
+      console.log(`[scan-drive] Scheduled continuation for ${totalRemaining} remaining files (org=${orgId} folder=${driveFolderId})`);
+    } catch (err) {
+      console.error(`[scan-drive] Failed to schedule continuation:`, err);
+    }
+  }
+
+  return Response.json({
+    message: `Queued ${queuedCount} file(s) for processing${updateCount > 0 ? ` (${updateCount} update${updateCount > 1 ? 's' : ''})` : ''}`,
+    totalDriveFiles: allDriveFiles.length,
+    supportedFiles: supportedFiles.length,
+    newFilesFound: newFiles.length,
+    updatedFilesFound: updatedFiles.length,
+    queued: results,
+    remainingFiles: totalRemaining,
+    autoContScheduled: totalRemaining > 0,
+    timing,
+  });
+}
+
+// ─── POST: QStash continuation callback ──────────────────────────
+// When a scan batch has remaining files, a continuation is scheduled via QStash.
+// QStash sends POST to this endpoint with { continuation, orgId, driveFolderId }.
+
+export async function POST(request: NextRequest) {
+  const body = await request.text();
+
+  const isVercel = !!process.env.VERCEL;
+  if (isVercel) {
+    const signature = request.headers.get('upstash-signature');
+    if (!signature) {
+      return Response.json({ error: 'Missing signature' }, { status: 401 });
+    }
+    try {
+      const receiver = getQStashReceiver();
+      await receiver.verify({ signature, body, url: `${getBaseUrl(request)}/api/pipeline/scan-drive` });
+    } catch (err) {
+      console.error('[scan-drive:POST] QStash signature verification failed:', err);
+      return Response.json({ error: 'Invalid signature' }, { status: 401 });
+    }
+  }
+
+  let payload: ScanContinuationPayload;
+  try {
+    payload = JSON.parse(body);
+    if (!payload.continuation || !payload.orgId || !payload.driveFolderId) {
+      return Response.json({ error: 'Invalid continuation payload' }, { status: 400 });
+    }
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  console.log(`[scan-drive:POST] Continuation received: org=${payload.orgId} folder=${payload.driveFolderId}`);
+
+  try {
+    return await runScan(request, payload.orgId, payload.driveFolderId);
+  } catch (err) {
+    console.error('[scan-drive:POST] Continuation scan failed:', err);
+    return Response.json({ error: 'Continuation scan failed', detail: err instanceof Error ? err.message : 'Unknown' }, { status: 500 });
   }
 }
 

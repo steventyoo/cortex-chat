@@ -330,6 +330,9 @@ export async function extractWithSkill(
     ? buildExtractionTool(skill)
     : buildGeneralExtractionTool();
 
+  console.log(`[extract] tool schema debug: mode=${isTypedSkill ? 'typed' : 'general'} skill=${skill.skillId}`);
+  console.log(`[extract] tool JSON: ${JSON.stringify(tool)}`);
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 8192,

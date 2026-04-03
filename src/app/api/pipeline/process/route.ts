@@ -6,10 +6,12 @@ import { ValidationFlag, resolveCategoryKey, generateCanonicalName } from '@/lib
 import { getQStashReceiver, ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
 import { extractText as pdfExtractText } from 'unpdf';
+import { countPdfPagesSync } from 'pdf-pages-count';
 
 export const maxDuration = 300;
 
 const DOCUMENTS_BUCKET = 'documents';
+const LARGE_PDF_PAGE_THRESHOLD = 100;
 
 export async function POST(request: NextRequest) {
   const body = await request.text();
@@ -33,6 +35,7 @@ export async function POST(request: NextRequest) {
   const {
     recordId, orgId, projectId, fileName, mimeType, storagePath,
     driveFileId, driveModifiedTime, driveWebViewLink, driveFolderPath,
+    forceProcess,
   } = payload;
   const t0 = Date.now();
   const timing: Record<string, number> = {};
@@ -78,6 +81,39 @@ export async function POST(request: NextRequest) {
       timing.storage_upload = Date.now() - tStep;
     } catch (err) {
       console.error(`[process] Drive raw download failed for ${recordId}:`, err);
+    }
+
+    // Check PDF page count — skip AI extraction for large documents
+    if (rawBuffer && isPdf(mimeType, fileName)) {
+      try {
+        const pageCount = countPdfPagesSync(new Uint8Array(rawBuffer));
+        console.log(`[process] PDF page count: ${pageCount} pages (threshold=${LARGE_PDF_PAGE_THRESHOLD}) forceProcess=${!!forceProcess}`);
+
+        await sb.from('pipeline_log').update({ page_count: pageCount }).eq('id', recordId);
+
+        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess) {
+          console.log(`[process] Large PDF detected (${pageCount} pages > ${LARGE_PDF_PAGE_THRESHOLD}). Storing only, skipping AI extraction.`);
+          await sb.from('pipeline_log').update({
+            status: 'stored_only',
+            storage_path: finalStoragePath || null,
+            validation_flags: [{
+              field: 'page_count',
+              issue: `Large document (${pageCount} pages). Stored for manual processing.`,
+              severity: 'info',
+            }],
+            ...(driveModifiedTime ? { drive_modified_time: driveModifiedTime } : {}),
+            ...(driveWebViewLink ? { drive_web_view_link: driveWebViewLink } : {}),
+            ...(driveFolderPath ? { drive_folder_path: driveFolderPath } : {}),
+            ...(driveFileId ? { drive_file_id: driveFileId } : {}),
+          }).eq('id', recordId);
+          timing.total = Date.now() - t0;
+          console.log(`[process] DONE record=${recordId} file="${fileName}" status=stored_only pages=${pageCount} — ` +
+            Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
+          return Response.json({ success: true, recordId, status: 'stored_only', pageCount, timing });
+        }
+      } catch (err) {
+        console.warn(`[process] PDF page count failed (non-fatal):`, err);
+      }
     }
 
     // --- Extract text content ---
@@ -154,6 +190,34 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'Failed to download file' }, { status: 500 });
     }
     timing.storage_download = Date.now() - tStep;
+
+    // Check PDF page count for direct uploads too
+    if (isPdf(mimeType, fileName)) {
+      try {
+        const pageCount = countPdfPagesSync(new Uint8Array(fileBuffer));
+        console.log(`[process] PDF page count: ${pageCount} pages (threshold=${LARGE_PDF_PAGE_THRESHOLD}) forceProcess=${!!forceProcess}`);
+
+        await sb.from('pipeline_log').update({ page_count: pageCount }).eq('id', recordId);
+
+        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess) {
+          console.log(`[process] Large PDF detected (${pageCount} pages > ${LARGE_PDF_PAGE_THRESHOLD}). Storing only, skipping AI extraction.`);
+          await sb.from('pipeline_log').update({
+            status: 'stored_only',
+            validation_flags: [{
+              field: 'page_count',
+              issue: `Large document (${pageCount} pages). Stored for manual processing.`,
+              severity: 'info',
+            }],
+          }).eq('id', recordId);
+          timing.total = Date.now() - t0;
+          console.log(`[process] DONE record=${recordId} file="${fileName}" status=stored_only pages=${pageCount} — ` +
+            Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
+          return Response.json({ success: true, recordId, status: 'stored_only', pageCount, timing });
+        }
+      } catch (err) {
+        console.warn(`[process] PDF page count failed (non-fatal):`, err);
+      }
+    }
 
     tStep = Date.now();
     try {
@@ -269,4 +333,8 @@ function getBaseUrl(request: NextRequest): string {
   const host = request.headers.get('host') || 'localhost:3000';
   const proto = host.includes('localhost') ? 'http' : 'https';
   return `${proto}://${host}`;
+}
+
+function isPdf(mimeType: string, fileName: string): boolean {
+  return mimeType === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
 }
