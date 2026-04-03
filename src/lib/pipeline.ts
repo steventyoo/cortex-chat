@@ -113,6 +113,7 @@ export type PipelineStatus =
   | 'queued'
   | 'processing'
   | 'failed'
+  | 'stored_only'
   | 'tier1_extracting'
   | 'tier1_complete'
   | 'tier2_validating'
@@ -186,6 +187,7 @@ export interface PipelineItem {
   isLatestVersion: boolean;
   categoryId: string | null;
   canonicalName: string | null;
+  pageCount: number | null;
 }
 
 // Generate a pipeline ID
@@ -255,6 +257,8 @@ export function getStatusDisplay(status: PipelineStatus): { label: string; color
       return { label: 'Processing…', color: 'text-yellow-700', bgColor: 'bg-yellow-100' };
     case 'failed':
       return { label: 'Failed', color: 'text-red-700', bgColor: 'bg-red-100' };
+    case 'stored_only':
+      return { label: 'Stored (Large Doc)', color: 'text-indigo-700', bgColor: 'bg-indigo-100' };
     case 'tier1_extracting':
       return { label: 'AI Extracting', color: 'text-yellow-700', bgColor: 'bg-yellow-100' };
     case 'tier1_complete':
@@ -328,5 +332,6 @@ export function parsePipelineItem(record: { id: string; fields: Record<string, u
     isLatestVersion: f['Is Latest Version'] !== false,
     categoryId: f['Category ID'] ? String(f['Category ID']) : null,
     canonicalName: f['Canonical Name'] ? String(f['Canonical Name']) : null,
+    pageCount: f['Page Count'] != null ? Number(f['Page Count']) : null,
   };
 }

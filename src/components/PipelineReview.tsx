@@ -2039,7 +2039,30 @@ function DocumentRow({
         </button>
       )}
 
-      {item.status !== 'pushed' && item.status !== 'rejected' && item.status !== 'queued' && item.status !== 'processing' && item.status !== 'failed' && (
+      {item.status === 'stored_only' && (
+        <button
+          onClick={(e) => handleRetry(item.id, e)}
+          disabled={retryingId === item.id}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors flex-shrink-0 disabled:opacity-50"
+          title={`Process this large document (${item.pageCount ? item.pageCount + ' pages' : 'large PDF'})`}
+        >
+          {retryingId === item.id ? (
+            <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+          )}
+          Process Now{item.pageCount ? ` (${item.pageCount}p)` : ''}
+        </button>
+      )}
+
+      {item.status !== 'pushed' && item.status !== 'rejected' && item.status !== 'queued' && item.status !== 'processing' && item.status !== 'failed' && item.status !== 'stored_only' && (
         <button
           onClick={(e) => handleMarkAsPushed(item.id, item.fileName, e)}
           disabled={markingPushedId === item.id}

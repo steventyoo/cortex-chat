@@ -101,6 +101,7 @@ export async function GET(request: NextRequest) {
       fields['Is Latest Version'] = row.is_latest_version;
       fields['Category ID'] = row.category_id;
       fields['Canonical Name'] = row.canonical_name;
+      fields['Page Count'] = row.page_count;
       return parsePipelineItem({ id: String(row.id), fields });
     });
 
