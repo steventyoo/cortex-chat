@@ -161,6 +161,9 @@ export async function listAllDriveFiles(rootFolderIdOverride?: string): Promise<
       listFilesInFolder(folderId, projectName, currentPath),
       listSubfolders(folderId),
     ]);
+    if (files.length > 0 || subfolders.length > 0) {
+      console.log(`[listAllDriveFiles] ${currentPath}: ${files.length} files, ${subfolders.length} subfolders`);
+    }
     allFiles.push(...files);
     await Promise.all(
       subfolders.map((sf) => crawl(sf.id, projectName, `${currentPath} / ${sf.name}`))
@@ -168,6 +171,7 @@ export async function listAllDriveFiles(rootFolderIdOverride?: string): Promise<
   }
 
   const topFolders = await listProjectFolders(rootId);
+  console.log(`[listAllDriveFiles] Root folder ${rootId}: ${topFolders.length} top-level subfolders`);
 
   const rootFilesPromise = listFilesInFolder(rootId, '_Root', '_Root');
   const subCrawls = topFolders.map((folder) => crawl(folder.id, folder.name, folder.name));
@@ -175,6 +179,7 @@ export async function listAllDriveFiles(rootFolderIdOverride?: string): Promise<
   const [rootFiles] = await Promise.all([rootFilesPromise, ...subCrawls]);
   allFiles.push(...rootFiles);
 
+  console.log(`[listAllDriveFiles] Total: ${allFiles.length} files across all folders`);
   return allFiles;
 }
 
