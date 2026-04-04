@@ -113,13 +113,14 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
     if (orgRow?.org_id) orgId = orgRow.org_id;
   }
 
-  const { urls: processedFileUrls, nameKeys: processedNameKeys, driveVersions } = await getProcessedDriveFiles(orgId);
+  const { urls: processedFileUrls, nameKeys: processedNameKeys, driveIds: processedDriveIds, driveVersions } = await getProcessedDriveFiles(orgId);
   timing.dedup_query = Date.now() - tStep;
 
   const newFiles: typeof supportedFiles = [];
   const updatedFiles: Array<{ file: typeof supportedFiles[0]; previousRecordId: string }> = [];
 
   for (const f of supportedFiles) {
+    // Check version tracking first (only non-deleted latest records)
     const existing = driveVersions.get(f.id);
     if (existing) {
       if (existing.modifiedTime && f.modifiedTime && isDriveFileNewer(f.modifiedTime, existing.modifiedTime)) {
@@ -128,6 +129,8 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
       }
       continue;
     }
+    // Primary dedup: skip if this drive_file_id has ever been seen (any status including deleted/failed)
+    if (processedDriveIds.has(f.id)) continue;
     if (processedFileUrls.has(buildDriveFileUrl(f.id))) continue;
     const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
     if (processedNameKeys.has(nameKey)) continue;
@@ -426,48 +429,68 @@ function matchProject(folderName: string, lookup: Map<string, string>): string {
 async function getProcessedDriveFiles(orgId: string): Promise<{
   urls: Set<string>;
   nameKeys: Set<string>;
+  driveIds: Set<string>;
   driveVersions: Map<string, { modifiedTime: string; recordId: string }>;
 }> {
   const urls = new Set<string>();
   const nameKeys = new Set<string>();
+  const driveIds = new Set<string>();
   const driveVersions = new Map<string, { modifiedTime: string; recordId: string; createdAt: string }>();
   const sb = getSupabase();
+  const BATCH_SIZE = 1000;
 
   try {
-    let query = sb
-      .from('pipeline_log')
-      .select('id, file_url, file_name, project_id, drive_file_id, drive_modified_time, is_latest_version, created_at')
-      .neq('status', 'deleted');
+    let offset = 0;
+    while (true) {
+      let query = sb
+        .from('pipeline_log')
+        .select('id, file_url, file_name, project_id, drive_file_id, drive_modified_time, is_latest_version, status, created_at')
+        .range(offset, offset + BATCH_SIZE - 1);
 
-    if (orgId) {
-      query = query.eq('org_id', orgId);
-    }
-
-    const { data } = await query;
-
-    for (const row of data || []) {
-      if (row.file_url) urls.add(String(row.file_url));
-      if (row.file_name) {
-        nameKeys.add(`${String(row.file_name).toLowerCase()}|${String(row.project_id || '').toLowerCase()}`);
+      if (orgId) {
+        query = query.eq('org_id', orgId);
       }
-      if (row.drive_file_id && row.is_latest_version) {
-        const driveId = String(row.drive_file_id);
-        const existing = driveVersions.get(driveId);
-        const rowCreatedAt = row.created_at || '';
-        if (!existing || rowCreatedAt > existing.createdAt) {
-          driveVersions.set(driveId, {
-            modifiedTime: row.drive_modified_time || '',
-            recordId: String(row.id),
-            createdAt: rowCreatedAt,
-          });
+
+      const { data } = await query;
+      const rows = data || [];
+      if (rows.length === 0) break;
+
+      for (const row of rows) {
+        if (row.drive_file_id) {
+          driveIds.add(String(row.drive_file_id));
+        }
+
+        const isDeleted = row.status === 'deleted';
+
+        if (!isDeleted) {
+          if (row.file_url) urls.add(String(row.file_url));
+          if (row.file_name) {
+            nameKeys.add(`${String(row.file_name).toLowerCase()}|${String(row.project_id || '').toLowerCase()}`);
+          }
+        }
+
+        if (row.drive_file_id && row.is_latest_version && !isDeleted) {
+          const driveId = String(row.drive_file_id);
+          const existing = driveVersions.get(driveId);
+          const rowCreatedAt = row.created_at || '';
+          if (!existing || rowCreatedAt > existing.createdAt) {
+            driveVersions.set(driveId, {
+              modifiedTime: row.drive_modified_time || '',
+              recordId: String(row.id),
+              createdAt: rowCreatedAt,
+            });
+          }
         }
       }
+
+      if (rows.length < BATCH_SIZE) break;
+      offset += BATCH_SIZE;
     }
   } catch (err) {
     console.error('[scan-drive] Failed to fetch processed file IDs:', err);
   }
 
-  return { urls, nameKeys, driveVersions };
+  return { urls, nameKeys, driveIds, driveVersions };
 }
 
 function isDriveFileNewer(driveTime: string, storedTime: string): boolean {
