@@ -17,7 +17,7 @@ import {
   buildDriveFileUrl,
   isSupportedFileType,
 } from '@/lib/google-drive';
-import { generatePipelineId } from '@/lib/pipeline';
+import { generatePipelineId, MAX_RETRY_COUNT } from '@/lib/pipeline';
 import { fetchProjectList, getSupabase, getOrganization } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { publishProcessBatch, publishScanContinuation, ProcessPayload, ScanContinuationPayload } from '@/lib/qstash';
@@ -113,43 +113,73 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
     if (orgRow?.org_id) orgId = orgRow.org_id;
   }
 
-  const { urls: processedFileUrls, nameKeys: processedNameKeys, driveIds: processedDriveIds, driveVersions } = await getProcessedDriveFiles(orgId);
+  const { urls: processedFileUrls, nameKeys: processedNameKeys, driveStatusMap } = await getProcessedDriveFiles(orgId);
   timing.dedup_query = Date.now() - tStep;
 
   const newFiles: typeof supportedFiles = [];
   const updatedFiles: Array<{ file: typeof supportedFiles[0]; previousRecordId: string }> = [];
+  const retryFiles: Array<{ file: typeof supportedFiles[0]; existingRecordId: string; retryCount: number }> = [];
+  let skippedMaxRetries = 0;
 
   for (const f of supportedFiles) {
-    // Check version tracking first (only non-deleted latest records)
-    const existing = driveVersions.get(f.id);
-    if (existing) {
-      if (existing.modifiedTime && f.modifiedTime && isDriveFileNewer(f.modifiedTime, existing.modifiedTime)) {
-        console.log(`[scan-drive] Version change detected for ${f.name}: drive=${f.modifiedTime} > stored=${existing.modifiedTime}`);
-        updatedFiles.push({ file: f, previousRecordId: existing.recordId });
-      }
+    const existing = driveStatusMap.get(f.id);
+
+    if (!existing) {
+      // Genuinely new file -- check fallback dedup by URL / name
+      if (processedFileUrls.has(buildDriveFileUrl(f.id))) continue;
+      const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
+      if (processedNameKeys.has(nameKey)) continue;
+      newFiles.push(f);
       continue;
     }
-    // Primary dedup: skip if this drive_file_id has ever been seen (any status including deleted/failed)
-    if (processedDriveIds.has(f.id)) continue;
-    if (processedFileUrls.has(buildDriveFileUrl(f.id))) continue;
-    const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
-    if (processedNameKeys.has(nameKey)) continue;
-    newFiles.push(f);
+
+    switch (existing.status) {
+      case 'deleted':
+        continue;
+
+      case 'failed': {
+        if (existing.retryCount >= MAX_RETRY_COUNT) {
+          skippedMaxRetries++;
+          continue;
+        }
+        retryFiles.push({ file: f, existingRecordId: existing.recordId, retryCount: existing.retryCount });
+        continue;
+      }
+
+      case 'queued':
+      case 'processing':
+      case 'tier1_extracting':
+        continue;
+
+      default: {
+        // Already processed (pending_review, approved, stored_only, etc.)
+        // Check for Drive version update
+        if (existing.isLatestVersion && existing.modifiedTime && f.modifiedTime && isDriveFileNewer(f.modifiedTime, existing.modifiedTime)) {
+          console.log(`[scan-drive] Version change detected for ${f.name}: drive=${f.modifiedTime} > stored=${existing.modifiedTime}`);
+          updatedFiles.push({ file: f, previousRecordId: existing.recordId });
+        }
+        continue;
+      }
+    }
   }
 
-  if (newFiles.length === 0 && updatedFiles.length === 0) {
+  if (newFiles.length === 0 && updatedFiles.length === 0 && retryFiles.length === 0) {
     timing.total = Date.now() - t0;
-    console.log(`[scan-drive] No changes (${supportedFiles.length} total, ${processedFileUrls.size} processed) — ${fmtTiming(timing)}`);
+    const msg = skippedMaxRetries > 0
+      ? `No new files found (${skippedMaxRetries} permanently failed — max retries exceeded)`
+      : 'No new files found';
+    console.log(`[scan-drive] ${msg} (${supportedFiles.length} total, ${driveStatusMap.size} tracked) — ${fmtTiming(timing)}`);
     return Response.json({
-      message: 'No new files found',
+      message: msg,
       totalDriveFiles: allDriveFiles.length,
       supportedFiles: supportedFiles.length,
-      alreadyProcessed: processedFileUrls.size,
+      alreadyProcessed: driveStatusMap.size,
+      skippedMaxRetries,
       timing,
     });
   }
 
-  console.log(`[scan-drive] Found ${newFiles.length} new, ${updatedFiles.length} updated files`);
+  console.log(`[scan-drive] Found ${newFiles.length} new, ${updatedFiles.length} updated, ${retryFiles.length} retryable files (${skippedMaxRetries} hit max retries)`);
 
   tStep = Date.now();
   const projects = await fetchProjectList();
@@ -164,6 +194,7 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
 
   const filesToQueue = newFiles.slice(0, MAX_FILES_PER_RUN);
   const updatedToQueue = updatedFiles.slice(0, Math.max(0, MAX_FILES_PER_RUN - filesToQueue.length));
+  const retryToQueue = retryFiles.slice(0, Math.max(0, MAX_FILES_PER_RUN - filesToQueue.length - updatedToQueue.length));
   const baseUrl = getBaseUrl(request);
   const sb = getSupabase();
   const now = new Date().toISOString();
@@ -322,6 +353,67 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
     }
   }
 
+  // ── Retry failed files by updating existing records ─────────────
+  for (const { file, existingRecordId, retryCount } of retryToQueue) {
+    try {
+      console.log(`[scan-drive] Retrying failed file: ${file.name} (drive_id=${file.id}, record=${existingRecordId}, attempt=${retryCount + 1})`);
+
+      // Conditional UPDATE: only reset if still failed (prevents race with concurrent scans/QStash retries)
+      const { data: updatedRows, error: updateError } = await sb
+        .from('pipeline_log')
+        .update({
+          status: 'queued',
+          retry_count: retryCount + 1,
+          validation_flags: null,
+        })
+        .eq('id', existingRecordId)
+        .eq('status', 'failed')
+        .select('id')
+
+      if (updateError) throw new Error(`DB conditional update failed: ${updateError.message}`);
+
+      if (!updatedRows || updatedRows.length === 0) {
+        console.log(`[scan-drive] Skip retry for ${file.name}: record already claimed by another process`);
+        results.push({
+          fileName: file.name,
+          driveId: file.id,
+          status: 'skipped',
+          error: 'Already claimed by another process',
+        });
+        continue;
+      }
+
+      payloadsToPublish.push({
+        recordId: existingRecordId,
+        orgId,
+        projectId: null,
+        fileName: file.name,
+        mimeType: file.mimeType,
+        storagePath: '',
+        driveFileId: file.id,
+        driveModifiedTime: file.modifiedTime,
+        driveWebViewLink: file.webViewLink,
+        driveFolderPath: file.folderPath,
+      });
+
+      results.push({
+        fileName: file.name,
+        driveId: file.id,
+        status: 'queued',
+        pipelineId: `retry-${retryCount + 1}`,
+        projectId: '(retry)',
+      });
+    } catch (err) {
+      console.error(`[scan-drive] Failed to retry ${file.name}:`, err);
+      results.push({
+        fileName: file.name,
+        driveId: file.id,
+        status: 'error',
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  }
+
   if (payloadsToPublish.length > 0) {
     try {
       await publishProcessBatch(payloadsToPublish, baseUrl);
@@ -338,11 +430,13 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
 
   const queuedCount = results.filter((r) => r.status === 'queued').length;
   const updateCount = results.filter((r) => r.isUpdate && r.status === 'queued').length;
+  const retriedCount = results.filter((r) => r.projectId === '(retry)' && r.status === 'queued').length;
   const remainingNew = Math.max(0, newFiles.length - MAX_FILES_PER_RUN);
   const remainingUpdated = Math.max(0, updatedFiles.length - Math.max(0, MAX_FILES_PER_RUN - filesToQueue.length));
-  const totalRemaining = remainingNew + remainingUpdated;
+  const remainingRetries = Math.max(0, retryFiles.length - retryToQueue.length);
+  const totalRemaining = remainingNew + remainingUpdated + remainingRetries;
 
-  console.log(`[scan-drive] Queued ${queuedCount} files (${updateCount} updates), ${totalRemaining} remaining — ${fmtTiming(timing)}`);
+  console.log(`[scan-drive] Queued ${queuedCount} files (${updateCount} updates, ${retriedCount} retries), ${totalRemaining} remaining — ${fmtTiming(timing)}`);
 
   if (totalRemaining > 0) {
     try {
@@ -354,11 +448,13 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
   }
 
   return Response.json({
-    message: `Queued ${queuedCount} file(s) for processing${updateCount > 0 ? ` (${updateCount} update${updateCount > 1 ? 's' : ''})` : ''}`,
+    message: `Queued ${queuedCount} file(s) for processing${updateCount > 0 ? ` (${updateCount} update${updateCount > 1 ? 's' : ''})` : ''}${retriedCount > 0 ? ` (${retriedCount} retr${retriedCount > 1 ? 'ies' : 'y'})` : ''}`,
     totalDriveFiles: allDriveFiles.length,
     supportedFiles: supportedFiles.length,
     newFilesFound: newFiles.length,
     updatedFilesFound: updatedFiles.length,
+    retriedFiles: retryFiles.length,
+    skippedMaxRetries,
     queued: results,
     remainingFiles: totalRemaining,
     autoContScheduled: totalRemaining > 0,
@@ -426,16 +522,23 @@ function matchProject(folderName: string, lookup: Map<string, string>): string {
   return projectId;
 }
 
+interface DriveFileStatus {
+  status: string;
+  recordId: string;
+  retryCount: number;
+  modifiedTime: string;
+  isLatestVersion: boolean;
+}
+
 async function getProcessedDriveFiles(orgId: string): Promise<{
   urls: Set<string>;
   nameKeys: Set<string>;
-  driveIds: Set<string>;
-  driveVersions: Map<string, { modifiedTime: string; recordId: string }>;
+  driveStatusMap: Map<string, DriveFileStatus>;
 }> {
   const urls = new Set<string>();
   const nameKeys = new Set<string>();
-  const driveIds = new Set<string>();
-  const driveVersions = new Map<string, { modifiedTime: string; recordId: string; createdAt: string }>();
+  const driveStatusMap = new Map<string, DriveFileStatus>();
+  const createdAtTracker = new Map<string, string>();
   const sb = getSupabase();
   const BATCH_SIZE = 1000;
 
@@ -444,7 +547,7 @@ async function getProcessedDriveFiles(orgId: string): Promise<{
     while (true) {
       let query = sb
         .from('pipeline_log')
-        .select('id, file_url, file_name, project_id, drive_file_id, drive_modified_time, is_latest_version, status, created_at')
+        .select('id, file_url, file_name, project_id, drive_file_id, drive_modified_time, is_latest_version, status, retry_count, created_at')
         .range(offset, offset + BATCH_SIZE - 1);
 
       if (orgId) {
@@ -456,10 +559,6 @@ async function getProcessedDriveFiles(orgId: string): Promise<{
       if (rows.length === 0) break;
 
       for (const row of rows) {
-        if (row.drive_file_id) {
-          driveIds.add(String(row.drive_file_id));
-        }
-
         const isDeleted = row.status === 'deleted';
 
         if (!isDeleted) {
@@ -469,15 +568,19 @@ async function getProcessedDriveFiles(orgId: string): Promise<{
           }
         }
 
-        if (row.drive_file_id && row.is_latest_version && !isDeleted) {
+        if (row.drive_file_id) {
           const driveId = String(row.drive_file_id);
-          const existing = driveVersions.get(driveId);
           const rowCreatedAt = row.created_at || '';
-          if (!existing || rowCreatedAt > existing.createdAt) {
-            driveVersions.set(driveId, {
-              modifiedTime: row.drive_modified_time || '',
+          const existingCreatedAt = createdAtTracker.get(driveId) || '';
+
+          if (!existingCreatedAt || rowCreatedAt > existingCreatedAt) {
+            createdAtTracker.set(driveId, rowCreatedAt);
+            driveStatusMap.set(driveId, {
+              status: row.status,
               recordId: String(row.id),
-              createdAt: rowCreatedAt,
+              retryCount: row.retry_count ?? 0,
+              modifiedTime: row.drive_modified_time || '',
+              isLatestVersion: !!row.is_latest_version,
             });
           }
         }
@@ -490,7 +593,7 @@ async function getProcessedDriveFiles(orgId: string): Promise<{
     console.error('[scan-drive] Failed to fetch processed file IDs:', err);
   }
 
-  return { urls, nameKeys, driveIds, driveVersions };
+  return { urls, nameKeys, driveStatusMap };
 }
 
 function isDriveFileNewer(driveTime: string, storedTime: string): boolean {

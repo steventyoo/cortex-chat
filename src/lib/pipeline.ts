@@ -85,6 +85,8 @@ export const FOLDER_HINTS: Array<{ pattern: RegExp; categoryKey: string }> = [
   { pattern: /equipment|fleet|tool.?list|asset.?list/i, categoryKey: '25_equipment' },
 ];
 
+export const MAX_RETRY_COUNT = 3;
+
 const COMPANY_WIDE_KEY_PREFIX = '20';
 
 export function isCompanyWideCategory(key: string): boolean {
