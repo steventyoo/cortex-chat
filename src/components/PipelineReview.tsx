@@ -116,6 +116,7 @@ interface GlobalStats {
   drivePathCounts: Record<string, number>;
   projectCategoryCounts: Record<string, Record<string, number>>;
   projectTotalCounts: Record<string, number>;
+  projectUncategorizedCounts: Record<string, number>;
   companyWideTotalCount: number;
 }
 
@@ -1900,12 +1901,7 @@ export default function PipelineReview() {
               <div className="px-6 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-2">
                 <button
                   onClick={() => {
-                    if (selectedProject === '__uncategorized') {
-                      setSelectedProject(null);
-                      setSelectedCategoryId(null);
-                    } else {
-                      setSelectedCategoryId(null);
-                    }
+                    setSelectedCategoryId(null);
                     setCurrentPage(1);
                   }}
                   className="flex items-center gap-1.5 text-[13px] text-[#555] hover:text-[#1a1a1a] transition-colors"
@@ -1917,9 +1913,9 @@ export default function PipelineReview() {
                 </button>
                 <span className="text-[12px] text-[#999]">/</span>
                 <span className="text-[13px] text-[#999]">
-                  {selectedProject === '__company_wide' ? 'Company-Wide' : selectedProject === '__no_project' ? 'No Project' : selectedProject === '__uncategorized' ? '' : selectedProject}
+                  {selectedProject === '__company_wide' ? 'Company-Wide' : selectedProject === '__no_project' ? 'No Project' : selectedProject}
                 </span>
-                {selectedProject !== '__uncategorized' && <span className="text-[12px] text-[#999]">/</span>}
+                <span className="text-[12px] text-[#999]">/</span>
                 <span className="text-[14px] font-semibold text-[#1a1a1a]">
                   {selectedCategoryId === '__uncategorized'
                     ? 'Uncategorized'
@@ -1963,6 +1959,7 @@ export default function PipelineReview() {
               projectName={selectedProject}
               categories={categories}
               projectCategoryCounts={globalStats?.projectCategoryCounts?.[selectedProject] || {}}
+              projectUncategorizedCount={globalStats?.projectUncategorizedCounts?.[selectedProject] || 0}
               onSelectCategory={(catId) => { setSelectedCategoryId(catId); setCurrentPage(1); }}
               onBack={() => { setSelectedProject(null); setCurrentPage(1); }}
             />
@@ -1970,14 +1967,8 @@ export default function PipelineReview() {
             <ProjectFolderList
               projectTotalCounts={globalStats?.projectTotalCounts || {}}
               companyWideTotalCount={globalStats?.companyWideTotalCount || 0}
-              uncategorizedCount={globalStats?.uncategorizedCount || 0}
               onSelectProject={(proj) => {
-                if (proj === '__uncategorized') {
-                  setSelectedProject('__uncategorized');
-                  setSelectedCategoryId('__uncategorized');
-                } else {
-                  setSelectedProject(proj);
-                }
+                setSelectedProject(proj);
                 setCurrentPage(1);
               }}
             />
@@ -2637,12 +2628,10 @@ const PRIORITY_BORDER_COLORS_LIST: Record<string, string> = {
 function ProjectFolderList({
   projectTotalCounts,
   companyWideTotalCount,
-  uncategorizedCount,
   onSelectProject,
 }: {
   projectTotalCounts: Record<string, number>;
   companyWideTotalCount: number;
-  uncategorizedCount: number;
   onSelectProject: (project: string) => void;
 }) {
   const sortedProjects = Object.entries(projectTotalCounts)
@@ -2711,27 +2700,7 @@ function ProjectFolderList({
         </button>
       )}
 
-      {uncategorizedCount > 0 && (
-        <button
-          onClick={() => onSelectProject('__uncategorized')}
-          className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-gray-200"
-        >
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-gray-100 text-gray-400 text-[12px]">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-          </div>
-          <span className="flex-1 text-[14px] font-medium text-[#777]">Uncategorized</span>
-          <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{uncategorizedCount}</span>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
-            <path d="M9 18l6-6-6-6" />
-          </svg>
-        </button>
-      )}
-
-      {sortedProjects.length === 0 && companyWideTotalCount === 0 && noProjectCount === 0 && uncategorizedCount === 0 && (
+      {sortedProjects.length === 0 && companyWideTotalCount === 0 && noProjectCount === 0 && (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <p className="text-[14px] font-medium text-[#1a1a1a]">No projects yet</p>
           <p className="text-[13px] text-[#999] mt-1">
@@ -2747,12 +2716,14 @@ function ProjectCategoryList({
   projectName,
   categories,
   projectCategoryCounts,
+  projectUncategorizedCount,
   onSelectCategory,
   onBack,
 }: {
   projectName: string;
   categories: CategoryInfo[];
   projectCategoryCounts: Record<string, number>;
+  projectUncategorizedCount: number;
   onSelectCategory: (catId: string) => void;
   onBack: () => void;
 }) {
@@ -2765,7 +2736,8 @@ function ProjectCategoryList({
     : categories.filter(c => !COMPANY_WIDE_KEYS.has(c.key));
 
   const sorted = [...filteredCategories].sort((a, b) => a.sort_order - b.sort_order);
-  const totalDocs = Object.values(projectCategoryCounts).reduce((sum, n) => sum + n, 0);
+  const categorizedDocs = Object.values(projectCategoryCounts).reduce((sum, n) => sum + n, 0);
+  const totalDocs = categorizedDocs + projectUncategorizedCount;
 
   return (
     <div>
@@ -2819,6 +2791,26 @@ function ProjectCategoryList({
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <p className="text-[13px] text-[#999]">No categorized documents in this project</p>
           </div>
+        )}
+
+        {projectUncategorizedCount > 0 && (
+          <button
+            onClick={() => onSelectCategory('__uncategorized')}
+            className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-gray-200"
+          >
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-gray-100 text-gray-400 text-[12px]">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <span className="flex-1 text-[14px] font-medium text-[#777]">Uncategorized</span>
+            <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{projectUncategorizedCount}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
         )}
       </div>
     </div>
