@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 
 interface Skill {
   id: string;
@@ -58,10 +58,204 @@ function OperatorNav() {
   );
 }
 
+function CreateSkillModal({ onClose, onCreated }: { onClose: () => void; onCreated: (skillId: string) => void }) {
+  const [skillId, setSkillId] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [description, setDescription] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState('');
+
+  // Auto-generate mode
+  const [mode, setMode] = useState<'manual' | 'generate'>('manual');
+  const [generating, setGenerating] = useState(false);
+  const [generatedFields, setGeneratedFields] = useState<Array<{ name: string; type: string; tier: number; required: boolean; description: string }> | null>(null);
+
+  const autoSkillId = displayName
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, '_');
+
+  const handleCreate = async () => {
+    const finalSkillId = skillId || autoSkillId;
+    if (!finalSkillId || !displayName) {
+      setError('Display name is required');
+      return;
+    }
+    setCreating(true);
+    setError('');
+    try {
+      const res = await fetch('/api/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          skillId: finalSkillId,
+          displayName,
+          fieldDefinitions: generatedFields || [],
+          status: 'draft',
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || 'Failed to create skill');
+        return;
+      }
+      onCreated(finalSkillId);
+    } catch {
+      setError('Network error');
+    }
+    setCreating(false);
+  };
+
+  const handleGenerate = async (file: File) => {
+    setGenerating(true);
+    setError('');
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch('/api/skills/generate', { method: 'POST', body: formData });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.error || 'Generation failed');
+        setGenerating(false);
+        return;
+      }
+      const data = await res.json();
+      if (data.displayName) setDisplayName(data.displayName);
+      if (data.description) setDescription(data.description);
+      if (data.fieldDefinitions) setGeneratedFields(data.fieldDefinitions);
+      if (data.skillId) setSkillId(data.skillId);
+    } catch {
+      setError('Network error');
+    }
+    setGenerating(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="px-6 py-4 border-b border-[#f0f0f0]">
+          <h2 className="text-[17px] font-semibold text-[#1a1a1a]">Create New Skill</h2>
+        </div>
+
+        <div className="px-6 py-5 space-y-4">
+          {/* Mode toggle */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setMode('manual')}
+              className={`flex-1 py-2 rounded-lg text-[13px] font-medium transition-colors border ${
+                mode === 'manual' ? 'bg-[#1a1a1a] text-white border-[#1a1a1a]' : 'text-[#666] border-[#e0e0e0] hover:bg-[#f8f8f8]'
+              }`}
+            >
+              Manual
+            </button>
+            <button
+              onClick={() => setMode('generate')}
+              className={`flex-1 py-2 rounded-lg text-[13px] font-medium transition-colors border ${
+                mode === 'generate' ? 'bg-[#1a1a1a] text-white border-[#1a1a1a]' : 'text-[#666] border-[#e0e0e0] hover:bg-[#f8f8f8]'
+              }`}
+            >
+              Auto-generate from Document
+            </button>
+          </div>
+
+          {mode === 'generate' && !generatedFields && (
+            <div className="border-2 border-dashed border-[#e0e0e0] rounded-xl py-8 text-center">
+              {generating ? (
+                <div className="flex items-center justify-center gap-2 text-[14px] text-[#999]">
+                  <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                    <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                  Analyzing document with Claude...
+                </div>
+              ) : (
+                <label className="cursor-pointer">
+                  <p className="text-[14px] text-[#999]">Upload a sample document</p>
+                  <p className="text-[12px] text-[#ccc] mt-1">Claude will propose a schema based on its contents</p>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.docx,.doc,.xlsx,.txt,.csv,.png,.jpg,.jpeg"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleGenerate(f); e.target.value = ''; }}
+                  />
+                </label>
+              )}
+            </div>
+          )}
+
+          {generatedFields && (
+            <div className="px-3 py-2 rounded-lg bg-[#f0fdf4] border border-[#bbf7d0] text-[13px] text-[#166534]">
+              Generated {generatedFields.length} fields from document. Review and edit below.
+            </div>
+          )}
+
+          <div>
+            <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Display Name</label>
+            <input
+              value={displayName}
+              onChange={e => setDisplayName(e.target.value)}
+              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 focus:border-[#007aff]"
+              placeholder="e.g. Purchase Order"
+            />
+          </div>
+
+          <div>
+            <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Skill ID (auto-generated)</label>
+            <input
+              value={skillId || autoSkillId}
+              onChange={e => setSkillId(e.target.value)}
+              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 focus:border-[#007aff]"
+              placeholder="purchase_order"
+            />
+          </div>
+
+          {generatedFields && (
+            <div>
+              <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide mb-1 block">
+                Proposed Fields ({generatedFields.length})
+              </label>
+              <div className="max-h-[200px] overflow-y-auto border border-[#e8e8e8] rounded-lg">
+                {generatedFields.map((f, i) => (
+                  <div key={i} className={`flex items-center gap-2 px-3 py-2 text-[12px] ${i > 0 ? 'border-t border-[#f0f0f0]' : ''}`}>
+                    <span className="font-medium text-[#1a1a1a] w-[140px] truncate">{f.name}</span>
+                    <span className="text-[#999] font-mono">{f.type}</span>
+                    <span className={`text-[10px] px-1 rounded ${f.tier === 1 ? 'bg-[#dbeafe] text-[#1e40af]' : 'bg-[#f0f0f0] text-[#888]'}`}>T{f.tier}</span>
+                    {f.required && <span className="text-[10px] text-[#dc2626]">req</span>}
+                    <span className="flex-1 text-[#b4b4b4] truncate">{f.description}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="px-4 py-2 rounded-lg bg-[#fef2f2] text-[#dc2626] text-[13px]">{error}</div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-[#f0f0f0] flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] text-[#666] hover:bg-[#f0f0f0] transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={!displayName.trim() || creating}
+            className="px-4 py-2 rounded-lg bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors disabled:opacity-40"
+          >
+            {creating ? 'Creating...' : 'Create Skill'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OperatorSkillsPage() {
+  const router = useRouter();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'active' | 'draft' | 'archived'>('all');
+  const [showCreate, setShowCreate] = useState(false);
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
@@ -91,7 +285,20 @@ export default function OperatorSkillsPage() {
               Configure how the system classifies, extracts, and understands each document type.
             </p>
           </div>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="px-4 py-2 rounded-lg bg-[#1a1a1a] text-white text-[13px] font-medium hover:bg-[#333] transition-colors"
+          >
+            + Create Skill
+          </button>
         </div>
+
+        {showCreate && (
+          <CreateSkillModal
+            onClose={() => setShowCreate(false)}
+            onCreated={(sid) => { setShowCreate(false); router.push(`/operator/skills/${sid}`); }}
+          />
+        )}
 
         {/* Filter tabs */}
         <div className="flex items-center gap-1 mb-6">

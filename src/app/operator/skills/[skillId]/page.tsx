@@ -9,6 +9,8 @@ import SkillClassifierTab from '@/components/operator/SkillClassifierTab';
 import SkillFewShotTab from '@/components/operator/SkillFewShotTab';
 import SkillReferencesTab from '@/components/operator/SkillReferencesTab';
 import SkillTestTab from '@/components/operator/SkillTestTab';
+import SkillVersionsTab from '@/components/operator/SkillVersionsTab';
+import SkillOrgConfigTab from '@/components/operator/SkillOrgConfigTab';
 
 export interface FieldDef {
   name: string;
@@ -38,7 +40,7 @@ export interface SkillData {
   updated_at: string;
 }
 
-type TabId = 'fields' | 'prompt' | 'classifier' | 'fewshot' | 'references' | 'test';
+type TabId = 'fields' | 'prompt' | 'classifier' | 'fewshot' | 'references' | 'test' | 'versions' | 'orgs';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'fields', label: 'Fields' },
@@ -47,6 +49,8 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'fewshot', label: 'Few-shot' },
   { id: 'references', label: 'Reference Docs' },
   { id: 'test', label: 'Test' },
+  { id: 'versions', label: 'Versions' },
+  { id: 'orgs', label: 'Orgs' },
 ];
 
 export default function SkillDetailPage() {
@@ -229,6 +233,19 @@ export default function SkillDetailPage() {
             extractionInstructions={extractionInstructions}
             sampleExtractions={sampleExtractions}
             referenceDocIds={referenceDocIds}
+          />
+        )}
+        {activeTab === 'versions' && (
+          <SkillVersionsTab
+            skillId={skillId}
+            currentVersion={skill.version}
+            onRollback={fetchSkill}
+          />
+        )}
+        {activeTab === 'orgs' && (
+          <SkillOrgConfigTab
+            skillId={skillId}
+            currentVersion={skill.version}
           />
         )}
       </div>
