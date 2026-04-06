@@ -55,6 +55,10 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     classifierHints?: { description: string; keywords: string[] };
     addFields?: FieldDefinition[];
     removeFields?: string[];
+    systemPrompt?: string;
+    extractionInstructions?: string;
+    referenceDocIds?: string[];
+    sampleExtractions?: Array<{ inputSnippet: string; expectedOutput: Record<string, unknown> }>;
   };
 
   try {
@@ -106,6 +110,10 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
   if (body.displayName) updateFields.display_name = body.displayName;
   if (body.status) updateFields.status = body.status;
   if (body.classifierHints) updateFields.classifier_hints = body.classifierHints;
+  if (body.systemPrompt !== undefined) updateFields.system_prompt = body.systemPrompt;
+  if (body.extractionInstructions !== undefined) updateFields.extraction_instructions = body.extractionInstructions;
+  if (body.referenceDocIds !== undefined) updateFields.reference_doc_ids = body.referenceDocIds;
+  if (body.sampleExtractions !== undefined) updateFields.sample_extractions = body.sampleExtractions;
 
   const { data, error } = await sb
     .from('document_skills')
