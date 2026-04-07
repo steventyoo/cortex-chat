@@ -14,6 +14,12 @@ const TIERS = [0, 1, 2, 3] as const;
 const TIER_LABELS: Record<number, string> = { 0: 'Auto', 1: 'Tier 1', 2: 'Tier 2', 3: 'Tier 3' };
 const IMPORTANCE_OPTIONS = ['P', 'S', 'E', 'A'] as const;
 const IMPORTANCE_LABELS: Record<string, string> = { P: 'Primary', S: 'Supporting', E: 'Enabling', A: 'Admin' };
+const IMPORTANCE_TOOLTIPS: Record<string, string> = {
+  P: 'Primary — critical for analysis and decision-making',
+  S: 'Supporting — provides useful context',
+  E: 'Enabling — needed for cross-referencing between documents',
+  A: 'Admin — identifier or metadata field',
+};
 const IMPORTANCE_COLORS: Record<string, string> = {
   P: 'bg-[#fecaca] text-[#991b1b]',
   S: 'bg-[#dbeafe] text-[#1e40af]',
@@ -66,6 +72,16 @@ export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) 
           <p className="text-[13px] text-[#999] mt-0.5">
             Define the data fields Claude should extract for this document type.
           </p>
+          <div className="flex items-center gap-3 mt-2">
+            {IMPORTANCE_OPTIONS.map(imp => (
+              <span key={imp} className="flex items-center gap-1">
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${IMPORTANCE_COLORS[imp]}`}>
+                  {IMPORTANCE_LABELS[imp]}
+                </span>
+                <span className="text-[11px] text-[#bbb]">{IMPORTANCE_TOOLTIPS[imp].split(' — ')[1]}</span>
+              </span>
+            ))}
+          </div>
         </div>
         <button
           onClick={startAdd}
@@ -92,15 +108,12 @@ export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) 
                   <div className="flex items-center gap-2">
                     <span className="text-[14px] font-medium text-[#1a1a1a]">{f.name}</span>
                     <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#f0f0f0] text-[#888] font-mono">{f.type}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                      f.tier === 0 ? 'bg-[#e0e7ff] text-[#4338ca]' :
-                      f.tier === 1 ? 'bg-[#dbeafe] text-[#1e40af]' :
-                      f.tier === 2 ? 'bg-[#fef3c7] text-[#92400e]' :
-                      'bg-[#f0f0f0] text-[#888]'
-                    }`}>{f.tier === 0 ? 'Auto' : `T${f.tier}`}</span>
                     {f.importance && (
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${IMPORTANCE_COLORS[f.importance]}`}>
-                        {f.importance}
+                      <span
+                        title={IMPORTANCE_TOOLTIPS[f.importance]}
+                        className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium cursor-help ${IMPORTANCE_COLORS[f.importance]}`}
+                      >
+                        {IMPORTANCE_LABELS[f.importance]}
                       </span>
                     )}
                     {f.required && <span className="text-[10px] text-[#dc2626] font-medium">Required</span>}
