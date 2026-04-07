@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
 
   const { data: stuck, error } = await sb
     .from('pipeline_log')
-    .select('id, org_id, project_id, file_name, file_url, status, created_at')
+    .select('id, org_id, project_id, file_name, file_url, status, created_at, drive_file_id, drive_modified_time, drive_web_view_link, drive_folder_path, storage_path')
     .in('status', ['processing', 'queued'])
     .lt('created_at', tenMinutesAgo)
     .limit(20);
@@ -38,15 +38,16 @@ export async function GET(request: NextRequest) {
 
   for (const record of stuck) {
     const fileUrl = record.file_url as string | null;
-    if (!fileUrl || !fileUrl.startsWith('storage://')) {
+    const driveFileId = record.drive_file_id as string | null;
+
+    if (!fileUrl && !driveFileId) {
       await sb.from('pipeline_log').update({
         status: 'failed',
-        validation_flags: [{ field: 'recovery', issue: 'No stored file found during recovery', severity: 'error' }],
+        validation_flags: [{ field: 'recovery', issue: 'No stored file and no Drive ID found during recovery', severity: 'error' }],
       }).eq('id', record.id);
       continue;
     }
 
-    const storagePath = fileUrl.replace('storage://', '');
     const fileName = record.file_name as string;
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
     const mimeMap: Record<string, string> = {
@@ -60,6 +61,7 @@ export async function GET(request: NextRequest) {
       jpeg: 'image/jpeg',
     };
     const mimeType = mimeMap[ext] || 'application/octet-stream';
+    const storagePath = fileUrl?.startsWith('storage://') ? fileUrl.replace('storage://', '') : (record.storage_path as string || '');
 
     try {
       await sb.from('pipeline_log').update({ status: 'queued' }).eq('id', record.id);
@@ -70,6 +72,10 @@ export async function GET(request: NextRequest) {
         fileName,
         mimeType,
         storagePath,
+        ...(driveFileId ? { driveFileId } : {}),
+        ...(record.drive_modified_time ? { driveModifiedTime: record.drive_modified_time as string } : {}),
+        ...(record.drive_web_view_link ? { driveWebViewLink: record.drive_web_view_link as string } : {}),
+        ...(record.drive_folder_path ? { driveFolderPath: record.drive_folder_path as string } : {}),
       };
       await publishProcessJob(payload, baseUrl);
       recovered++;
