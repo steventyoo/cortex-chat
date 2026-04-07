@@ -24,6 +24,7 @@ function OperatorNav() {
   const pathname = usePathname();
   const tabs = [
     { label: 'Skills', href: '/operator/skills' },
+    { label: 'Doc Links', href: '/operator/doc-links' },
   ];
 
   return (
