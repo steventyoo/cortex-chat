@@ -30,10 +30,11 @@ const PERCENT_FIELDS = ['percent', 'complete', 'pct', 'rate', 'ratio', 'ohp rate
 interface SkillFieldDef {
   name: string;
   type: 'string' | 'number' | 'date' | 'enum' | 'boolean' | 'array';
-  tier: 1 | 2 | 3;
+  tier: 0 | 1 | 2 | 3;
   required: boolean;
   description: string;
   options?: string[];
+  importance?: 'P' | 'S' | 'E' | 'A';
 }
 
 interface SkillData {

@@ -6,7 +6,6 @@ import Link from 'next/link';
 import SkillFieldsTab from '@/components/operator/SkillFieldsTab';
 import SkillPromptTab from '@/components/operator/SkillPromptTab';
 import SkillClassifierTab from '@/components/operator/SkillClassifierTab';
-import SkillFewShotTab from '@/components/operator/SkillFewShotTab';
 import SkillReferencesTab from '@/components/operator/SkillReferencesTab';
 import SkillTestTab from '@/components/operator/SkillTestTab';
 import SkillVersionsTab from '@/components/operator/SkillVersionsTab';
@@ -15,11 +14,12 @@ import SkillOrgConfigTab from '@/components/operator/SkillOrgConfigTab';
 export interface FieldDef {
   name: string;
   type: 'string' | 'number' | 'date' | 'enum' | 'boolean' | 'array';
-  tier: 1 | 2 | 3;
+  tier: 0 | 1 | 2 | 3;
   required: boolean;
   description: string;
   options?: string[];
   disambiguationRules?: string;
+  importance?: 'P' | 'S' | 'E' | 'A';
 }
 
 export interface SkillData {
@@ -40,13 +40,12 @@ export interface SkillData {
   updated_at: string;
 }
 
-type TabId = 'fields' | 'prompt' | 'classifier' | 'fewshot' | 'references' | 'test' | 'versions' | 'orgs';
+type TabId = 'fields' | 'prompt' | 'classifier' | 'references' | 'test' | 'versions' | 'orgs';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'fields', label: 'Fields' },
-  { id: 'prompt', label: 'Prompt' },
+  { id: 'prompt', label: 'Prompt & Examples' },
   { id: 'classifier', label: 'Classifier' },
-  { id: 'fewshot', label: 'Few-shot' },
   { id: 'references', label: 'Reference Docs' },
   { id: 'test', label: 'Test' },
   { id: 'versions', label: 'Versions' },
@@ -201,6 +200,8 @@ export default function SkillDetailPage() {
             setSystemPrompt={setSystemPrompt}
             extractionInstructions={extractionInstructions}
             setExtractionInstructions={setExtractionInstructions}
+            sampleExtractions={sampleExtractions}
+            setSampleExtractions={setSampleExtractions}
             markDirty={markDirty}
           />
         )}
@@ -208,13 +209,6 @@ export default function SkillDetailPage() {
           <SkillClassifierTab
             classifierHints={classifierHints}
             setClassifierHints={setClassifierHints}
-            markDirty={markDirty}
-          />
-        )}
-        {activeTab === 'fewshot' && (
-          <SkillFewShotTab
-            sampleExtractions={sampleExtractions}
-            setSampleExtractions={setSampleExtractions}
             markDirty={markDirty}
           />
         )}

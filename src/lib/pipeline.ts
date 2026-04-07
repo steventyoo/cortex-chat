@@ -47,6 +47,7 @@ export const SKILL_TO_CATEGORY_KEY: Record<string, string> = {
   rfi:                 '04_rfis',
   submittal:           '05_submittals',
   job_cost:            '06_job_cost_reports',
+  job_cost_report:     '06_job_cost_reports',
   project_admin:       '07_pay_applications',
   production_activity: '08_labor_and_timesheets',
   daily_report:        '10_daily_reports',
