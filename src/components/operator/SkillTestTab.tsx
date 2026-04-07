@@ -3,6 +3,13 @@
 import { useState, useRef } from 'react';
 import type { FieldDef } from '@/app/operator/skills/[skillId]/page';
 
+const IMPORTANCE_COLORS: Record<string, string> = {
+  P: 'bg-[#fecaca] text-[#991b1b]',
+  S: 'bg-[#dbeafe] text-[#1e40af]',
+  E: 'bg-[#f0f0f0] text-[#666]',
+  A: 'bg-[#f5f5f5] text-[#999]',
+};
+
 interface Props {
   skillId: string;
   fields: FieldDef[];
@@ -33,6 +40,9 @@ export default function SkillTestTab({
   const [result, setResult] = useState<TestResult | null>(null);
   const [error, setError] = useState('');
   const [fileName, setFileName] = useState('');
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'original' | 'text'>('original');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const runTest = async (file: File) => {
@@ -40,6 +50,10 @@ export default function SkillTestTab({
     setError('');
     setResult(null);
     setFileName(file.name);
+    setUploadedFile(file);
+
+    if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl);
+    setFilePreviewUrl(URL.createObjectURL(file));
 
     const formData = new FormData();
     formData.append('file', file);
@@ -75,12 +89,25 @@ export default function SkillTestTab({
     e.target.value = '';
   };
 
+  const getFieldImportance = (fieldName: string): string | undefined => {
+    return fields.find(f => f.name === fieldName)?.importance;
+  };
+
+  const isFilePreviewable = (file: File | null): 'pdf' | 'image' | 'none' => {
+    if (!file) return 'none';
+    if (file.type === 'application/pdf') return 'pdf';
+    if (file.type.startsWith('image/')) return 'image';
+    return 'none';
+  };
+
   const schemaFields = result?.extraction?.fields
     ? Object.entries(result.extraction.fields).filter(([name]) => fields.some(f => f.name === name))
     : [];
   const extraFields = result?.extraction?.fields
     ? Object.entries(result.extraction.fields).filter(([name]) => !fields.some(f => f.name === name))
     : [];
+
+  const previewType = isFilePreviewable(uploadedFile);
 
   return (
     <div>
@@ -118,19 +145,59 @@ export default function SkillTestTab({
 
       {result && result.extraction && (
         <div className="grid grid-cols-2 gap-6">
-          {/* Left: Source text */}
+          {/* Left: File viewer / Source text */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-[13px] font-semibold text-[#1a1a1a] uppercase tracking-wide">Source Text</h3>
+              <div className="flex items-center gap-2">
+                {previewType !== 'none' && (
+                  <div className="flex bg-[#f0f0f0] rounded-lg p-0.5">
+                    <button
+                      onClick={() => setViewMode('original')}
+                      className={`px-3 py-1 rounded-md text-[12px] font-medium transition-colors ${
+                        viewMode === 'original' ? 'bg-white text-[#1a1a1a] shadow-sm' : 'text-[#999]'
+                      }`}
+                    >
+                      Original
+                    </button>
+                    <button
+                      onClick={() => setViewMode('text')}
+                      className={`px-3 py-1 rounded-md text-[12px] font-medium transition-colors ${
+                        viewMode === 'text' ? 'bg-white text-[#1a1a1a] shadow-sm' : 'text-[#999]'
+                      }`}
+                    >
+                      Extracted Text
+                    </button>
+                  </div>
+                )}
+                {previewType === 'none' && (
+                  <h3 className="text-[13px] font-semibold text-[#1a1a1a] uppercase tracking-wide">Source Text</h3>
+                )}
+              </div>
               {result.truncated && (
                 <span className="text-[11px] text-[#f59e0b] font-medium">Truncated</span>
               )}
             </div>
-            <div className="border border-[#e8e8e8] rounded-lg p-4 bg-[#fafafa] overflow-auto max-h-[600px]">
-              <pre className="text-[12px] text-[#555] whitespace-pre-wrap font-mono leading-relaxed">
-                {result.sourceText}
-              </pre>
-            </div>
+
+            {viewMode === 'original' && previewType === 'pdf' && filePreviewUrl && (
+              <div className="border border-[#e8e8e8] rounded-lg overflow-hidden" style={{ height: 600 }}>
+                <iframe src={filePreviewUrl} className="w-full h-full" title="Document preview" />
+              </div>
+            )}
+
+            {viewMode === 'original' && previewType === 'image' && filePreviewUrl && (
+              <div className="border border-[#e8e8e8] rounded-lg p-4 bg-[#fafafa] overflow-auto max-h-[600px]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={filePreviewUrl} alt="Uploaded document" className="max-w-full h-auto" />
+              </div>
+            )}
+
+            {(viewMode === 'text' || previewType === 'none') && (
+              <div className="border border-[#e8e8e8] rounded-lg p-4 bg-[#fafafa] overflow-auto max-h-[600px]">
+                <pre className="text-[12px] text-[#555] whitespace-pre-wrap font-mono leading-relaxed">
+                  {result.sourceText}
+                </pre>
+              </div>
+            )}
           </div>
 
           {/* Right: Extraction results */}
@@ -182,19 +249,29 @@ export default function SkillTestTab({
               <div className="mb-4">
                 <p className="text-[11px] font-medium text-[#999] uppercase tracking-wide mb-2">Schema Fields</p>
                 <div className="border border-[#e8e8e8] rounded-lg overflow-hidden">
-                  {schemaFields.map(([name, data], i) => (
-                    <div key={name} className={`flex items-center px-4 py-2.5 text-[13px] ${i > 0 ? 'border-t border-[#f0f0f0]' : ''}`}>
-                      <span className="w-[180px] text-[#999] font-medium truncate flex-shrink-0">{name}</span>
-                      <span className="flex-1 text-[#1a1a1a] font-mono truncate">
-                        {data.value === null ? <span className="text-[#ccc] italic">null</span> : String(data.value)}
-                      </span>
-                      <span className={`text-[11px] font-medium ml-2 flex-shrink-0 ${
-                        data.confidence >= 0.9 ? 'text-[#16a34a]' : data.confidence >= 0.7 ? 'text-[#f59e0b]' : 'text-[#dc2626]'
-                      }`}>
-                        {(data.confidence * 100).toFixed(0)}%
-                      </span>
-                    </div>
-                  ))}
+                  {schemaFields.map(([name, data], i) => {
+                    const imp = getFieldImportance(name);
+                    return (
+                      <div key={name} className={`flex items-center px-4 py-2.5 text-[13px] ${i > 0 ? 'border-t border-[#f0f0f0]' : ''}`}>
+                        <span className="w-[200px] flex items-center gap-1.5 flex-shrink-0">
+                          <span className="text-[#999] font-medium truncate">{name}</span>
+                          {imp && (
+                            <span className={`text-[9px] px-1 py-0.5 rounded font-medium flex-shrink-0 ${IMPORTANCE_COLORS[imp]}`}>
+                              {imp}
+                            </span>
+                          )}
+                        </span>
+                        <span className="flex-1 text-[#1a1a1a] font-mono truncate">
+                          {data.value === null ? <span className="text-[#ccc] italic">null</span> : String(data.value)}
+                        </span>
+                        <span className={`text-[11px] font-medium ml-2 flex-shrink-0 ${
+                          data.confidence >= 0.9 ? 'text-[#16a34a]' : data.confidence >= 0.7 ? 'text-[#f59e0b]' : 'text-[#dc2626]'
+                        }`}>
+                          {(data.confidence * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -206,7 +283,7 @@ export default function SkillTestTab({
                 <div className="border border-[#e8e8e8] rounded-lg overflow-hidden bg-[#fafafa]">
                   {extraFields.map(([name, data], i) => (
                     <div key={name} className={`flex items-center px-4 py-2.5 text-[13px] ${i > 0 ? 'border-t border-[#f0f0f0]' : ''}`}>
-                      <span className="w-[180px] text-[#b4b4b4] font-medium truncate flex-shrink-0">{name}</span>
+                      <span className="w-[200px] text-[#b4b4b4] font-medium truncate flex-shrink-0">{name}</span>
                       <span className="flex-1 text-[#666] font-mono truncate">
                         {data.value === null ? <span className="text-[#ccc] italic">null</span> : String(data.value)}
                       </span>

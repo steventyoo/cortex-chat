@@ -21,7 +21,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 2,
@@ -38,7 +39,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -55,7 +57,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 4,
@@ -72,7 +75,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Date arithmetic",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 5,
@@ -89,7 +93,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 6,
@@ -106,7 +111,8 @@
         "aiConfidence": "95%",
         "llmTechnique": "Regex + LLM extraction of drawing sheet patterns (A-###, S-###, M-###, Detail #/X-###)",
         "humanRole": "None — spot-check 5%",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 7,
@@ -123,7 +129,8 @@
         "aiConfidence": "93%",
         "llmTechnique": "Regex for MasterFormat patterns (## ## ##) + LLM extraction of written references ('Section 07 62 00')",
         "humanRole": "None — spot-check 5%",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 8,
@@ -140,7 +147,8 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "LLM reads RFI body + MasterFormat division list as context. 'Waterproofing membrane at parapet' → Div 07. Few-shot with 30 examples.",
         "humanRole": "Spot-check 10%. Review when confidence <0.85.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "P"
       },
       {
         "number": 9,
@@ -157,7 +165,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM identifies secondary trade mentions. 'Steel sub to modify clip' → Div 05. Harder when secondary is implicit.",
         "humanRole": "Verify all. Pre-filled → correct if wrong. ~5 sec/doc.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "E"
       },
       {
         "number": 10,
@@ -174,7 +183,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Cascaded: if Div 07, map text to 6-digit using MasterFormat section table. 'Sheet metal flashing' → 07 62 00.",
         "humanRole": "Spot-check 10%. Depends on primary division accuracy.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 11,
@@ -191,7 +201,8 @@
         "aiConfidence": "90–95%",
         "llmTechnique": "10-category classification. LLM maps RFI scope to system. Simple — 'parapet flashing' → Envelope, 'ductwork' → MEP Rough-In.",
         "humanRole": "Spot-check 5% only. Very high accuracy expected.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 12,
@@ -208,7 +219,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "NLP extraction of company names from RFI text + fuzzy match against client sub directory (Procore API). Handles abbreviations.",
         "humanRole": "Spot-check 10%. Verify when fuzzy match confidence <0.80.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 13,
@@ -225,7 +237,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "Heuristic: RFI date vs. project start/end dates from Procore. Calc approx % complete. Cross-ref with schedule milestones if available.",
         "humanRole": "Verify all. Pre-filled from date heuristic. ~3 sec to confirm/correct.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 14,
@@ -242,7 +255,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "Few-shot prompt with all 9 category definitions + disambiguation rules + 30 labeled examples. Chain-of-thought reasoning stored with label. Key: Design Conflict vs. Missing Info distinction.",
         "humanRole": "VERIFY ALL. Pre-filled with reasoning visible. Human confirms or overrides. ~10–15 sec with AI pre-fill vs 30–45 from scratch.",
-        "adjustedTimeSeconds": "10–15"
+        "adjustedTimeSeconds": "10–15",
+        "importance": "P"
       },
       {
         "number": 15,
@@ -259,7 +273,8 @@
         "aiConfidence": "60–70%",
         "llmTechnique": "Cascaded prompt: given L1 = Design Conflict, classify L2 from filtered subcategories. Accuracy depends on L1 being correct. Chain carefully.",
         "humanRole": "VERIFY ALL. Depends on L1 accuracy — if L1 wrong, L2 wrong. Human reviews both together. ~8–10 sec.",
-        "adjustedTimeSeconds": "8–10"
+        "adjustedTimeSeconds": "8–10",
+        "importance": "P"
       },
       {
         "number": 16,
@@ -276,7 +291,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Strong text signals: 'crew waiting', 'critical path', 'scheduled next week', 'mobilized', 'work stopped'. Pattern matching + LLM classification.",
         "humanRole": "Spot-check 10%. False negatives (missing urgency) flagged for review.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 17,
@@ -293,7 +309,8 @@
         "aiConfidence": "65–75%",
         "llmTechnique": "LLM identifies scope-change signals and estimates magnitude from text. 'Revised detail + new clips + manufacturer coordination' → Moderate. Classification into ranges, not dollar estimates.",
         "humanRole": "Verify all. Especially Major/Critical — review those carefully. ~5–8 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 18,
@@ -310,7 +327,8 @@
         "aiConfidence": "60–70%",
         "llmTechnique": "Text signals: 'critical path', 'delay', '5 days'. LLM estimates range. Less reliable — schedule context is external to the document.",
         "humanRole": "Verify all. Critical path determination needs field judgment. ~5–8 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 19,
@@ -327,7 +345,8 @@
         "aiConfidence": "88–93%",
         "llmTechnique": "LLM reads response text + checks for ASI/CO references. 'Revised detail attached (ASI-034)' → ASI. If no response → 'Still Open'. Clear text signals.",
         "humanRole": "Spot-check 10%. Very reliable when response is populated.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 20,
@@ -344,7 +363,8 @@
         "aiConfidence": "40–55%",
         "llmTechnique": "LLM generates suggestion with reasoning based on root cause + description. Suggestion shown to human but NOT pre-selected. Human makes final call.",
         "humanRole": "FULL DECISION. AI shows reasoning but human selects. Every correction logged with justification for training. ~20 sec.",
-        "adjustedTimeSeconds": "15–20"
+        "adjustedTimeSeconds": "15–20",
+        "importance": "S"
       },
       {
         "number": 21,
@@ -361,7 +381,8 @@
         "aiConfidence": "55–65%",
         "llmTechnique": "LLM suggests based on root cause + text analysis. 'Per ASI from architect' → Design Team. But politically sensitive — context matters beyond text.",
         "humanRole": "FULL DECISION. AI suggestion visible but human decides. Used for architect/owner benchmarking — errors damage relationships.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "P"
       },
       {
         "number": 22,
@@ -378,7 +399,8 @@
         "aiConfidence": "35–50%",
         "llmTechnique": "After 2000+ labeled RFIs: system runs semantic similarity search against labeled corpus and flags potential matches. Before that: human knowledge only.",
         "humanRole": "FULL DECISION initially. After corpus builds, system suggests similar RFIs — human confirms pattern. Evolves toward AI+Verify at Month 12+.",
-        "adjustedTimeSeconds": "15–25"
+        "adjustedTimeSeconds": "15–25",
+        "importance": "P"
       },
       {
         "number": 23,
@@ -395,7 +417,8 @@
         "aiConfidence": "80–88%",
         "llmTechnique": "Regex + LLM extraction of explicit doc references (RFI-###, ASI-###, CO-###). High accuracy on explicit refs. Implicit relationships (same issue, different doc) via semantic search.",
         "humanRole": "Verify explicit refs (fast). Add implicit relationships human recognizes. ~8–10 sec.",
-        "adjustedTimeSeconds": "8–10"
+        "adjustedTimeSeconds": "8–10",
+        "importance": "S"
       }
     ]
   },
@@ -421,7 +444,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull from source system",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -438,7 +462,8 @@
         "aiConfidence": "95%",
         "llmTechnique": "LLM classifies from document structure + title. 'Subcontract Agreement between...' → GC-Sub.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -455,7 +480,8 @@
         "aiConfidence": "92%",
         "llmTechnique": "LLM extracts party names from preamble/signature block. Fuzzy match to Procore sub directory.",
         "humanRole": "None — spot-check 5%",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 4,
@@ -472,7 +498,8 @@
         "aiConfidence": "90%",
         "llmTechnique": "LLM extracts dollar amount from contract. Cross-ref with Sage committed cost for validation.",
         "humanRole": "None — flag mismatches between contract and Sage",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 5,
@@ -489,7 +516,8 @@
         "aiConfidence": "90–95%",
         "llmTechnique": "Regex + LLM extraction of 'Article X.X.X' or 'Section ##' patterns from clause text. Well-structured in most contracts.",
         "humanRole": "None — spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 6,
@@ -506,7 +534,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "12 categories with linguistically distinct language. Few-shot with 3 examples per category. 'Liquidated damages at the rate of...' → LD. Very reliable.",
         "humanRole": "Spot-check 10%. Categories are distinctive enough for high accuracy.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "P"
       },
       {
         "number": 7,
@@ -523,7 +552,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM identifies who bears risk from clause language. 'Contractor shall indemnify' → Risk to GC. 'Shared/Balanced' vs. 'Risk to GC' harder.",
         "humanRole": "Verify all. AI pre-fills; attorney/PM confirms. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 8,
@@ -540,7 +570,8 @@
         "aiConfidence": "45–55%",
         "llmTechnique": "LLM provides AIA baseline comparison and suggests score with reasoning. Suggestion shown but NOT pre-selected. Stakes too high for auto-fill.",
         "humanRole": "FULL DECISION. AI shows AIA comparison + suggested reasoning. Attorney/PM scores independently. Every correction logged.",
-        "adjustedTimeSeconds": "20–30"
+        "adjustedTimeSeconds": "20–30",
+        "importance": "P"
       },
       {
         "number": 9,
@@ -557,7 +588,8 @@
         "aiConfidence": "60–70%",
         "llmTechnique": "CRITICAL TECHNIQUE: Feed LLM the actual clause + corresponding AIA A201 standard clause side by side. LLM DIFFS them and classifies deviation level. Specific changes highlighted.",
         "humanRole": "Verify. AI comparison is a strong starting point. Attorney reviews diff and confirms/adjusts. ~15 sec.",
-        "adjustedTimeSeconds": "15–20"
+        "adjustedTimeSeconds": "15–20",
+        "importance": "S"
       },
       {
         "number": 10,
@@ -574,7 +606,8 @@
         "aiConfidence": "30–40%",
         "llmTechnique": "After 200+ labeled clauses: system can suggest based on historical contingency for similar clause types. Before that: no reliable basis.",
         "humanRole": "FULL DECISION. Directly impacts bids. Wrong number = underbid. Senior expertise required.",
-        "adjustedTimeSeconds": "15–20"
+        "adjustedTimeSeconds": "15–20",
+        "importance": "P"
       },
       {
         "number": 11,
@@ -591,7 +624,8 @@
         "aiConfidence": "25–35%",
         "llmTechnique": "After corpus builds: system suggests based on historical outcomes with same owner. 'Owner X has negotiated this clause on 3 of 4 prior contracts.' Before data: human only.",
         "humanRole": "FULL DECISION. Requires relationship knowledge + market experience. No text signal for this.",
-        "adjustedTimeSeconds": "18–25"
+        "adjustedTimeSeconds": "18–25",
+        "importance": "S"
       },
       {
         "number": 12,
@@ -608,7 +642,8 @@
         "aiConfidence": "30–40%",
         "llmTechnique": "After labeled dispute data exists: system auto-flags SIMILAR clauses in new contracts. Semantic similarity search against dispute-linked clauses. Evolves toward AI+Verify at Month 12+.",
         "humanRole": "FULL DECISION initially. System provides 'similar clause in Contract X resulted in dispute' after corpus builds.",
-        "adjustedTimeSeconds": "15–25"
+        "adjustedTimeSeconds": "15–25",
+        "importance": "P"
       },
       {
         "number": 13,
@@ -625,7 +660,8 @@
         "aiConfidence": "20–30%",
         "llmTechnique": "LLM drafts suggestion based on risk score + deviation analysis. Shown as 'AI draft' for human to edit — NEVER auto-populated. Highest liability risk.",
         "humanRole": "FULL AUTHORSHIP. AI draft shown for inspiration only. Human writes final recommendation. Every recommendation logged.",
-        "adjustedTimeSeconds": "25–45"
+        "adjustedTimeSeconds": "25–45",
+        "importance": "S"
       },
       {
         "number": 14,
@@ -642,7 +678,8 @@
         "aiConfidence": "55–65%",
         "llmTechnique": "Requires prior labeled contracts with same owner. LLM compares clause language across contract versions. 'LD rate increased from $2K/day to $5K/day across last 3 contracts' → Getting Worse.",
         "humanRole": "Verify. Only works after first engagement. System feature, not pure labeling.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "S"
       }
     ]
   },
@@ -668,7 +705,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 2,
@@ -685,7 +723,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -702,7 +741,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 4,
@@ -719,7 +759,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "API pull or LLM extraction from CO document",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 5,
@@ -736,7 +777,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 6,
@@ -753,7 +795,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Simple arithmetic",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 7,
@@ -770,7 +813,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Same as RFI: LLM reads CO scope description + MasterFormat. CO descriptions tend to be clearer than RFIs. Multi-division slightly harder.",
         "humanRole": "Spot-check 10%. Primary division very reliable.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 8,
@@ -787,7 +831,8 @@
         "aiConfidence": "90–95%",
         "llmTechnique": "10-category classification. Same as RFI. Even easier on COs — scope descriptions are explicit.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 9,
@@ -804,7 +849,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Strong text signals: 'Owner-directed', 'per ASI-034', 'field condition discovered during excavation'. 6 categories, linguistically distinct.",
         "humanRole": "Spot-check 10%. Usually explicit in CO documentation.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 10,
@@ -821,7 +867,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "8 root cause categories. Easier than RFI root cause — COs written AFTER issue is understood. Retrospective clarity helps. Few-shot with 20 examples.",
         "humanRole": "Verify all. Pre-filled → confirm or correct. ~8 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 11,
@@ -838,7 +885,8 @@
         "aiConfidence": "65–75%",
         "llmTechnique": "Day count extraction from CO text: 'Request 5 additional calendar days.' High accuracy on explicit statements. Critical path flag needs schedule context.",
         "humanRole": "Verify all. Day count usually correct; critical path needs human judgment. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 12,
@@ -855,7 +903,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "LLM identifies markup structure from CO pricing breakdown. '10% OH, 10% Profit' → Standard. Requires pricing detail in CO document.",
         "humanRole": "Verify. Lump sum COs without breakdown are harder. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 13,
@@ -872,7 +921,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "LLM counts supporting document references in CO package: sub proposals? Photos? RFIs? ASIs? Count = quality proxy. 3+ = Strong.",
         "humanRole": "Verify. Good heuristic — human confirms count-based classification. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 14,
@@ -889,7 +939,8 @@
         "aiConfidence": "75–85%",
         "llmTechnique": "NLP extraction of referenced RFIs, ASIs, CCDs from CO text. Build chain programmatically: 'per RFI-0247 and ASI-034'. Explicit refs high accuracy.",
         "humanRole": "Verify chain completeness. AI catches explicit refs; human adds implicit links. ~8 sec.",
-        "adjustedTimeSeconds": "5–10"
+        "adjustedTimeSeconds": "5–10",
+        "importance": "P"
       },
       {
         "number": 15,
@@ -906,7 +957,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "Combine Procore status field (Approved/Rejected/Pending) + text signals ('disputed', 'rejected', 'counter-proposal'). Y/N reliable; outcome nuance needs human.",
         "humanRole": "Verify. Dispute flag reliable from status. Outcome classification needs human for nuance. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 16,
@@ -923,7 +975,8 @@
         "aiConfidence": "35–45%",
         "llmTechnique": "Requires reading negotiation context — emails, meeting notes, back-and-forth. Not in CO text alone. AI can flag some references but can't assess strategy.",
         "humanRole": "FULL DECISION. Most valuable intelligence label. AI can't read negotiation dynamics.",
-        "adjustedTimeSeconds": "18–25"
+        "adjustedTimeSeconds": "18–25",
+        "importance": "S"
       },
       {
         "number": 17,
@@ -940,7 +993,8 @@
         "aiConfidence": "40–55%",
         "llmTechnique": "Same as RFI preventability. LLM suggests with reasoning but accuracy too low to trust for financial metrics.",
         "humanRole": "FULL DECISION. AI suggestion visible. Human decides. Directly feeds 'cost of preventable changes' metric.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "S"
       },
       {
         "number": 18,
@@ -957,7 +1011,8 @@
         "aiConfidence": "25–35%",
         "llmTechnique": "After corpus builds: AI drafts suggestion based on root cause + project type patterns from prior labeled COs. Draft shown for human to edit.",
         "humanRole": "FULL AUTHORSHIP. AI draft for inspiration. Human writes actionable insight. The compound intelligence.",
-        "adjustedTimeSeconds": "18–25"
+        "adjustedTimeSeconds": "18–25",
+        "importance": "S"
       }
     ]
   },
@@ -983,7 +1038,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -1000,7 +1056,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -1017,7 +1074,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 4,
@@ -1034,7 +1092,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull + directory match",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 5,
@@ -1051,7 +1110,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "LLM reads ASI description + MasterFormat. Same technique as RFI/CO. ASIs have clear scope descriptions.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "P"
       },
       {
         "number": 6,
@@ -1068,7 +1128,8 @@
         "aiConfidence": "90–95%",
         "llmTechnique": "10-category classification. Same as all other schemas. Very reliable.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 7,
@@ -1085,7 +1146,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "LLM classifies from ASI description. 'Revised per coordination with structural' → Coordination Resolution. 'Per owner request' → Owner-Directed.",
         "humanRole": "Verify all. Important for design team accountability. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 8,
@@ -1102,7 +1164,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM identifies cost signals. 'Additional work' → Additive. 'Clarification only, no change to scope' → No Cost.",
         "humanRole": "Verify. Important for cost attribution. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 9,
@@ -1119,7 +1182,8 @@
         "aiConfidence": "60–70%",
         "llmTechnique": "LLM estimates magnitude from scope description. Range classification, not dollar estimate.",
         "humanRole": "Verify. Cost estimation is inherently uncertain. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 10,
@@ -1136,7 +1200,8 @@
         "aiConfidence": "62–70%",
         "llmTechnique": "LLM identifies schedule signals. Needs project context for accuracy.",
         "humanRole": "Verify all. Schedule impact assessment requires project knowledge. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 11,
@@ -1153,7 +1218,8 @@
         "aiConfidence": "80–88%",
         "llmTechnique": "LLM extracts RFI references from ASI text. 'In response to RFI-0247' → link. If no RFI mentioned → 'Architect-Initiated.'",
         "humanRole": "Verify. Explicit references high accuracy. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 12,
@@ -1170,7 +1236,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "System searches PRs/COs referencing this ASI number. Auto-links.",
         "humanRole": "Verify link accuracy. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 13,
@@ -1187,7 +1254,8 @@
         "aiConfidence": "68–75%",
         "llmTechnique": "LLM compares ASI date to project schedule/daily reports. If work was in progress → Yes. If not started → No.",
         "humanRole": "Verify. Requires knowing if work was already installed. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 14,
@@ -1204,7 +1272,8 @@
         "aiConfidence": "40–55%",
         "llmTechnique": "Same as RFI/CO. LLM suggests; human decides.",
         "humanRole": "FULL DECISION. High-value label for quantifying preventable change cost.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "S"
       },
       {
         "number": 15,
@@ -1221,7 +1290,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 16,
@@ -1238,7 +1308,8 @@
         "aiConfidence": "92%",
         "llmTechnique": "LLM extracts dates from CCD document.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 17,
@@ -1255,7 +1326,8 @@
         "aiConfidence": "88–93%",
         "llmTechnique": "LLM reads CCD header/signature. 'Directed by Owner' → Owner. Very explicit in formal documents.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 18,
@@ -1272,7 +1344,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Same as all other schemas.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 19,
@@ -1289,7 +1362,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "LLM classifies from CCD description. 'Owner requests additional...' → Owner Program Change.",
         "humanRole": "Verify all. Important for owner behavior analytics. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 20,
@@ -1306,7 +1380,8 @@
         "aiConfidence": "78–85%",
         "llmTechnique": "LLM extracts dollar amount from CCD response/pricing. Usually stated explicitly.",
         "humanRole": "Verify amount accuracy. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 21,
@@ -1323,7 +1398,8 @@
         "aiConfidence": "78–85%",
         "llmTechnique": "Same extraction from approved CO.",
         "humanRole": "Verify. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 22,
@@ -1340,7 +1416,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Date arithmetic.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 23,
@@ -1357,7 +1434,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "LLM identifies dispute signals from correspondence/CO text. 'Rejected', 'counter-offer', 'dispute'.",
         "humanRole": "Verify. Dispute detection from text is reliable. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 24,
@@ -1374,7 +1452,8 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "System matches CCD to CO by project + scope + date range. Usually explicit link.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 25,
@@ -1391,7 +1470,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 26,
@@ -1408,7 +1488,8 @@
         "aiConfidence": "90–95%",
         "llmTechnique": "Clear type identification from document title/header. 'Proposal Request' → PR. Bulletin format distinctive.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 27,
@@ -1425,7 +1506,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "LLM extracts references: 'per ASI-034', 'in response to field condition'. Maps to trigger categories.",
         "humanRole": "Verify. Explicit references reliable; implicit triggers need confirmation. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 28,
@@ -1442,7 +1524,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 29,
@@ -1459,7 +1542,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 30,
@@ -1476,7 +1560,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Date arithmetic.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 31,
@@ -1493,7 +1578,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Same as all other schemas.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 32,
@@ -1510,7 +1596,8 @@
         "aiConfidence": "82–88%",
         "llmTechnique": "LLM extracts amount from PR/PCO. Usually clearly stated.",
         "humanRole": "Verify amount. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 33,
@@ -1527,7 +1614,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM classifies from Procore status + resolution text. 'Approved at reduced amount' → Approved-Reduced.",
         "humanRole": "Verify. Nuance between Pending-Owner vs Pending-Architect matters. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 34,
@@ -1544,7 +1632,8 @@
         "aiConfidence": "40–50%",
         "llmTechnique": "LLM can analyze date gaps in approval chain if status history is available. But root cause of stall requires project knowledge.",
         "humanRole": "FULL DECISION. AI shows timeline. Human identifies bottleneck from experience.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "P"
       },
       {
         "number": 35,
@@ -1561,7 +1650,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "System matches PR/PCO to CO by project + amount + date. Usually explicit.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 36,
@@ -1578,7 +1668,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Auto-calc from linked CO data.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 37,
@@ -1595,7 +1686,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 38,
@@ -1612,7 +1704,8 @@
         "aiConfidence": "92%",
         "llmTechnique": "LLM extracts from document header.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 39,
@@ -1629,7 +1722,8 @@
         "aiConfidence": "60–70%",
         "llmTechnique": "LLM compares bulletin content to original contract scope. 'Revised detail' with new conditions → Change. 'Clarification consistent with design intent' → Clarification.",
         "humanRole": "VERIFY ALL CAREFULLY. This is where missed revenue lives. AI flags potential scope changes; human decides. ~10 sec.",
-        "adjustedTimeSeconds": "10–15"
+        "adjustedTimeSeconds": "10–15",
+        "importance": "P"
       },
       {
         "number": 40,
@@ -1646,7 +1740,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "System checks if a PR/CO references this bulletin. If Classification = 'Change to Scope' but no linked PR → flag 'Should Have Been.'",
         "humanRole": "Verify. AI identifies the gap; human confirms it's truly missed revenue. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 41,
@@ -1663,7 +1758,8 @@
         "aiConfidence": "25–35%",
         "llmTechnique": "Only applies when Classification = 'Should Have Been.' Requires scope assessment to estimate value.",
         "humanRole": "FULL DECISION. Senior expertise to estimate scope value.",
-        "adjustedTimeSeconds": "12–25"
+        "adjustedTimeSeconds": "12–25",
+        "importance": "P"
       }
     ]
   },
@@ -1689,7 +1785,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -1706,7 +1803,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -1723,7 +1821,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 4,
@@ -1740,7 +1839,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 5,
@@ -1757,7 +1857,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 6,
@@ -1774,7 +1875,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 7,
@@ -1791,7 +1893,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 8,
@@ -1808,7 +1911,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 9,
@@ -1825,7 +1929,8 @@
         "aiConfidence": "90–95%",
         "llmTechnique": "LLM reads project name + description + bid documents. 'Main St Medical Center' → Healthcare. Cross-ref Procore project type field.",
         "humanRole": "Spot-check 5%. Project names are descriptive.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 10,
@@ -1842,7 +1947,8 @@
         "aiConfidence": "78–85%",
         "llmTechnique": "Cascaded: given Healthcare, classify subtype from description. 'Medical center' vs 'medical office building' distinction matters.",
         "humanRole": "Verify all. AI pre-fills; estimator confirms. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 11,
@@ -1859,7 +1965,8 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "Usually stated in project description or bid documents. 'New 3-story medical center' → New Construction. 'Renovation of existing wing' → Major Renovation.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 12,
@@ -1876,7 +1983,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "LLM extracts from bid cover sheet or proposal. 'Approximately 82,000 gross square feet.' Also available from estimating system in many cases.",
         "humanRole": "Spot-check 10%. Cross-validate with estimating system.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "P"
       },
       {
         "number": 13,
@@ -1893,7 +2001,8 @@
         "aiConfidence": "88–93%",
         "llmTechnique": "Extract from project description. '3-story building with basement' → 3+1. Simple text pattern.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 14,
@@ -1910,7 +2019,8 @@
         "aiConfidence": "90–95%",
         "llmTechnique": "Usually stated in bid invitation or contract. 'GMP proposal' → GMP. Very explicit in bid documents.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 15,
@@ -1927,7 +2037,8 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "LLM classifies from owner name + project description. 'Austin ISD' → Public-School District. Hospital system → Private-Institutional.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 16,
@@ -1944,7 +2055,8 @@
         "aiConfidence": "92–95%",
         "llmTechnique": "Extract from project address. Geocode to metro area. Very reliable.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 17,
@@ -1961,7 +2073,8 @@
         "aiConfidence": "65–72%",
         "llmTechnique": "LLM looks for signals: 'SD/DD estimate', 'documents 90% complete', 'conceptual budget.' Often stated in bid cover letter.",
         "humanRole": "Verify all. If not explicitly stated, estimator assesses. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 18,
@@ -1978,7 +2091,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Simple division once GSF and bid are known.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 19,
@@ -1995,7 +2109,8 @@
         "aiConfidence": "60–70%",
         "llmTechnique": "LLM extracts from estimate summary or bid tabulation spreadsheet. Maps line items to CSI divisions. Most time-consuming extraction.",
         "humanRole": "Verify all. Pre-extracted table; estimator confirms mapping. Saves ~50% vs manual. ~60–90 sec.",
-        "adjustedTimeSeconds": "60–90"
+        "adjustedTimeSeconds": "60–90",
+        "importance": "P"
       },
       {
         "number": 20,
@@ -2012,7 +2127,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "LLM extracts contingency line from estimate summary. Amount and percentage usually stated. Type classification from context.",
         "humanRole": "Verify. Amount extraction reliable; type classification needs confirmation. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 21,
@@ -2029,7 +2145,8 @@
         "aiConfidence": "65–72%",
         "llmTechnique": "LLM extracts from estimate assumptions page. '4.5% escalation over 18 months' → structured extraction. Basis often stated.",
         "humanRole": "Verify. Extraction reliable when stated; sometimes buried in notes. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 22,
@@ -2046,7 +2163,8 @@
         "aiConfidence": "68–75%",
         "llmTechnique": "LLM extracts from estimate summary or fee proposal. Percentage breakdowns usually tabulated.",
         "humanRole": "Verify. Pre-extracted; estimator confirms. ~8 sec.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "P"
       },
       {
         "number": 23,
@@ -2063,7 +2181,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "LLM checks for prevailing wage / Davis-Bacon mentions. Public projects usually prevailing wage. 'Union scale' → Union.",
         "humanRole": "Verify. Usually determinable from project type (public = prevailing wage). ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 24,
@@ -2080,7 +2199,8 @@
         "aiConfidence": "55–65%",
         "llmTechnique": "LLM extracts from bid tabulation sheet. Column mapping from spreadsheet data. Spread auto-calculated.",
         "humanRole": "Verify all. Extraction from structured tabulations; mapping needs confirmation. ~30 sec.",
-        "adjustedTimeSeconds": "30–45"
+        "adjustedTimeSeconds": "30–45",
+        "importance": "S"
       },
       {
         "number": 25,
@@ -2097,7 +2217,8 @@
         "aiConfidence": "35–45%",
         "llmTechnique": "LLM can assess sub bid coverage + design completeness as proxy. But true confidence is the estimator's judgment call.",
         "humanRole": "FULL DECISION. AI shows bid coverage metrics as context. Estimator assigns confidence.",
-        "adjustedTimeSeconds": "18–25"
+        "adjustedTimeSeconds": "18–25",
+        "importance": "S"
       },
       {
         "number": 26,
@@ -2114,7 +2235,8 @@
         "aiConfidence": "40–50%",
         "llmTechnique": "LLM could pull market indicators (ENR CCI, permit data) as context. But assessment is subjective and local.",
         "humanRole": "FULL DECISION. System provides market data as context. Human characterizes conditions.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "P"
       },
       {
         "number": 27,
@@ -2131,7 +2253,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "LLM extracts from estimate cover letter / assumptions page. 'Excludes:', 'Assumes:', 'Not included:' are clear text markers.",
         "humanRole": "Verify. Extraction from assumptions sections is reliable. Completeness check by human. ~15 sec.",
-        "adjustedTimeSeconds": "12–20"
+        "adjustedTimeSeconds": "12–20",
+        "importance": "P"
       },
       {
         "number": 28,
@@ -2148,7 +2271,8 @@
         "aiConfidence": "30–40%",
         "llmTechnique": "LLM can flag divisions with few sub bids or 'allowance' language. But full scope assessment requires estimating expertise.",
         "humanRole": "FULL DECISION. AI flags potential gaps (low bid coverage, 'allowance' mentions). Human assesses each division.",
-        "adjustedTimeSeconds": "35–50"
+        "adjustedTimeSeconds": "35–50",
+        "importance": "S"
       },
       {
         "number": 29,
@@ -2165,7 +2289,8 @@
         "aiConfidence": "25–35%",
         "llmTechnique": "If lost, LLM can extract competitor pricing from debriefs if documented. But selection rationale is relationship knowledge.",
         "humanRole": "FULL DECISION. Institutional knowledge about why you won or lost. AI can structure the entry format.",
-        "adjustedTimeSeconds": "25–45"
+        "adjustedTimeSeconds": "25–45",
+        "importance": "P"
       },
       {
         "number": 30,
@@ -2182,7 +2307,8 @@
         "aiConfidence": "60–70%",
         "llmTechnique": "Sage cost codes mapped to CSI divisions. Mapping table built during onboarding. Auto-pulls actuals and calculates variance.",
         "humanRole": "Verify mapping. Cost code → CSI mapping is client-specific. Once validated, runs automatically. ~60 sec.",
-        "adjustedTimeSeconds": "60–90"
+        "adjustedTimeSeconds": "60–90",
+        "importance": "P"
       },
       {
         "number": 31,
@@ -2199,7 +2325,8 @@
         "aiConfidence": "25–35%",
         "llmTechnique": "LLM can cross-reference COs attributed to each division (from CO labels) as starting context. But full attribution requires judgment.",
         "humanRole": "FULL DECISION. AI provides CO data and RFI data per division as context. Human explains the variance.",
-        "adjustedTimeSeconds": "90–180"
+        "adjustedTimeSeconds": "90–180",
+        "importance": "P"
       },
       {
         "number": 32,
@@ -2216,7 +2343,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Auto-calculated from labeled data once final cost and owner-directed CO exclusions are in place.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 33,
@@ -2233,7 +2361,8 @@
         "aiConfidence": "20–30%",
         "llmTechnique": "After 10+ completed projects: AI drafts suggestions based on variance patterns. 'Div 22-23 has averaged +9.2% on healthcare. Consider increasing contingency.'",
         "humanRole": "FULL AUTHORSHIP. AI provides variance data and patterns. Human writes actionable insight.",
-        "adjustedTimeSeconds": "50–90"
+        "adjustedTimeSeconds": "50–90",
+        "importance": "S"
       }
     ]
   },
@@ -2259,7 +2388,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -2276,7 +2406,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct system pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -2293,7 +2424,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "LLM reads bid package title/description. 'Mechanical — plumbing and HVAC' → Div 22 + 23. Very reliable from package titles.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 4,
@@ -2310,7 +2442,8 @@
         "aiConfidence": "72–78%",
         "llmTechnique": "LLM summarizes from bid invitation or scope document. Extracts inclusions/exclusions.",
         "humanRole": "Verify. AI summarizes; estimator confirms completeness. ~8 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 5,
@@ -2327,7 +2460,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "Pull from estimate cost breakdown (Estimate Schema Attribute #19) for matching divisions.",
         "humanRole": "Verify. Requires estimate-to-package mapping. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 6,
@@ -2344,7 +2478,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM extracts from bid log or invitation list if digitized. Count of invited subs.",
         "humanRole": "Verify. If bid log is structured, highly reliable. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 7,
@@ -2361,7 +2496,8 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "Count from bid tabulation. Auto-calculated from received bids.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 8,
@@ -2378,7 +2514,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Auto-calc from bid amounts.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 9,
@@ -2395,7 +2532,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct from bid tab. Match to Procore directory.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 10,
@@ -2412,7 +2550,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct from bid tab.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 11,
@@ -2429,7 +2568,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Sorted rank.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 12,
@@ -2446,7 +2586,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Division.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 13,
@@ -2463,7 +2604,8 @@
         "aiConfidence": "55–65%",
         "llmTechnique": "LLM reads bid qualifications/exclusions page. Identifies scope gaps. Flags 'excludes', 'does not include', 'by others' language.",
         "humanRole": "VERIFY ALL CAREFULLY. AI flags exclusion language; estimator assesses materiality and cost impact. ~20 sec.",
-        "adjustedTimeSeconds": "15–25"
+        "adjustedTimeSeconds": "15–25",
+        "importance": "S"
       },
       {
         "number": 14,
@@ -2480,7 +2622,8 @@
         "aiConfidence": "35–45%",
         "llmTechnique": "LLM can pull prior project history from Cortex if available. But assessment requires relationship knowledge and reference checking.",
         "humanRole": "FULL DECISION. AI provides performance history if available. Human assesses.",
-        "adjustedTimeSeconds": "18–25"
+        "adjustedTimeSeconds": "18–25",
+        "importance": "S"
       },
       {
         "number": 15,
@@ -2497,7 +2640,8 @@
         "aiConfidence": "80–88%",
         "llmTechnique": "System auto-pulls sub history from Cortex labeled data: project count, CO rate, performance score. Formats summary.",
         "humanRole": "Verify. Auto-populated from labeled data. Human confirms accuracy and adds context. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 16,
@@ -2514,7 +2658,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct from contract records.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 17,
@@ -2531,7 +2676,8 @@
         "aiConfidence": "40–50%",
         "llmTechnique": "LLM can infer if lowest bidder was selected (Low Bid) or not. But distinction between 'Best Value' and 'Negotiated' requires context.",
         "humanRole": "FULL DECISION. Selection rationale is institutional knowledge.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "S"
       },
       {
         "number": 18,
@@ -2548,7 +2694,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct from Sage.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 19,
@@ -2565,7 +2712,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Subtraction.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 20,
@@ -2582,7 +2730,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Division.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 21,
@@ -2599,7 +2748,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Sage total cost for this subcontract.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 22,
@@ -2616,7 +2766,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "System pulls COs from Procore/Sage matching this sub and project. Sums. May need manual attribution for shared COs.",
         "humanRole": "Verify. Auto-summed; human confirms attribution on shared COs. ~10 sec.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "P"
       },
       {
         "number": 23,
@@ -2633,7 +2784,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Cross-portfolio calculation from labeled data.",
         "humanRole": "None — system-generated insight",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 24,
@@ -2650,7 +2802,8 @@
         "aiConfidence": "78–85%",
         "llmTechnique": "System counts RFIs from RFI labels where Trade Responsible matches this sub. Auto-compared to portfolio average.",
         "humanRole": "Verify count. Some RFIs may span multiple trades. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 25,
@@ -2667,7 +2820,8 @@
         "aiConfidence": "35–45%",
         "llmTechnique": "LLM can analyze schedule variance from P6 data if available. But 'caused delays to others' requires project knowledge.",
         "humanRole": "FULL DECISION. System provides schedule data. Human assesses impact and root cause.",
-        "adjustedTimeSeconds": "18–25"
+        "adjustedTimeSeconds": "18–25",
+        "importance": "S"
       },
       {
         "number": 26,
@@ -2684,7 +2838,8 @@
         "aiConfidence": "78–85%",
         "llmTechnique": "System pulls safety incidents attributed to this sub from Safety schema. Auto-scores based on recordable rate + observation count.",
         "humanRole": "Verify. Auto-scored from labeled safety data. Human confirms context. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 27,
@@ -2701,7 +2856,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "System pulls punch item count from Procore for this sub's scope. Auto-categorizes by count threshold.",
         "humanRole": "Verify. Count auto-pulled; human confirms attribution and assesses response time. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 28,
@@ -2718,7 +2874,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Weighted composite from labeled data.",
         "humanRole": "None — system-generated",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 29,
@@ -2735,7 +2892,8 @@
         "aiConfidence": "20–30%",
         "llmTechnique": "AI shows performance scorecard as context. But 'would use again' is a human judgment incorporating relationship dynamics.",
         "humanRole": "FULL AUTHORSHIP. System provides data. Human makes recommendation with conditions. Captures institutional knowledge.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "S"
       }
     ]
   },
@@ -2761,7 +2919,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -2778,7 +2937,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -2795,7 +2955,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 4,
@@ -2812,7 +2973,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 5,
@@ -2829,7 +2991,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 6,
@@ -2846,7 +3009,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 7,
@@ -2863,7 +3027,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Date arithmetic",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 8,
@@ -2880,7 +3045,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 9,
@@ -2897,7 +3063,8 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "LLM reads submittal title/description + MasterFormat lookup. 'Concrete Mix Designs' → Div 03. Very reliable for submittals.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 10,
@@ -2914,7 +3081,8 @@
         "aiConfidence": "92–95%",
         "llmTechnique": "10-category. Submittal titles are descriptive. 'Structural steel shop drawings' → Structure.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 11,
@@ -2931,7 +3099,8 @@
         "aiConfidence": "88–93%",
         "llmTechnique": "LLM classifies from title + description. 'Concrete Mix Designs' → Mix Design. '1/4-scale mock-up' → Mock-Up. Distinctive language.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 12,
@@ -2948,7 +3117,8 @@
         "aiConfidence": "65–75%",
         "llmTechnique": "LLM flags based on submittal type + trade. Steel shop drawings → Yes-Fabrication. Mix designs → Yes-Long Lead. Heuristic by type.",
         "humanRole": "Verify all. Procurement context is project-specific. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 13,
@@ -2965,7 +3135,8 @@
         "aiConfidence": "60–70%",
         "llmTechnique": "Calculate from review cycle time vs. required date. If 11 days late → flag. Severity needs procurement context.",
         "humanRole": "Verify all. AI flags lateness; human assesses schedule impact. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 14,
@@ -2982,7 +3153,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Procore tracks this natively",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 15,
@@ -2999,7 +3171,8 @@
         "aiConfidence": "68–75%",
         "llmTechnique": "If resubmittal exists, LLM reads reviewer comments to classify reason. 'Revise per spec section 03 30 00' → Spec Disagreement.",
         "humanRole": "Verify all. LLM reads review comments well but nuance varies. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 16,
@@ -3016,7 +3189,8 @@
         "aiConfidence": "45–55%",
         "llmTechnique": "LLM can assess comment length and specificity as proxy. But 'Rubber Stamp' vs 'Standard' requires knowing what thorough review looks like.",
         "humanRole": "FULL DECISION. AI can flag no-comment approvals as potential 'Rubber Stamp'. Human decides.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "S"
       },
       {
         "number": 17,
@@ -3033,7 +3207,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "Search for RFIs mentioning this submittal number or same spec section within ±30 days. Semantic match.",
         "humanRole": "Verify. AI suggests matches; human confirms relevance. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 18,
@@ -3050,7 +3225,8 @@
         "aiConfidence": "30–40%",
         "llmTechnique": "After corpus: AI flags patterns like 'Div 08 curtain wall submittals avg 3.2 resubmittals on healthcare.' Before corpus: human only.",
         "humanRole": "FULL DECISION. Pattern recognition requires cross-project experience.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "S"
       }
     ]
   },
@@ -3076,7 +3252,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -3093,7 +3270,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 3,
@@ -3110,7 +3288,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Procore fields + weather API backfill for missing data",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 4,
@@ -3127,7 +3306,8 @@
         "aiConfidence": "80–88%",
         "llmTechnique": "LLM extracts trade/company/headcount from free text. 'Smith Concrete had 8 guys' → structured row. Fuzzy match company names to sub directory.",
         "humanRole": "Verify all. AI extraction good; headcount sometimes ambiguous. ~10 sec to scan pre-filled table.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "P"
       },
       {
         "number": 5,
@@ -3144,7 +3324,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM parses work descriptions into structured fields. Activity, location usually stated. % complete often missing. Quantities sometimes vague.",
         "humanRole": "Verify all. Most time-consuming field. AI saves ~50% vs. manual extraction. ~15–20 sec.",
-        "adjustedTimeSeconds": "15–20"
+        "adjustedTimeSeconds": "15–20",
+        "importance": "P"
       },
       {
         "number": 6,
@@ -3161,7 +3342,8 @@
         "aiConfidence": "85–92%",
         "llmTechnique": "Equipment mentions explicit: 'crane', 'pump', 'bobcat'. Standard vocabulary. NLP extraction with equipment type list.",
         "humanRole": "Spot-check 10%. Limited equipment types. Very reliable.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 7,
@@ -3178,7 +3360,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "LLM identifies issue sentences and extracts structured fields. Cause classification from 10 categories. Duration sometimes not quantified.",
         "humanRole": "Verify all. Extraction good; categorization needs human confirmation. ~10 sec.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "P"
       },
       {
         "number": 8,
@@ -3195,7 +3378,8 @@
         "aiConfidence": "68–75%",
         "llmTechnique": "Given extracted issue text, classify into 10 categories. Some overlap (weather delays delivery). Few-shot with examples of each.",
         "humanRole": "Verify all. Pre-filled per issue. ~3 sec per issue to confirm.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 9,
@@ -3212,7 +3396,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Safety language is distinctive: 'harness', 'PPE', 'violation', 'incident', 'near miss'. LLM extracts reliably. Severity classification simpler.",
         "humanRole": "Spot-check 10%. Safety language explicit. Severity needs review only on High/Critical.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 10,
@@ -3229,7 +3414,8 @@
         "aiConfidence": "45–55%",
         "llmTechnique": "LLM can suggest based on crew count vs. work completed, but 'expected' requires knowing the plan. Without schedule context, unreliable.",
         "humanRole": "FULL DECISION. Requires field judgment about what 'expected' means for this project/activity.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "P"
       },
       {
         "number": 11,
@@ -3246,7 +3432,8 @@
         "aiConfidence": "70–80%",
         "llmTechnique": "LLM extracts explicit RFI refs. Semantic search matches issue descriptions against open RFI corpus. 'Rebar issue at Grid J' → find matching RFI.",
         "humanRole": "Verify. Explicit refs reliable. Implicit matches need human confirmation. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 12,
@@ -3263,7 +3450,8 @@
         "aiConfidence": "50–60%",
         "llmTechnique": "LLM can assess length, structure, completeness heuristically. But calibrating 'Good' vs 'Excellent' requires knowing what good daily reports look like.",
         "humanRole": "FULL DECISION initially. After 200+ scored reports, LLM can learn pattern → evolves to AI+Verify.",
-        "adjustedTimeSeconds": "8–10"
+        "adjustedTimeSeconds": "8–10",
+        "importance": "S"
       }
     ]
   },
@@ -3289,7 +3477,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Composite key generated from project+date+trade+activity",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -3306,7 +3495,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -3323,7 +3513,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 4,
@@ -3340,7 +3531,8 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "LLM classifies from activity description in daily report. 'Poured 3rd floor slab' → Div 03. Consistent vocabulary in daily reports.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 5,
@@ -3357,7 +3549,8 @@
         "aiConfidence": "82–88%",
         "llmTechnique": "LLM maps daily report text to standardized activity list. 'Poured slab' → Concrete Placement. Few-shot with activity definitions per division.",
         "humanRole": "Spot-check 10%. Pre-built activity vocabulary per division. High accuracy on common activities.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "P"
       },
       {
         "number": 6,
@@ -3374,7 +3567,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "Cascaded: given Activity=Concrete Placement, classify sub from text. '3rd floor slab' → Elevated. 'Foundation pour' → Foundation.",
         "humanRole": "Verify all. AI pre-fills; super confirms. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 7,
@@ -3391,7 +3585,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM extracts location references from daily report text. 'Building B, 3rd floor at grid H-K.' Parsing is text-dependent.",
         "humanRole": "Verify. Pre-extracted; confirm accuracy. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 8,
@@ -3408,7 +3603,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Match crew/company from daily report against self-perform trades list + sub directory. Most firms know which trades they self-perform.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 9,
@@ -3425,7 +3621,8 @@
         "aiConfidence": "68–75%",
         "llmTechnique": "LLM extracts headcount × hours from daily report. '8-man crew, 8-hour day' → 64 LH. Cross-validate with timecard data if available.",
         "humanRole": "Verify all. Critical number — errors corrupt all rate calculations. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 10,
@@ -3442,7 +3639,8 @@
         "aiConfidence": "60–68%",
         "llmTechnique": "LLM extracts when daily report specifies: '1 foreman, 6 journeymen, 2 apprentices.' Often not broken down this granularly in narrative.",
         "humanRole": "Verify all. Often needs human to fill in from knowledge of typical crew makeup. ~8 sec.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "P"
       },
       {
         "number": 11,
@@ -3459,7 +3657,8 @@
         "aiConfidence": "35–45%",
         "llmTechnique": "LLM can identify disruption mentions and estimate time from text. But precise hour breakdown requires field knowledge not in the narrative.",
         "humanRole": "FULL DECISION. AI flags disruption mentions as starting point. Human allocates hours based on field knowledge.",
-        "adjustedTimeSeconds": "18–25"
+        "adjustedTimeSeconds": "18–25",
+        "importance": "S"
       },
       {
         "number": 12,
@@ -3476,7 +3675,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM checks daily report for OT mentions. Cross-ref with timecard data. Weekend/night dates detectable from calendar.",
         "humanRole": "Verify. Usually determinable from timecard data or date. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 13,
@@ -3493,7 +3693,8 @@
         "aiConfidence": "30–40%",
         "llmTechnique": "LLM can compare today's crew list to yesterday's if both are extracted. But crew stability assessment requires field knowledge.",
         "humanRole": "FULL DECISION. Critical for productivity analysis. 20-40% impact makes this worth human attention.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "S"
       },
       {
         "number": 14,
@@ -3510,7 +3711,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "LLM extracts quantities from daily report. 'Placed 42 CY concrete.' Numeric extraction with unit identification.",
         "humanRole": "Verify all. Critical number. Extraction good when stated explicitly. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 15,
@@ -3527,7 +3729,8 @@
         "aiConfidence": "92–95%",
         "llmTechnique": "Determined by activity type. Concrete = CY. Drywall = SF. Conduit = LF. Standardized mapping table.",
         "humanRole": "Spot-check 5%. Deterministic once activity type is known.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 16,
@@ -3544,7 +3747,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Simple division once quantity and hours are validated.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 17,
@@ -3561,7 +3765,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Division using productive hours subset.",
         "humanRole": "None — depends on Hours by Type accuracy",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 18,
@@ -3578,7 +3783,8 @@
         "aiConfidence": "65–72%",
         "llmTechnique": "Pull from estimate labels (Attribute #19 Cost Breakdown). Match activity to estimated rate. Requires estimate to be labeled first.",
         "humanRole": "Verify. Mapping from estimate to field activity. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 19,
@@ -3595,7 +3801,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Auto-calc once both rates validated.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 20,
@@ -3612,7 +3819,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Rolling calculation across activity days.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 21,
@@ -3629,7 +3837,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "Cross-ref weather data (temp, wind, precip) against trade-specific thresholds. Concrete finishing >95F → Moderate. Steel erection >25mph → Severe.",
         "humanRole": "Verify. AI applies rule-based thresholds. Human overrides for local context. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 22,
@@ -3646,7 +3855,8 @@
         "aiConfidence": "40–50%",
         "llmTechnique": "LLM can count trades from daily report crew section. But 'congestion' is a spatial judgment from being on site.",
         "humanRole": "FULL DECISION. AI shows crew count as context. Super assesses actual congestion.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "S"
       },
       {
         "number": 23,
@@ -3663,7 +3873,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM extracts material delay mentions from daily report. 'Pump late by 45 min' → Material Delay. Duration extraction.",
         "humanRole": "Verify. Extraction reliable when mentioned. Absence of mention → 'All Available.' ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 24,
@@ -3680,7 +3891,8 @@
         "aiConfidence": "78–85%",
         "llmTechnique": "LLM flags equipment issues from daily report. 'Crane down for 2 hours' → Breakdown. Absence = All Operational.",
         "humanRole": "Verify. Similar to material — flag mentions. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 25,
@@ -3697,7 +3909,8 @@
         "aiConfidence": "65–72%",
         "llmTechnique": "Cross-ref open RFIs for this project + trade + location against daily report issues. Flag matching. 'Waiting on RFI' → Open RFI.",
         "humanRole": "Verify. System suggests matches; human confirms linkage. ~8 sec.",
-        "adjustedTimeSeconds": "5–10"
+        "adjustedTimeSeconds": "5–10",
+        "importance": "P"
       },
       {
         "number": 26,
@@ -3714,7 +3927,8 @@
         "aiConfidence": "58–68%",
         "llmTechnique": "LLM extracts disruption events from daily report narrative. Duration estimation from text. Cross-references to other doc types.",
         "humanRole": "Verify all events. AI extracts; human confirms duration estimates and cause categories. ~15 sec.",
-        "adjustedTimeSeconds": "12–20"
+        "adjustedTimeSeconds": "12–20",
+        "importance": "P"
       },
       {
         "number": 27,
@@ -3731,7 +3945,8 @@
         "aiConfidence": "60–68%",
         "llmTechnique": "Given extracted event, classify cause from 18 categories. 'Pump late' → Material Delay. 'Inspection fail' → Quality Rejection.",
         "humanRole": "Verify all. AI classifies; human confirms or reclassifies. ~5 sec per event.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 28,
@@ -3748,7 +3963,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Sum from disruption event table.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 29,
@@ -3765,7 +3981,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Multiplication. Rate from labor rate table.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 30,
@@ -3782,7 +3999,8 @@
         "aiConfidence": "45–55%",
         "llmTechnique": "LLM can suggest based on cause category. Material Delay → Supplier. Rework-Own → GC. But some are judgment calls.",
         "humanRole": "FULL DECISION. AI maps cause→party as suggestion. Human confirms. Politically sensitive on some attributions.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "P"
       },
       {
         "number": 31,
@@ -3799,7 +4017,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Count from activity record sequence.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 32,
@@ -3816,7 +4035,8 @@
         "aiConfidence": "45–55%",
         "llmTechnique": "AI can correlate days-on-activity with rate trend. But 'Peak' vs 'Sustained' vs 'Declining' requires field context.",
         "humanRole": "FULL DECISION. AI shows rate trend graph as context. Human classifies phase.",
-        "adjustedTimeSeconds": "8–12"
+        "adjustedTimeSeconds": "8–12",
+        "importance": "S"
       },
       {
         "number": 33,
@@ -3833,7 +4053,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Statistical calculation from rate series.",
         "humanRole": "None — auto-alerts on 'Declining'",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 34,
@@ -3850,7 +4071,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "LLM flags rework mentions in daily report. 'Form blowout', 'torn out and redone', 'patched'. Duration extraction.",
         "humanRole": "Verify. Rework language distinctive. Duration needs confirmation. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 35,
@@ -3867,7 +4089,8 @@
         "aiConfidence": "45–55%",
         "llmTechnique": "LLM can suggest from rework description. 'Form blowout' → likely Workmanship. 'Built per wrong drawing' → Design Error.",
         "humanRole": "FULL DECISION. AI suggests; human decides. Attribution matters for cost recovery and training.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "P"
       },
       {
         "number": 36,
@@ -3884,7 +4107,8 @@
         "aiConfidence": "68–75%",
         "llmTechnique": "LLM extracts from daily report if stated. '2 workers spent 2 hours fixing forms' → 4 LH.",
         "humanRole": "Verify. Extraction when stated explicitly. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 37,
@@ -3901,7 +4125,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Multiplication + material waste estimate.",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       }
     ]
   },
@@ -3910,7 +4135,7 @@
     "skillId": "safety_inspection",
     "displayName": "Safety & Inspection",
     "summary": "23 attributes across incidents, observations, and inspections. Safety language is distinctive — LLMs classify well. Root cause and predictive flags stay human.",
-    "totalAttributes": 17,
+    "totalAttributes": 23,
     "attributes": [
       {
         "number": 1,
@@ -3927,7 +4152,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -3944,7 +4170,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct API pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "E"
       },
       {
         "number": 3,
@@ -3961,7 +4188,8 @@
         "aiConfidence": "88–93%",
         "llmTechnique": "Report titles and descriptions have clear type signals. 'Near miss' is stated explicitly. Recordable vs First Aid from injury description.",
         "humanRole": "Spot-check 10%. Very distinctive language per type.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 4,
@@ -3978,7 +4206,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "LLM assesses from description. Height + no harness → Medium/High. 'Corrected immediately' signals lower. Elevated heights + imminent danger → Critical.",
         "humanRole": "Verify all. Stakes are high on severity classification. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 5,
@@ -3995,7 +4224,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Extract trade/company from report. 'Ironworker from DEF Steel' → match to directory. Trade usually stated in safety reports.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 6,
@@ -4012,7 +4242,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "16 categories with distinctive vocabulary. 'Harness', 'lanyard', 'guardrail' → Fall Protection. 'Trench', 'excavation' → Excavation. Few-shot with 3 examples per category.",
         "humanRole": "Spot-check 10%. Very reliable — safety vocabulary is specific.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 7,
@@ -4029,7 +4260,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM extracts activity description from report. Maps to standardized activity list. Usually explicit in safety reports.",
         "humanRole": "Verify. Pre-filled activity description; human confirms standardized mapping. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 8,
@@ -4046,7 +4278,8 @@
         "aiConfidence": "45–55%",
         "llmTechnique": "LLM can suggest based on description, but root cause requires understanding systemic vs individual factors. 'Worker removed harness' could be Worker Behavior OR Supervisor Failure.",
         "humanRole": "FULL DECISION. AI suggestion shown. Human determines root cause with context. Every correction logged.",
-        "adjustedTimeSeconds": "15–22"
+        "adjustedTimeSeconds": "15–22",
+        "importance": "S"
       },
       {
         "number": 9,
@@ -4063,7 +4296,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "Corrective actions usually stated in report. LLM extracts and classifies. 'Verbal warning issued' → Verbal Warning. Multi-action reports handled.",
         "humanRole": "Verify. Pre-filled from report text. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 10,
@@ -4080,7 +4314,8 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "Pull from daily report weather data or weather API for that date/location. LLM identifies if weather was contributing factor.",
         "humanRole": "Spot-check 5%. Mostly automated from weather data.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 11,
@@ -4097,7 +4332,8 @@
         "aiConfidence": "78–85%",
         "llmTechnique": "Auto-match by date + project. Find daily report entries mentioning same incident. Link to production disruption records.",
         "humanRole": "Verify link accuracy. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 12,
@@ -4114,7 +4350,8 @@
         "aiConfidence": "40–50%",
         "llmTechnique": "After corpus: system searches for similar incidents by trade/hazard/conditions and flags potential patterns. Before: human knowledge only.",
         "humanRole": "FULL DECISION initially. System-assisted after 500+ labeled incidents.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "S"
       },
       {
         "number": 13,
@@ -4131,7 +4368,8 @@
         "aiConfidence": "30–40%",
         "llmTechnique": "After substantial labeled data: system identifies statistical correlations between conditions and incidents. Human validates and flags.",
         "humanRole": "FULL DECISION. The highest-value safety label. Requires pattern recognition + field experience.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "S"
       },
       {
         "number": 14,
@@ -4148,7 +4386,8 @@
         "aiConfidence": "88–93%",
         "llmTechnique": "Inspection reports have clear type identification. 'Pre-pour inspection' → Concrete. 'Welding inspection' → Steel.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "S"
       },
       {
         "number": 15,
@@ -4165,7 +4404,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "Result usually stated explicitly in inspection report. 'Approved' → Pass. 'Failed — correct and re-inspect' → Fail-Minor.",
         "humanRole": "Spot-check 10%. Severity (Minor vs Major) may need verification.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "P"
       },
       {
         "number": 16,
@@ -4182,7 +4422,8 @@
         "aiConfidence": "72–78%",
         "llmTechnique": "If failed, LLM reads inspector comments to classify reason. 'Ties missing' → Workmanship. 'Not per approved submittal' → Not Per Submittal.",
         "humanRole": "Verify all failure reasons. Correct classification important for trade quality scoring. ~5 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 17,
@@ -4199,7 +4440,68 @@
         "aiConfidence": "88–92%",
         "llmTechnique": "Inspection report identifies whose work was inspected. Match to sub directory.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
+      },
+      {
+        "number": 18,
+        "name": "Inspection Location / Area",
+        "tier": "Tier 1",
+        "importance": "S",
+        "source": "Document",
+        "inputType": "Text",
+        "example": "Building A, 3rd Floor",
+        "whyItMatters": "Location pattern for punch list prediction"
+      },
+      {
+        "number": 19,
+        "name": "Inspector / Jurisdiction",
+        "tier": "Auto",
+        "importance": "S",
+        "source": "Auto",
+        "inputType": "Auto",
+        "example": "City Building Dept",
+        "whyItMatters": "Inspector stringency variation"
+      },
+      {
+        "number": 20,
+        "name": "Re-Inspection Required?",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "Document",
+        "inputType": "Boolean",
+        "example": "Yes",
+        "whyItMatters": "Re-inspection = rework = cost and delay"
+      },
+      {
+        "number": 21,
+        "name": "Days to Re-Inspection",
+        "tier": "Auto",
+        "importance": "S",
+        "source": "Calculated",
+        "inputType": "Auto",
+        "example": "5 days",
+        "whyItMatters": "Re-inspection velocity"
+      },
+      {
+        "number": 22,
+        "name": "Corrective Action Deadline",
+        "tier": "Auto",
+        "importance": "S",
+        "source": "Document",
+        "inputType": "Date",
+        "example": "2024-04-15",
+        "whyItMatters": "Compliance timeline management"
+      },
+      {
+        "number": 23,
+        "name": "Related Punch List Items",
+        "tier": "Tier 3",
+        "importance": "S",
+        "source": "Cross-doc",
+        "inputType": "Array",
+        "example": "PL-042, PL-043",
+        "whyItMatters": "Inspection failure to punch list linkage"
       }
     ]
   },
@@ -4225,7 +4527,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 2,
@@ -4242,7 +4545,8 @@
         "aiConfidence": "90–95%",
         "llmTechnique": "Meeting titles are descriptive: 'OAC Meeting #14', 'Weekly Coordination Meeting.' Very reliable classification.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 3,
@@ -4259,7 +4563,8 @@
         "aiConfidence": "88%",
         "llmTechnique": "LLM extracts names and roles from attendee list. Match to project directory.",
         "humanRole": "Spot-check 10%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 4,
@@ -4276,7 +4581,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "LLM counts action items from meeting minutes. Usually structured: 'Action:', numbered lists, or tables.",
         "humanRole": "Verify count. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 5,
@@ -4293,7 +4599,8 @@
         "aiConfidence": "68–75%",
         "llmTechnique": "LLM extracts responsible party per action item and aggregates. Party identification from text.",
         "humanRole": "Verify attribution. ~8 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 6,
@@ -4310,7 +4617,8 @@
         "aiConfidence": "65–72%",
         "llmTechnique": "LLM identifies decision language: 'approved', 'decided', 'agreed to', 'directed'. Extracts with context.",
         "humanRole": "Verify all decisions. Important for formal record. AI extraction is good starting point. ~12 sec.",
-        "adjustedTimeSeconds": "10–15"
+        "adjustedTimeSeconds": "10–15",
+        "importance": "S"
       },
       {
         "number": 7,
@@ -4327,7 +4635,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "LLM identifies 'old business', 'open items', 'carried forward' sections. Counts and summarizes.",
         "humanRole": "Verify. Meeting minutes structure varies by firm. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 8,
@@ -4344,7 +4653,8 @@
         "aiConfidence": "80–85%",
         "llmTechnique": "LLM extracts explicit document references (RFI-###, CO-###) from meeting text. High accuracy on explicit refs.",
         "humanRole": "Verify. Explicit refs reliable. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 9,
@@ -4361,7 +4671,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 10,
@@ -4378,7 +4689,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 11,
@@ -4395,7 +4707,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 12,
@@ -4412,7 +4725,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 13,
@@ -4429,7 +4743,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Division",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 14,
@@ -4446,7 +4761,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 15,
@@ -4463,7 +4779,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 16,
@@ -4480,7 +4797,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Date arithmetic",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 17,
@@ -4497,7 +4815,8 @@
         "aiConfidence": "68–75%",
         "llmTechnique": "Compare billed % to schedule % complete (if available from P6). Simple arithmetic + threshold. 'Disputed Items' from text.",
         "humanRole": "Verify. AI calculates over/under. Human confirms interpretation. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
       },
       {
         "number": 18,
@@ -4514,7 +4833,8 @@
         "aiConfidence": "65–72%",
         "llmTechnique": "LLM reads pay app notes/correspondence for held items. Extracts amounts and reasons.",
         "humanRole": "Verify. Held items are usually documented. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 19,
@@ -4531,7 +4851,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 20,
@@ -4548,7 +4869,8 @@
         "aiConfidence": "85–90%",
         "llmTechnique": "LLM classifies from document title + content. 'Notice of Delay' explicitly stated. Transmittals have distinctive format. 12 clear categories.",
         "humanRole": "Spot-check 10%. Distinctive document types.",
-        "adjustedTimeSeconds": "0–3"
+        "adjustedTimeSeconds": "0–3",
+        "importance": "E"
       },
       {
         "number": 21,
@@ -4565,7 +4887,8 @@
         "aiConfidence": "90%",
         "llmTechnique": "LLM extracts from header/signature.",
         "humanRole": "Spot-check 5%.",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "S"
       },
       {
         "number": 22,
@@ -4582,7 +4905,8 @@
         "aiConfidence": "62–70%",
         "llmTechnique": "LLM cross-refs document type against contract clause requirements. If 'Notice of Delay' and contract requires delay notice → Yes-Required. Clause citation from contract labels.",
         "humanRole": "Verify all. Notice compliance has legal consequences. AI flags; human confirms clause reference. ~8 sec.",
-        "adjustedTimeSeconds": "5–10"
+        "adjustedTimeSeconds": "5–10",
+        "importance": "P"
       },
       {
         "number": 23,
@@ -4599,7 +4923,8 @@
         "aiConfidence": "55–65%",
         "llmTechnique": "System calculates: triggering event date + contractual notice window vs. notice send date. Requires contract clause labels for window period.",
         "humanRole": "VERIFY ALL. Missed notices = forfeited claim rights. AI calculates timeline; human confirms trigger date. ~8 sec.",
-        "adjustedTimeSeconds": "5–10"
+        "adjustedTimeSeconds": "5–10",
+        "importance": "P"
       },
       {
         "number": 24,
@@ -4616,7 +4941,8 @@
         "aiConfidence": "80–85%",
         "llmTechnique": "LLM extracts explicit document references from letter text. High accuracy on explicit refs.",
         "humanRole": "Verify. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "S"
       },
       {
         "number": 25,
@@ -4633,7 +4959,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct pull",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "A"
       },
       {
         "number": 26,
@@ -4650,7 +4977,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Direct count",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 27,
@@ -4667,7 +4995,8 @@
         "aiConfidence": "75–82%",
         "llmTechnique": "Procore assigns trades to punch items. System aggregates by trade. If not tagged, LLM classifies from item description.",
         "humanRole": "Verify aggregation. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "P"
       },
       {
         "number": 28,
@@ -4684,7 +5013,8 @@
         "aiConfidence": "70–78%",
         "llmTechnique": "LLM classifies each punch item into 4 severity categories. 'Fire caulking missing' → Life Safety. 'Paint touch-up' → Aesthetic.",
         "humanRole": "Verify Life Safety items — zero tolerance for misclassification. Others spot-check. ~8 sec.",
-        "adjustedTimeSeconds": "5–10"
+        "adjustedTimeSeconds": "5–10",
+        "importance": "S"
       },
       {
         "number": 29,
@@ -4701,7 +5031,8 @@
         "aiConfidence": "100%",
         "llmTechnique": "Date arithmetic",
         "humanRole": "None",
-        "adjustedTimeSeconds": "0"
+        "adjustedTimeSeconds": "0",
+        "importance": "P"
       },
       {
         "number": 30,
@@ -4718,7 +5049,8 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "System checks Sage for back-charges linked to this project/sub. LLM reads punch list notes for back-charge mentions.",
         "humanRole": "Verify. ~3 sec.",
-        "adjustedTimeSeconds": "3–5"
+        "adjustedTimeSeconds": "3–5",
+        "importance": "P"
       },
       {
         "number": 31,
@@ -4735,7 +5067,8 @@
         "aiConfidence": "35–45%",
         "llmTechnique": "Warranty items arrive via separate correspondence/calls. System can't auto-detect. Human enters as they occur.",
         "humanRole": "FULL ENTRY. Ongoing data entry as warranty issues arise.",
-        "adjustedTimeSeconds": "12–18"
+        "adjustedTimeSeconds": "12–18",
+        "importance": "P"
       },
       {
         "number": 32,
@@ -4752,7 +5085,387 @@
         "aiConfidence": "72–80%",
         "llmTechnique": "System checks Procore closeout module for document status. Aggregates by type. Flags outstanding items.",
         "humanRole": "Verify. Procore may not track all closeout docs. Human supplements. ~5 sec.",
-        "adjustedTimeSeconds": "5–8"
+        "adjustedTimeSeconds": "5–8",
+        "importance": "S"
+      }
+    ]
+  },
+  {
+    "sheetName": "Job Cost Report Schema",
+    "skillId": "job_cost_report",
+    "displayName": "Job Cost Report",
+    "summary": "37 fields. Financial backbone connecting accounting to project intelligence. Contains budget vs actual cost data at the cost-code level.",
+    "totalAttributes": 37,
+    "attributes": [
+      {
+        "number": 1,
+        "name": "Report ID",
+        "tier": "Auto",
+        "importance": "A",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 2,
+        "name": "Company / Entity",
+        "tier": "Auto",
+        "importance": "E",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 3,
+        "name": "Job Number",
+        "tier": "Auto",
+        "importance": "E",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 4,
+        "name": "Project Name / Description",
+        "tier": "Auto",
+        "importance": "E",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 5,
+        "name": "Report Period",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 6,
+        "name": "Report Date",
+        "tier": "Auto",
+        "importance": "E",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 7,
+        "name": "Report Category / Filter",
+        "tier": "Auto",
+        "importance": "S",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 8,
+        "name": "Total Revised Budget",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 9,
+        "name": "Total Job-to-Date Cost",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 10,
+        "name": "Total Change Orders",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 11,
+        "name": "Overall % Budget Consumed",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 12,
+        "name": "Total Over/Under Budget",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 13,
+        "name": "Project Type",
+        "tier": "Tier 1 — Retrieval",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 14,
+        "name": "Trade / Scope",
+        "tier": "Tier 1 — Retrieval",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 15,
+        "name": "Cost-to-Complete Estimate",
+        "tier": "Tier 2 — Analytics",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 16,
+        "name": "Estimated Margin at Completion",
+        "tier": "Tier 2 — Analytics",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 17,
+        "name": "Line Item Number / Cost Code",
+        "tier": "Auto",
+        "importance": "E",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 18,
+        "name": "Line Item Description",
+        "tier": "Auto",
+        "importance": "E",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 19,
+        "name": "Revised Budget (line)",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 20,
+        "name": "Change Orders (line)",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 21,
+        "name": "Job-to-Date Cost (line)",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 22,
+        "name": "Quantity (labor hours or units)",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 23,
+        "name": "% Budget Consumed (line)",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 24,
+        "name": "Over/Under Budget — $ (line)",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 25,
+        "name": "Cost Category",
+        "tier": "Tier 1 — Retrieval",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 26,
+        "name": "Work Phase / Activity",
+        "tier": "Tier 1 — Retrieval",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 27,
+        "name": "CSI Division (Primary) — JCR",
+        "tier": "Tier 1 — Retrieval",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 28,
+        "name": "UniFormat Equivalent — JCR",
+        "tier": "Auto",
+        "importance": "S",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 29,
+        "name": "Variance Trend (vs prior period)",
+        "tier": "Tier 2 — Analytics",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 30,
+        "name": "Labor Productivity Rate ($/hr)",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 31,
+        "name": "Estimated Labor Rate (from bid)",
+        "tier": "Tier 2 — Analytics",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 32,
+        "name": "Material Price Variance",
+        "tier": "Tier 2 — Analytics",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 33,
+        "name": "Labor-to-Material Ratio",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 34,
+        "name": "CO Absorption Rate (line)",
+        "tier": "Auto",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 35,
+        "name": "Variance Root Cause (per line)",
+        "tier": "Tier 3 — Intelligence",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 36,
+        "name": "Line Item Forecast to Complete",
+        "tier": "Tier 3 — Intelligence",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
+      },
+      {
+        "number": 37,
+        "name": "Lessons Learned / Estimating Flag",
+        "tier": "Tier 3 — Intelligence",
+        "importance": "P",
+        "source": "ERP / Accounting",
+        "inputType": "Auto",
+        "example": "",
+        "whyItMatters": ""
       }
     ]
   }

@@ -24,11 +24,12 @@ import {
 export interface FieldDefinition {
   name: string;
   type: 'string' | 'number' | 'date' | 'enum' | 'boolean' | 'array';
-  tier: 1 | 2 | 3;
+  tier: 0 | 1 | 2 | 3;
   required: boolean;
   description: string;
   options?: string[];
   disambiguationRules?: string;
+  importance?: 'P' | 'S' | 'E' | 'A';
 }
 
 export interface DocumentSkill {
@@ -241,6 +242,15 @@ ${text.slice(0, 2000)}`;
 
 // ── Prompt Builder ────────────────────────────────────────────
 
+function importanceLabel(imp: 'P' | 'S' | 'E' | 'A'): string {
+  switch (imp) {
+    case 'P': return 'PRIMARY — critical for analysis';
+    case 'S': return 'SUPPORTING — provides context';
+    case 'E': return 'ENABLING — needed for cross-referencing';
+    case 'A': return 'ADMIN — identifier/metadata';
+  }
+}
+
 export function buildSkillPrompt(skill: DocumentSkill, sourceText: string): string {
   const lines: string[] = [];
 
@@ -252,7 +262,8 @@ export function buildSkillPrompt(skill: DocumentSkill, sourceText: string): stri
     lines.push('');
     for (const field of skill.fieldDefinitions) {
       const reqLabel = field.required ? 'required' : 'optional';
-      let fieldLine = `**${field.name}** (${field.type}, ${reqLabel}): ${field.description}`;
+      const impLabel = field.importance ? `, ${importanceLabel(field.importance)}` : '';
+      let fieldLine = `**${field.name}** (${field.type}, ${reqLabel}${impLabel}): ${field.description}`;
       if (field.options && field.options.length > 0) {
         fieldLine += ` Options: [${field.options.join(', ')}]`;
       }
