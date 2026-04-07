@@ -49,12 +49,18 @@ export async function GET(request: NextRequest) {
 
   let driveFolderId: string | undefined;
 
+  const explicitFolder = request.nextUrl.searchParams.get('folderId');
+
   const session = sessionToken ? await validateUserSession(sessionToken) : null;
   if (session?.orgId) {
     const org = await getOrganization(session.orgId);
     if (org?.driveFolderId) {
       driveFolderId = org.driveFolderId;
     }
+  }
+
+  if (explicitFolder) {
+    driveFolderId = explicitFolder;
   }
 
   if (!driveFolderId) {

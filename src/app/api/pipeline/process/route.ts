@@ -13,6 +13,18 @@ export const maxDuration = 300;
 const DOCUMENTS_BUCKET = 'documents';
 const LARGE_PDF_PAGE_THRESHOLD = 100;
 
+const ALWAYS_PROCESS_PATTERNS = [
+  /job\s*(cost|detail)\s*report/i,
+  /\bjcr\b/i,
+  /\bjob\s*detail\b/i,
+  /cost\s*report/i,
+];
+
+function shouldAlwaysProcess(fileName: string, folderPath?: string): boolean {
+  const haystack = `${fileName} ${folderPath || ''}`;
+  return ALWAYS_PROCESS_PATTERNS.some(p => p.test(haystack));
+}
+
 export async function POST(request: NextRequest) {
   const body = await request.text();
 
@@ -91,7 +103,7 @@ export async function POST(request: NextRequest) {
 
         await sb.from('pipeline_log').update({ page_count: pageCount }).eq('id', recordId);
 
-        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess) {
+        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess && !shouldAlwaysProcess(fileName, driveFolderPath)) {
           console.log(`[process] Large PDF detected (${pageCount} pages > ${LARGE_PDF_PAGE_THRESHOLD}). Storing only, skipping AI extraction.`);
           await sb.from('pipeline_log').update({
             status: 'stored_only',
@@ -110,6 +122,10 @@ export async function POST(request: NextRequest) {
           console.log(`[process] DONE record=${recordId} file="${fileName}" status=stored_only pages=${pageCount} — ` +
             Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
           return Response.json({ success: true, recordId, status: 'stored_only', pageCount, timing });
+        }
+
+        if (pageCount > LARGE_PDF_PAGE_THRESHOLD) {
+          console.log(`[process] Large PDF (${pageCount} pages) but matches always-process pattern — proceeding with extraction`);
         }
       } catch (err) {
         console.warn(`[process] PDF page count failed (non-fatal):`, err);
@@ -199,7 +215,7 @@ export async function POST(request: NextRequest) {
 
         await sb.from('pipeline_log').update({ page_count: pageCount }).eq('id', recordId);
 
-        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess) {
+        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess && !shouldAlwaysProcess(fileName)) {
           console.log(`[process] Large PDF detected (${pageCount} pages > ${LARGE_PDF_PAGE_THRESHOLD}). Storing only, skipping AI extraction.`);
           await sb.from('pipeline_log').update({
             status: 'stored_only',

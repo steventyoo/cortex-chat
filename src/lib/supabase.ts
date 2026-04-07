@@ -1115,3 +1115,136 @@ export async function getDocumentLinks(
   const { data } = await query;
   return data || [];
 }
+
+// ── Document Links V2 (extracted_records graph) ──────────────
+
+export interface DocumentLinkV2 {
+  id: string;
+  projectId: string;
+  orgId: string;
+  sourceRecordId: string;
+  targetRecordId: string;
+  linkTypeId: string;
+  confidence: number;
+  method: 'auto' | 'manual' | 'review';
+  matchedOn: Record<string, unknown>;
+  timeDeltaDays: number | null;
+  costImpact: number | null;
+  notes: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+function mapLinkV2(row: Record<string, unknown>): DocumentLinkV2 {
+  return {
+    id: String(row.id || ''),
+    projectId: String(row.project_id || ''),
+    orgId: String(row.org_id || ''),
+    sourceRecordId: String(row.source_record_id || ''),
+    targetRecordId: String(row.target_record_id || ''),
+    linkTypeId: String(row.link_type_id || ''),
+    confidence: Number(row.confidence ?? 1),
+    method: (row.method as DocumentLinkV2['method']) || 'auto',
+    matchedOn: (row.matched_on as Record<string, unknown>) || {},
+    timeDeltaDays: row.time_delta_days != null ? Number(row.time_delta_days) : null,
+    costImpact: row.cost_impact != null ? Number(row.cost_impact) : null,
+    notes: String(row.notes || ''),
+    createdBy: String(row.created_by || ''),
+    createdAt: String(row.created_at || ''),
+  };
+}
+
+export async function createDocumentLinkV2(link: {
+  projectId: string;
+  orgId: string;
+  sourceRecordId: string;
+  targetRecordId: string;
+  linkTypeId: string;
+  confidence?: number;
+  method?: 'auto' | 'manual' | 'review';
+  matchedOn?: Record<string, unknown>;
+  timeDeltaDays?: number;
+  costImpact?: number;
+  notes?: string;
+  createdBy?: string;
+}): Promise<DocumentLinkV2 | null> {
+  const sb = getSupabase();
+  const { data, error } = await sb.from('document_links_v2').insert({
+    project_id: link.projectId,
+    org_id: link.orgId,
+    source_record_id: link.sourceRecordId,
+    target_record_id: link.targetRecordId,
+    link_type_id: link.linkTypeId,
+    confidence: link.confidence ?? 1.0,
+    method: link.method || 'auto',
+    matched_on: link.matchedOn || {},
+    time_delta_days: link.timeDeltaDays ?? null,
+    cost_impact: link.costImpact ?? null,
+    notes: link.notes || '',
+    created_by: link.createdBy || '',
+  }).select().single();
+
+  if (error) {
+    console.error('Failed to create document link v2:', error.message);
+    return null;
+  }
+  return mapLinkV2(data);
+}
+
+export async function getDocumentLinksV2(
+  projectId: string,
+  filters?: {
+    linkTypeId?: string;
+    sourceRecordId?: string;
+    targetRecordId?: string;
+    method?: 'auto' | 'manual' | 'review';
+    minConfidence?: number;
+  }
+): Promise<DocumentLinkV2[]> {
+  const sb = getSupabase();
+  let query = sb.from('document_links_v2').select('*').eq('project_id', projectId);
+  if (filters?.linkTypeId) query = query.eq('link_type_id', filters.linkTypeId);
+  if (filters?.sourceRecordId) query = query.eq('source_record_id', filters.sourceRecordId);
+  if (filters?.targetRecordId) query = query.eq('target_record_id', filters.targetRecordId);
+  if (filters?.method) query = query.eq('method', filters.method);
+  if (filters?.minConfidence != null) query = query.gte('confidence', filters.minConfidence);
+
+  const { data } = await query.order('created_at', { ascending: false });
+  return (data || []).map(mapLinkV2);
+}
+
+export async function getLinksForRecord(
+  recordId: string,
+  direction: 'outgoing' | 'incoming' | 'both' = 'both'
+): Promise<DocumentLinkV2[]> {
+  const sb = getSupabase();
+
+  if (direction === 'outgoing') {
+    const { data } = await sb.from('document_links_v2').select('*').eq('source_record_id', recordId);
+    return (data || []).map(mapLinkV2);
+  }
+  if (direction === 'incoming') {
+    const { data } = await sb.from('document_links_v2').select('*').eq('target_record_id', recordId);
+    return (data || []).map(mapLinkV2);
+  }
+
+  const [outgoing, incoming] = await Promise.all([
+    sb.from('document_links_v2').select('*').eq('source_record_id', recordId),
+    sb.from('document_links_v2').select('*').eq('target_record_id', recordId),
+  ]);
+
+  return [
+    ...(outgoing.data || []).map(mapLinkV2),
+    ...(incoming.data || []).map(mapLinkV2),
+  ];
+}
+
+export async function deleteDocumentLinkV2(linkId: string): Promise<boolean> {
+  const sb = getSupabase();
+  const { error } = await sb.from('document_links_v2').delete().eq('id', linkId);
+  if (error) {
+    console.error('Failed to delete document link v2:', error.message);
+    return false;
+  }
+  return true;
+}
