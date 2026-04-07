@@ -66,7 +66,7 @@ export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) 
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-[16px] font-semibold text-[#1a1a1a]">Field Definitions</h2>
           <p className="text-[13px] text-[#999] mt-0.5">
@@ -91,23 +91,37 @@ export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) 
         </button>
       </div>
 
-      {/* Field list */}
-      <div className="space-y-2">
-        {fields.map((f, i) => (
-          <div
-            key={i}
-            className={`border rounded-lg p-4 transition-colors ${
-              editIdx === i ? 'border-[#007aff] bg-[#f8faff]' : 'border-[#e8e8e8] hover:border-[#ddd]'
-            }`}
-          >
-            {editIdx === i ? (
-              <FieldForm draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setEditIdx(null)} />
-            ) : (
-              <div className="flex items-center gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[14px] font-medium text-[#1a1a1a]">{f.name}</span>
-                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#f0f0f0] text-[#888] font-mono">{f.type}</span>
+      {/* Compact table */}
+      <div className="border border-[#e8e8e8] rounded-lg overflow-hidden">
+        <table className="w-full text-[12px]">
+          <thead>
+            <tr className="bg-[#fafafa] border-b border-[#e8e8e8]">
+              <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Data Point</th>
+              <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[70px]">Type</th>
+              <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[52px]">Tier</th>
+              <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[80px]">Imp.</th>
+              <th className="text-center px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[36px]">Req</th>
+              <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Description</th>
+              <th className="w-[80px]" />
+            </tr>
+          </thead>
+          <tbody>
+            {fields.map((f, i) => (
+              editIdx === i ? (
+                <tr key={i}>
+                  <td colSpan={7} className="p-3 bg-[#f8faff] border-b border-[#e0e0e0]">
+                    <FieldForm draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setEditIdx(null)} />
+                  </td>
+                </tr>
+              ) : (
+                <tr
+                  key={i}
+                  className="border-b border-[#f0f0f0] last:border-b-0 hover:bg-[#fafafa] transition-colors group"
+                >
+                  <td className="px-3 py-1.5 font-medium text-[#1a1a1a] whitespace-nowrap">{f.name}</td>
+                  <td className="px-2 py-1.5 font-mono text-[#888]">{f.type}</td>
+                  <td className="px-2 py-1.5 text-[#aaa]">{f.tier === 0 ? 'Auto' : `T${f.tier}`}</td>
+                  <td className="px-2 py-1.5">
                     {f.importance && (
                       <span
                         title={IMPORTANCE_TOOLTIPS[f.importance]}
@@ -116,16 +130,20 @@ export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) 
                         {IMPORTANCE_LABELS[f.importance]}
                       </span>
                     )}
-                    {f.required && <span className="text-[10px] text-[#dc2626] font-medium">Required</span>}
-                  </div>
-                  {f.description && <p className="text-[12px] text-[#999] mt-0.5 truncate">{f.description}</p>}
-                </div>
-                <button onClick={() => startEdit(i)} className="text-[12px] text-[#007aff] hover:underline">Edit</button>
-                <button onClick={() => remove(i)} className="text-[12px] text-[#dc2626] hover:underline">Remove</button>
-              </div>
-            )}
-          </div>
-        ))}
+                  </td>
+                  <td className="px-2 py-1.5 text-center">
+                    {f.required && <span className="text-[#dc2626]">*</span>}
+                  </td>
+                  <td className="px-2 py-1.5 text-[#999] truncate max-w-[300px]">{f.description}</td>
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => startEdit(i)} className="text-[11px] text-[#007aff] hover:underline mr-2">Edit</button>
+                    <button onClick={() => remove(i)} className="text-[11px] text-[#dc2626] hover:underline">Del</button>
+                  </td>
+                </tr>
+              )
+            ))}
+          </tbody>
+        </table>
       </div>
 
       {/* Add form */}
