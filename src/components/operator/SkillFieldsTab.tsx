@@ -10,10 +10,19 @@ interface Props {
 }
 
 const FIELD_TYPES = ['string', 'number', 'date', 'enum', 'boolean', 'array'] as const;
-const TIERS = [1, 2, 3] as const;
+const TIERS = [0, 1, 2, 3] as const;
+const TIER_LABELS: Record<number, string> = { 0: 'Auto', 1: 'Tier 1', 2: 'Tier 2', 3: 'Tier 3' };
+const IMPORTANCE_OPTIONS = ['P', 'S', 'E', 'A'] as const;
+const IMPORTANCE_LABELS: Record<string, string> = { P: 'Primary', S: 'Supporting', E: 'Enabling', A: 'Admin' };
+const IMPORTANCE_COLORS: Record<string, string> = {
+  P: 'bg-[#fecaca] text-[#991b1b]',
+  S: 'bg-[#dbeafe] text-[#1e40af]',
+  E: 'bg-[#f0f0f0] text-[#666]',
+  A: 'bg-[#f5f5f5] text-[#999]',
+};
 
 const emptyField: FieldDef = {
-  name: '', type: 'string', tier: 1, required: false, description: '', options: [], disambiguationRules: '',
+  name: '', type: 'string', tier: 1, required: false, description: '', options: [], disambiguationRules: '', importance: 'E',
 };
 
 export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) {
@@ -49,22 +58,6 @@ export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) 
     if (editIdx === i) setEditIdx(null);
   };
 
-  const moveUp = (i: number) => {
-    if (i === 0) return;
-    const updated = [...fields];
-    [updated[i - 1], updated[i]] = [updated[i], updated[i - 1]];
-    setFields(updated);
-    markDirty();
-  };
-
-  const moveDown = (i: number) => {
-    if (i === fields.length - 1) return;
-    const updated = [...fields];
-    [updated[i], updated[i + 1]] = [updated[i + 1], updated[i]];
-    setFields(updated);
-    markDirty();
-  };
-
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -95,23 +88,21 @@ export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) 
               <FieldForm draft={draft} setDraft={setDraft} onSave={save} onCancel={() => setEditIdx(null)} />
             ) : (
               <div className="flex items-center gap-4">
-                <div className="flex flex-col gap-0.5 mr-1">
-                  <button onClick={() => moveUp(i)} className="text-[#ccc] hover:text-[#666] transition-colors" disabled={i === 0}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 15l-6-6-6 6" /></svg>
-                  </button>
-                  <button onClick={() => moveDown(i)} className="text-[#ccc] hover:text-[#666] transition-colors" disabled={i === fields.length - 1}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M6 9l6 6 6-6" /></svg>
-                  </button>
-                </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-[14px] font-medium text-[#1a1a1a]">{f.name}</span>
                     <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#f0f0f0] text-[#888] font-mono">{f.type}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                      f.tier === 0 ? 'bg-[#e0e7ff] text-[#4338ca]' :
                       f.tier === 1 ? 'bg-[#dbeafe] text-[#1e40af]' :
                       f.tier === 2 ? 'bg-[#fef3c7] text-[#92400e]' :
                       'bg-[#f0f0f0] text-[#888]'
-                    }`}>T{f.tier}</span>
+                    }`}>{f.tier === 0 ? 'Auto' : `T${f.tier}`}</span>
+                    {f.importance && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${IMPORTANCE_COLORS[f.importance]}`}>
+                        {f.importance}
+                      </span>
+                    )}
                     {f.required && <span className="text-[10px] text-[#dc2626] font-medium">Required</span>}
                   </div>
                   {f.description && <p className="text-[12px] text-[#999] mt-0.5 truncate">{f.description}</p>}
@@ -150,7 +141,7 @@ function FieldForm({
 }) {
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-5 gap-3">
         <div>
           <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Name</label>
           <input
@@ -174,10 +165,20 @@ function FieldForm({
           <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Tier</label>
           <select
             value={draft.tier}
-            onChange={e => setDraft({ ...draft, tier: Number(e.target.value) as 1 | 2 | 3 })}
+            onChange={e => setDraft({ ...draft, tier: Number(e.target.value) as 0 | 1 | 2 | 3 })}
             className="mt-1 w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 focus:border-[#007aff] bg-white"
           >
-            {TIERS.map(t => <option key={t} value={t}>Tier {t}</option>)}
+            {TIERS.map(t => <option key={t} value={t}>{TIER_LABELS[t]}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Importance</label>
+          <select
+            value={draft.importance || 'E'}
+            onChange={e => setDraft({ ...draft, importance: e.target.value as 'P' | 'S' | 'E' | 'A' })}
+            className="mt-1 w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 focus:border-[#007aff] bg-white"
+          >
+            {IMPORTANCE_OPTIONS.map(imp => <option key={imp} value={imp}>{IMPORTANCE_LABELS[imp]} ({imp})</option>)}
           </select>
         </div>
         <div className="flex items-end pb-1">
