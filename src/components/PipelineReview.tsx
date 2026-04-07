@@ -1898,11 +1898,12 @@ export default function PipelineReview() {
         ) : listView === 'categories' ? (
           selectedCategoryId ? (
             <div>
-              {/* Back button + project > category breadcrumb */}
+              {/* Back button + category breadcrumb */}
               <div className="px-6 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-2">
                 <button
                   onClick={() => {
                     setSelectedCategoryId(null);
+                    setSelectedProject(null);
                     setCurrentPage(1);
                   }}
                   className="flex items-center gap-1.5 text-[13px] text-[#555] hover:text-[#1a1a1a] transition-colors"
@@ -1912,10 +1913,6 @@ export default function PipelineReview() {
                   </svg>
                   Back
                 </button>
-                <span className="text-[12px] text-[#999]">/</span>
-                <span className="text-[13px] text-[#999]">
-                  {selectedProject === '__company_wide' ? 'Company-Wide' : selectedProject === '__no_project' ? 'No Project' : selectedProject}
-                </span>
                 <span className="text-[12px] text-[#999]">/</span>
                 <span className="text-[14px] font-semibold text-[#1a1a1a]">
                   {selectedCategoryId === '__uncategorized'
@@ -1928,7 +1925,7 @@ export default function PipelineReview() {
                   </span>
                 )}
               </div>
-              {/* Document list for this project + category */}
+              {/* Document list for this category */}
               <div className="divide-y divide-[#f0f0f0]">
                 <div className="px-6 py-2.5 flex items-center gap-4 bg-[#f7f7f5] border-b border-[#e8e8e8] text-[11px] font-semibold text-[#999] uppercase tracking-wider">
                   <div className="w-10 flex-shrink-0">Type</div>
@@ -1955,23 +1952,12 @@ export default function PipelineReview() {
                 ))}
               </div>
             </div>
-          ) : selectedProject ? (
-            <ProjectCategoryList
-              projectName={selectedProject}
-              categories={categories}
-              projectCategoryCounts={globalStats?.projectCategoryCounts?.[selectedProject] || {}}
-              projectUncategorizedCount={globalStats?.projectUncategorizedCounts?.[selectedProject] || 0}
-              onSelectCategory={(catId) => { setSelectedCategoryId(catId); setCurrentPage(1); }}
-              onBack={() => { setSelectedProject(null); setCurrentPage(1); }}
-            />
           ) : (
-            <ProjectFolderList
-              projectTotalCounts={globalStats?.projectTotalCounts || {}}
-              companyWideTotalCount={globalStats?.companyWideTotalCount || 0}
-              onSelectProject={(proj) => {
-                setSelectedProject(proj);
-                setCurrentPage(1);
-              }}
+            <TopLevelCategoryList
+              categories={categories}
+              categoryCounts={globalStats?.categoryCounts || {}}
+              uncategorizedCount={globalStats?.uncategorizedCount || 0}
+              onSelectCategory={(catId) => { setSelectedCategoryId(catId); setCurrentPage(1); }}
             />
           )
         ) : listView === 'drive' ? (
@@ -2625,6 +2611,119 @@ const PRIORITY_BORDER_COLORS_LIST: Record<string, string> = {
   P2: 'border-l-amber-500',
   P3: 'border-l-gray-300',
 };
+
+const CATEGORY_ICONS: Record<string, string> = {
+  '01_contract': 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
+  '06_job_cost_reports': 'M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z',
+};
+
+function TopLevelCategoryList({
+  categories,
+  categoryCounts,
+  uncategorizedCount,
+  onSelectCategory,
+}: {
+  categories: CategoryInfo[];
+  categoryCounts: Record<string, number>;
+  uncategorizedCount: number;
+  onSelectCategory: (catId: string) => void;
+}) {
+  const COMPANY_WIDE_KEYS = new Set(['20_financials', '21_bid_log', '22_gc_contacts', '23_employee_roster', '24_insurance_and_bonding', '25_equipment']);
+  const projectCategories = categories.filter(c => !COMPANY_WIDE_KEYS.has(c.key)).sort((a, b) => a.sort_order - b.sort_order);
+  const companyCategories = categories.filter(c => COMPANY_WIDE_KEYS.has(c.key)).sort((a, b) => a.sort_order - b.sort_order);
+  const companyWideTotal = companyCategories.reduce((sum, c) => sum + (categoryCounts[c.id] || 0), 0);
+
+  return (
+    <div className="divide-y divide-[#e8e8e8]">
+      {projectCategories.map((cat) => {
+        const count = categoryCounts[cat.id] || 0;
+        return (
+          <button
+            key={cat.id}
+            onClick={() => onSelectCategory(cat.id)}
+            className={`w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 ${PRIORITY_BORDER_COLORS_LIST[cat.priority] || 'border-l-gray-300'}`}
+          >
+            <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[12px] ${
+              cat.priority === 'P1' ? 'bg-blue-100 text-blue-600'
+                : cat.priority === 'P2' ? 'bg-amber-100 text-amber-600'
+                : 'bg-gray-100 text-gray-500'
+            }`}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d={CATEGORY_ICONS[cat.key] || 'M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z'} />
+              </svg>
+            </div>
+            <span className="flex-1 text-[14px] font-medium text-[#1a1a1a]">{cat.label}</span>
+            {count > 0 && (
+              <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{count}</span>
+            )}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+              <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
+        );
+      })}
+
+      {uncategorizedCount > 0 && (
+        <button
+          onClick={() => onSelectCategory('__uncategorized')}
+          className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-gray-200"
+        >
+          <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-gray-100 text-gray-400 text-[12px]">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+          <span className="flex-1 text-[14px] font-medium text-[#777]">Uncategorized</span>
+          <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{uncategorizedCount}</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+        </button>
+      )}
+
+      {companyWideTotal > 0 && (
+        <>
+          <div className="px-6 py-2 bg-[#f7f7f5] text-[11px] font-semibold text-[#999] uppercase tracking-wider">
+            Company-Wide
+          </div>
+          {companyCategories.map((cat) => {
+            const count = categoryCounts[cat.id] || 0;
+            if (count === 0) return null;
+            return (
+              <button
+                key={cat.id}
+                onClick={() => onSelectCategory(cat.id)}
+                className="w-full px-6 py-3 flex items-center gap-3 hover:bg-[#f7f7f5] transition-colors text-left border-l-3 border-l-amber-400"
+              >
+                <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-amber-100 text-amber-600 text-[12px]">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
+                  </svg>
+                </div>
+                <span className="flex-1 text-[14px] font-medium text-[#1a1a1a]">{cat.label}</span>
+                <span className="text-[12px] text-[#999] bg-[#f0f0f0] px-2.5 py-0.5 rounded-full font-medium">{count}</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" strokeLinecap="round">
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </button>
+            );
+          })}
+        </>
+      )}
+
+      {Object.values(categoryCounts).every(c => c === 0) && uncategorizedCount === 0 && (
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <p className="text-[14px] font-medium text-[#1a1a1a]">No categorized documents yet</p>
+          <p className="text-[13px] text-[#999] mt-1">
+            Documents will be categorized automatically during ingestion
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ProjectFolderList({
   projectTotalCounts,
