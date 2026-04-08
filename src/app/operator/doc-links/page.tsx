@@ -17,6 +17,38 @@ interface LinkType {
   created_at: string;
 }
 
+type LinkStatus = 'complete' | 'partial' | 'missing' | 'not_applicable';
+
+interface LinkTypeCoverage {
+  linkTypeKey: string;
+  displayName: string;
+  sourceSkill: string;
+  targetSkill: string;
+  sourceDocs: number;
+  targetDocs: number;
+  actualLinks: number;
+  avgConfidence: number;
+  status: LinkStatus;
+}
+
+interface ChainCoverage {
+  chainName: string;
+  linkTypes: LinkTypeCoverage[];
+  overallStatus: LinkStatus;
+  completionPct: number;
+}
+
+interface ProjectCoverage {
+  projectId: string;
+  projectName: string;
+  docCount: number;
+  skillBreakdown: Record<string, number>;
+  chains: ChainCoverage[];
+  overallCompletionPct: number;
+}
+
+type ActiveTab = 'types' | 'chains';
+
 const SKILL_LABELS: Record<string, string> = {
   rfi: 'RFI',
   change_order: 'Change Order',
@@ -60,6 +92,7 @@ function OperatorNav() {
   const tabs = [
     { label: 'Skills', href: '/operator/skills' },
     { label: 'Doc Links', href: '/operator/doc-links' },
+    { label: 'Chat Tools', href: '/operator/chat-tools' },
   ];
 
   return (
@@ -96,7 +129,307 @@ function OperatorNav() {
 
 type GroupKey = string;
 
+const STATUS_BADGE: Record<LinkStatus, { bg: string; text: string; label: string }> = {
+  complete: { bg: 'bg-[#dcfce7]', text: 'text-[#166534]', label: 'Complete' },
+  partial: { bg: 'bg-[#fef3c7]', text: 'text-[#92400e]', label: 'Partial' },
+  missing: { bg: 'bg-[#fecaca]', text: 'text-[#991b1b]', label: 'Missing' },
+  not_applicable: { bg: 'bg-[#f0f0f0]', text: 'text-[#999]', label: 'N/A' },
+};
+
+function StatusBadge({ status }: { status: LinkStatus }) {
+  const s = STATUS_BADGE[status];
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${s.bg} ${s.text}`}>
+      {s.label}
+    </span>
+  );
+}
+
+function CompletionRing({ pct }: { pct: number }) {
+  const r = 18;
+  const circ = 2 * Math.PI * r;
+  const offset = circ - (pct / 100) * circ;
+  const color = pct >= 75 ? '#16a34a' : pct >= 25 ? '#d97706' : pct > 0 ? '#dc2626' : '#e0e0e0';
+  return (
+    <svg width="48" height="48" className="flex-shrink-0">
+      <circle cx="24" cy="24" r={r} fill="none" stroke="#e8e8e8" strokeWidth="3" />
+      <circle cx="24" cy="24" r={r} fill="none" stroke={color} strokeWidth="3"
+        strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round"
+        transform="rotate(-90 24 24)" />
+      <text x="24" y="24" textAnchor="middle" dominantBaseline="central"
+        className="text-[10px] font-semibold" fill="#1a1a1a">
+        {pct}%
+      </text>
+    </svg>
+  );
+}
+
+function ChainsTab() {
+  const [projects, setProjects] = useState<ProjectCoverage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedProject, setSelectedProject] = useState<string>('all');
+  const [expandedChain, setExpandedChain] = useState<string | null>(null);
+  const [linking, setLinking] = useState(false);
+  const [linkResult, setLinkResult] = useState<string | null>(null);
+
+  const fetchCoverage = useCallback(async (projId?: string) => {
+    setLoading(true);
+    try {
+      const url = projId && projId !== 'all'
+        ? `/api/doc-links/coverage?projectId=${projId}`
+        : '/api/doc-links/coverage';
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setProjects(data.projects || []);
+      }
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchCoverage(selectedProject === 'all' ? undefined : selectedProject);
+  }, [fetchCoverage, selectedProject]);
+
+  const runLinking = async () => {
+    setLinking(true);
+    setLinkResult(null);
+    try {
+      const body = selectedProject !== 'all' ? { projectId: selectedProject } : {};
+      const res = await fetch('/api/pipeline/link-docs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setLinkResult(`Created ${data.linksCreated} links, skipped ${data.linksSkipped} duplicates`);
+        fetchCoverage(selectedProject === 'all' ? undefined : selectedProject);
+      } else {
+        setLinkResult(`Error: ${data.error || 'Linking failed'}`);
+      }
+    } catch {
+      setLinkResult('Error: Network request failed');
+    }
+    setLinking(false);
+  };
+
+  const currentProject = selectedProject !== 'all'
+    ? projects.find(p => p.projectId === selectedProject)
+    : null;
+
+  const chainsToShow = currentProject?.chains || [];
+
+  return (
+    <div>
+      {/* Controls row */}
+      <div className="flex items-center gap-3 mb-6">
+        <select
+          value={selectedProject}
+          onChange={e => { setSelectedProject(e.target.value); setExpandedChain(null); }}
+          className="px-3 py-1.5 rounded-lg border border-[#e0e0e0] text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#007aff]/20"
+        >
+          <option value="all">All Projects ({projects.length})</option>
+          {projects.map(p => (
+            <option key={p.projectId} value={p.projectId}>
+              {p.projectName} ({p.docCount} docs)
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={runLinking}
+          disabled={linking}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a1a1a] text-white hover:bg-[#333] disabled:opacity-50 transition-colors"
+        >
+          {linking ? 'Running...' : 'Run Linking'}
+        </button>
+        {linkResult && (
+          <span className={`text-[12px] ${linkResult.startsWith('Error') ? 'text-[#dc2626]' : 'text-[#16a34a]'}`}>
+            {linkResult}
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20 text-[14px] text-[#999]">
+          <svg className="animate-spin w-4 h-4 mr-2" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+            <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          Loading chain coverage...
+        </div>
+      ) : selectedProject === 'all' ? (
+        <PortfolioTable projects={projects} onSelectProject={setSelectedProject} />
+      ) : currentProject ? (
+        <>
+          {/* Skill breakdown bar */}
+          <div className="border border-[#e8e8e8] rounded-lg p-4 mb-6 bg-[#fafafa]">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[13px] font-semibold text-[#1a1a1a]">{currentProject.projectName}</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#dbeafe] text-[#1e40af] font-medium">
+                {currentProject.docCount} documents
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#dcfce7] text-[#166534] font-medium">
+                {currentProject.overallCompletionPct}% chain coverage
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {Object.entries(currentProject.skillBreakdown).map(([skill, count]) => (
+                <span key={skill} className="text-[11px] px-2 py-1 rounded bg-white border border-[#e8e8e8] text-[#666]">
+                  {SKILL_LABELS[skill] || skill}: <span className="font-mono font-medium text-[#1a1a1a]">{count}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Chain summary cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+            {chainsToShow.map(chain => (
+              <button
+                key={chain.chainName}
+                onClick={() => setExpandedChain(expandedChain === chain.chainName ? null : chain.chainName)}
+                className={`text-left border rounded-lg p-4 transition-colors ${
+                  expandedChain === chain.chainName
+                    ? 'border-[#1a1a1a] bg-[#fafafa]'
+                    : 'border-[#e8e8e8] bg-white hover:border-[#ccc]'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <CompletionRing pct={chain.completionPct} />
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-semibold text-[#1a1a1a] truncate">{chain.chainName}</div>
+                    <div className="text-[11px] text-[#999] mt-0.5">
+                      {chain.linkTypes.filter(lt => lt.status !== 'not_applicable').length} of {chain.linkTypes.length} link types active
+                    </div>
+                    <div className="mt-1"><StatusBadge status={chain.overallStatus} /></div>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Expanded chain detail */}
+          {expandedChain && (() => {
+            const chain = chainsToShow.find(c => c.chainName === expandedChain);
+            if (!chain) return null;
+            return (
+              <div className="border border-[#e8e8e8] rounded-lg overflow-hidden mb-6">
+                <div className="bg-[#fafafa] border-b border-[#e8e8e8] px-4 py-2">
+                  <span className="text-[13px] font-semibold text-[#1a1a1a]">{chain.chainName}</span>
+                </div>
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="bg-[#fafafa] border-b border-[#e8e8e8]">
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Source</th>
+                      <th className="text-center px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[40px]" />
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Target</th>
+                      <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Src Docs</th>
+                      <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Tgt Docs</th>
+                      <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Links</th>
+                      <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Avg Conf</th>
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chain.linkTypes.map(lt => (
+                      <tr key={lt.linkTypeKey} className={`border-b border-[#f0f0f0] last:border-b-0 ${
+                        lt.status === 'missing' ? 'bg-[#fff8f8]' : ''
+                      }`}>
+                        <td className="px-3 py-2 font-medium text-[#1a1a1a] whitespace-nowrap">
+                          {SKILL_LABELS[lt.sourceSkill] || lt.sourceSkill}
+                        </td>
+                        <td className="px-2 py-2 text-center text-[#ccc]">→</td>
+                        <td className="px-3 py-2 font-medium text-[#1a1a1a] whitespace-nowrap">
+                          {SKILL_LABELS[lt.targetSkill] || lt.targetSkill}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-[#666]">{lt.sourceDocs}</td>
+                        <td className="px-3 py-2 text-right font-mono text-[#666]">{lt.targetDocs}</td>
+                        <td className="px-3 py-2 text-right font-mono text-[#666]">{lt.actualLinks}</td>
+                        <td className="px-3 py-2 text-right font-mono text-[#666]">
+                          {lt.avgConfidence > 0 ? lt.avgConfidence.toFixed(2) : '—'}
+                        </td>
+                        <td className="px-3 py-2">
+                          <StatusBadge status={lt.status} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {chain.linkTypes.some(lt => lt.status === 'missing') && (
+                  <div className="border-t border-[#e8e8e8] px-4 py-3 bg-[#fff8f8]">
+                    {chain.linkTypes.filter(lt => lt.status === 'missing').map(lt => (
+                      <p key={lt.linkTypeKey} className="text-[11px] text-[#991b1b] mb-1 last:mb-0">
+                        ⚠ 0 {SKILL_LABELS[lt.sourceSkill] || lt.sourceSkill} → {SKILL_LABELS[lt.targetSkill] || lt.targetSkill} links found.
+                        {' '}{lt.sourceDocs} source docs and {lt.targetDocs} target docs exist — run linking to detect connections.
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </>
+      ) : (
+        <div className="text-center py-20 text-[14px] text-[#999]">No project data found.</div>
+      )}
+    </div>
+  );
+}
+
+function PortfolioTable({ projects, onSelectProject }: { projects: ProjectCoverage[]; onSelectProject: (id: string) => void }) {
+  if (projects.length === 0) {
+    return <div className="text-center py-20 text-[14px] text-[#999]">No projects found.</div>;
+  }
+
+  function chainPct(proj: ProjectCoverage, chainName: string): number {
+    const chain = proj.chains.find(c => c.chainName === chainName);
+    return chain?.completionPct ?? 0;
+  }
+
+  return (
+    <div className="border border-[#e8e8e8] rounded-lg overflow-hidden">
+      <table className="w-full text-[12px]">
+        <thead>
+          <tr className="bg-[#fafafa] border-b border-[#e8e8e8]">
+            <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Project</th>
+            <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Docs</th>
+            <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Revenue</th>
+            <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Feedback</th>
+            <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">JCR Hub</th>
+            <th className="text-right px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Overall</th>
+          </tr>
+        </thead>
+        <tbody>
+          {projects.map(proj => (
+            <tr
+              key={proj.projectId}
+              onClick={() => onSelectProject(proj.projectId)}
+              className="border-b border-[#f0f0f0] last:border-b-0 hover:bg-[#fafafa] cursor-pointer transition-colors"
+            >
+              <td className="px-3 py-2 font-medium text-[#1a1a1a]">{proj.projectName}</td>
+              <td className="px-3 py-2 text-right font-mono text-[#666]">{proj.docCount}</td>
+              <td className="px-3 py-2 text-right font-mono text-[#666]">{chainPct(proj, 'Revenue Pipeline')}%</td>
+              <td className="px-3 py-2 text-right font-mono text-[#666]">{chainPct(proj, 'Estimating Feedback')}%</td>
+              <td className="px-3 py-2 text-right font-mono text-[#666]">{chainPct(proj, 'JCR Hub')}%</td>
+              <td className="px-3 py-2 text-right">
+                <span className={`font-mono font-medium ${
+                  proj.overallCompletionPct >= 75 ? 'text-[#16a34a]' :
+                  proj.overallCompletionPct >= 25 ? 'text-[#d97706]' :
+                  proj.overallCompletionPct > 0 ? 'text-[#dc2626]' : 'text-[#999]'
+                }`}>
+                  {proj.overallCompletionPct}%
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function DocLinksPage() {
+  const [activeTab, setActiveTab] = useState<ActiveTab>('types');
   const [linkTypes, setLinkTypes] = useState<LinkType[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
@@ -152,114 +485,146 @@ export default function DocLinksPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <select
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-              className="px-3 py-1.5 rounded-lg border border-[#e0e0e0] text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#007aff]/20"
-            >
-              <option value="all">All Skills ({linkTypes.length})</option>
-              {skills.map(s => (
-                <option key={s} value={s}>
-                  {SKILL_LABELS[s] || s} ({linkTypes.filter(lt => lt.source_skill === s || lt.target_skill === s).length})
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* JCR Hub Summary */}
-        <div className="border border-[#e8e8e8] rounded-lg p-4 mb-6 bg-[#fafafa]">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-[13px] font-semibold text-[#1a1a1a]">JCR Hub</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#dbeafe] text-[#1e40af] font-medium">
-              {jcrLinks.length} connections
-            </span>
-          </div>
-          <p className="text-[12px] text-[#999] mb-3">
-            The Job Cost Report is the anchor document. These relationships power the coverage analysis.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {jcrLinks.map(lt => (
-              <span
-                key={lt.id}
-                className="text-[11px] px-2 py-1 rounded bg-white border border-[#e8e8e8] text-[#666]"
+            {activeTab === 'types' && (
+              <select
+                value={filter}
+                onChange={e => setFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-[#e0e0e0] text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#007aff]/20"
               >
-                {SKILL_LABELS[lt.source_skill] || lt.source_skill} → {SKILL_LABELS[lt.target_skill] || lt.target_skill}
-              </span>
-            ))}
+                <option value="all">All Skills ({linkTypes.length})</option>
+                {skills.map(s => (
+                  <option key={s} value={s}>
+                    {SKILL_LABELS[s] || s} ({linkTypes.filter(lt => lt.source_skill === s || lt.target_skill === s).length})
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center py-20 text-[14px] text-[#999]">
-            <svg className="animate-spin w-4 h-4 mr-2" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
-              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-            </svg>
-            Loading relationship types...
-          </div>
-        ) : (
-          <div className="border border-[#e8e8e8] rounded-lg overflow-hidden">
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr className="bg-[#fafafa] border-b border-[#e8e8e8]">
-                  <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[60px]">Active</th>
-                  <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Source</th>
-                  <th className="text-center px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[40px]" />
-                  <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Target</th>
-                  <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Relationship</th>
-                  <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Match Fields</th>
-                  <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(grouped).map(([groupKey, items]) => (
-                  items.map((lt, idx) => (
-                    <tr
-                      key={lt.id}
-                      className={`border-b border-[#f0f0f0] last:border-b-0 hover:bg-[#fafafa] transition-colors ${
-                        !lt.is_active ? 'opacity-40' : ''
-                      }`}
-                    >
-                      <td className="px-3 py-1.5 text-center">
-                        <button
-                          onClick={() => toggleActive(lt)}
-                          className={`w-3.5 h-3.5 rounded-full border-2 ${
-                            lt.is_active ? 'bg-[#16a34a] border-[#16a34a]' : 'bg-white border-[#ddd]'
-                          }`}
-                          title={lt.is_active ? 'Active — click to disable' : 'Inactive — click to enable'}
-                        />
-                      </td>
-                      <td className="px-2 py-1.5 font-medium text-[#1a1a1a] whitespace-nowrap">
-                        {SKILL_LABELS[lt.source_skill] || lt.source_skill}
-                      </td>
-                      <td className="px-2 py-1.5 text-center text-[#ccc]">→</td>
-                      <td className="px-2 py-1.5 font-medium text-[#1a1a1a] whitespace-nowrap">
-                        {SKILL_LABELS[lt.target_skill] || lt.target_skill}
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                          RELATIONSHIP_COLORS[lt.relationship] || 'bg-[#f0f0f0] text-[#666]'
-                        }`}>
-                          {lt.relationship}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1.5 text-[#888]">
-                        <div className="flex flex-wrap gap-1">
-                          {lt.match_fields.map((f: string) => (
-                            <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-[#f5f5f5] text-[#888] font-mono">
-                              {f}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-2 py-1.5 text-[#999] max-w-[280px] truncate">{lt.description}</td>
-                    </tr>
-                  ))
+        {/* Tab switcher */}
+        <div className="flex items-center gap-1 mb-6 border-b border-[#e8e8e8]">
+          <button
+            onClick={() => setActiveTab('types')}
+            className={`px-4 py-2 text-[13px] font-medium border-b-2 transition-colors -mb-px ${
+              activeTab === 'types'
+                ? 'border-[#1a1a1a] text-[#1a1a1a]'
+                : 'border-transparent text-[#999] hover:text-[#666]'
+            }`}
+          >
+            Types
+          </button>
+          <button
+            onClick={() => setActiveTab('chains')}
+            className={`px-4 py-2 text-[13px] font-medium border-b-2 transition-colors -mb-px ${
+              activeTab === 'chains'
+                ? 'border-[#1a1a1a] text-[#1a1a1a]'
+                : 'border-transparent text-[#999] hover:text-[#666]'
+            }`}
+          >
+            Chains
+          </button>
+        </div>
+
+        {activeTab === 'types' ? (
+          <>
+            {/* JCR Hub Summary */}
+            <div className="border border-[#e8e8e8] rounded-lg p-4 mb-6 bg-[#fafafa]">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[13px] font-semibold text-[#1a1a1a]">JCR Hub</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#dbeafe] text-[#1e40af] font-medium">
+                  {jcrLinks.length} connections
+                </span>
+              </div>
+              <p className="text-[12px] text-[#999] mb-3">
+                The Job Cost Report is the anchor document. These relationships power the coverage analysis.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {jcrLinks.map(lt => (
+                  <span
+                    key={lt.id}
+                    className="text-[11px] px-2 py-1 rounded bg-white border border-[#e8e8e8] text-[#666]"
+                  >
+                    {SKILL_LABELS[lt.source_skill] || lt.source_skill} → {SKILL_LABELS[lt.target_skill] || lt.target_skill}
+                  </span>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="flex items-center justify-center py-20 text-[14px] text-[#999]">
+                <svg className="animate-spin w-4 h-4 mr-2" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                  <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                </svg>
+                Loading relationship types...
+              </div>
+            ) : (
+              <div className="border border-[#e8e8e8] rounded-lg overflow-hidden">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="bg-[#fafafa] border-b border-[#e8e8e8]">
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[60px]">Active</th>
+                      <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Source</th>
+                      <th className="text-center px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[40px]" />
+                      <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Target</th>
+                      <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Relationship</th>
+                      <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Match Fields</th>
+                      <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(grouped).map(([groupKey, items]) => (
+                      items.map((lt) => (
+                        <tr
+                          key={lt.id}
+                          className={`border-b border-[#f0f0f0] last:border-b-0 hover:bg-[#fafafa] transition-colors ${
+                            !lt.is_active ? 'opacity-40' : ''
+                          }`}
+                        >
+                          <td className="px-3 py-1.5 text-center">
+                            <button
+                              onClick={() => toggleActive(lt)}
+                              className={`w-3.5 h-3.5 rounded-full border-2 ${
+                                lt.is_active ? 'bg-[#16a34a] border-[#16a34a]' : 'bg-white border-[#ddd]'
+                              }`}
+                              title={lt.is_active ? 'Active — click to disable' : 'Inactive — click to enable'}
+                            />
+                          </td>
+                          <td className="px-2 py-1.5 font-medium text-[#1a1a1a] whitespace-nowrap">
+                            {SKILL_LABELS[lt.source_skill] || lt.source_skill}
+                          </td>
+                          <td className="px-2 py-1.5 text-center text-[#ccc]">→</td>
+                          <td className="px-2 py-1.5 font-medium text-[#1a1a1a] whitespace-nowrap">
+                            {SKILL_LABELS[lt.target_skill] || lt.target_skill}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                              RELATIONSHIP_COLORS[lt.relationship] || 'bg-[#f0f0f0] text-[#666]'
+                            }`}>
+                              {lt.relationship}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 text-[#888]">
+                            <div className="flex flex-wrap gap-1">
+                              {lt.match_fields.map((f: string) => (
+                                <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-[#f5f5f5] text-[#888] font-mono">
+                                  {f}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5 text-[#999] max-w-[280px] truncate">{lt.description}</td>
+                        </tr>
+                      ))
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        ) : (
+          <ChainsTab />
         )}
       </div>
     </div>
