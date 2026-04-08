@@ -25,7 +25,7 @@ export interface CoverageMatch {
   docId: string;
   fileName: string;
   skillId: string;
-  matchType: 'cost_code' | 'description' | 'amount' | 'category';
+  matchType: 'cost_code' | 'description';
   matchScore: number;
   matchedValue: string;
 }
@@ -82,7 +82,8 @@ function matchCostCode(docFields: Record<string, { value: string | number | null
 
   const costCodeAliases = [
     'cost code', 'cost_code', 'line item number', 'line_item_number',
-    'item number', 'item_number', 'code', 'cost code number',
+    'item number', 'item_number', 'cost code number', 'account code',
+    'budget code', 'job cost code',
   ];
 
   for (const [key, val] of Object.entries(docFields)) {
@@ -138,81 +139,6 @@ function matchDescription(
       bestScore = jaccard;
       bestField = key;
       bestValue = String(val.value);
-    }
-  }
-
-  return { score: bestScore, field: bestField, value: bestValue };
-}
-
-function matchAmount(
-  docFields: Record<string, { value: string | number | null; confidence: number }>,
-  budget: number | null,
-  jtdCost: number | null
-): { score: number; field: string; value: string } {
-  if (budget == null && jtdCost == null) return { score: 0, field: '', value: '' };
-
-  const amountAliases = [
-    'amount', 'total', 'cost', 'budget', 'value', 'price', 'sum',
-    'contract', 'approved', 'billed',
-  ];
-
-  let bestScore = 0;
-  let bestField = '';
-  let bestValue = '';
-
-  for (const [key, val] of Object.entries(docFields)) {
-    if (val.value == null) continue;
-    const keyLower = key.toLowerCase();
-    const isAmountField = amountAliases.some(a => keyLower.includes(a));
-    if (!isAmountField) continue;
-
-    const docAmount = extractNumber(val.value);
-    if (docAmount == null || docAmount === 0) continue;
-
-    for (const target of [budget, jtdCost].filter((v): v is number => v != null && v !== 0)) {
-      const ratio = Math.min(docAmount, target) / Math.max(docAmount, target);
-      if (ratio > 0.9 && ratio > bestScore) {
-        bestScore = ratio;
-        bestField = key;
-        bestValue = String(val.value);
-      }
-    }
-  }
-
-  return { score: bestScore, field: bestField, value: bestValue };
-}
-
-function matchCategory(
-  docFields: Record<string, { value: string | number | null; confidence: number }>,
-  costCategory: string | null,
-  workPhase: string | null
-): { score: number; field: string; value: string } {
-  if (!costCategory && !workPhase) return { score: 0, field: '', value: '' };
-
-  const targets = [costCategory, workPhase].filter(Boolean).map(t => normalizeText(t));
-  let bestScore = 0;
-  let bestField = '';
-  let bestValue = '';
-
-  const categoryAliases = [
-    'category', 'type', 'trade', 'scope', 'division', 'phase',
-    'work type', 'classification',
-  ];
-
-  for (const [key, val] of Object.entries(docFields)) {
-    if (val.value == null) continue;
-    const keyLower = key.toLowerCase();
-    const isCatField = categoryAliases.some(a => keyLower.includes(a));
-    if (!isCatField) continue;
-
-    const valNorm = normalizeText(val.value);
-    for (const target of targets) {
-      if (valNorm === target) {
-        if (1.0 > bestScore) { bestScore = 1.0; bestField = key; bestValue = String(val.value); }
-      } else if (valNorm.includes(target) || target.includes(valNorm)) {
-        const s = 0.7;
-        if (s > bestScore) { bestScore = s; bestField = key; bestValue = String(val.value); }
-      }
     }
   }
 
@@ -409,7 +335,7 @@ export async function runCoverageAnalysis(
       }
 
       const descMatch = matchDescription(doc.fields, li.description);
-      if (descMatch.score >= 0.4) {
+      if (descMatch.score >= 0.75) {
         matches.push({
           docId: doc.id,
           fileName: doc.fileName,
@@ -417,32 +343,6 @@ export async function runCoverageAnalysis(
           matchType: 'description',
           matchScore: descMatch.score,
           matchedValue: descMatch.value,
-        });
-        continue;
-      }
-
-      const amountMatch = matchAmount(doc.fields, li.revisedBudget, li.jtdCost);
-      if (amountMatch.score >= 0.9) {
-        matches.push({
-          docId: doc.id,
-          fileName: doc.fileName,
-          skillId: doc.skillId,
-          matchType: 'amount',
-          matchScore: amountMatch.score,
-          matchedValue: amountMatch.value,
-        });
-        continue;
-      }
-
-      const catMatch = matchCategory(doc.fields, li.costCategory, li.workPhase);
-      if (catMatch.score >= 0.7) {
-        matches.push({
-          docId: doc.id,
-          fileName: doc.fileName,
-          skillId: doc.skillId,
-          matchType: 'category',
-          matchScore: catMatch.score,
-          matchedValue: catMatch.value,
         });
       }
     }
@@ -458,11 +358,11 @@ export async function runCoverageAnalysis(
     uniqueMatches.sort((a, b) => b.matchScore - a.matchScore);
 
     const coverageScore = uniqueMatches.length > 0
-      ? Math.min(1.0, uniqueMatches.reduce((sum, m) => sum + m.matchScore, 0) / 3)
+      ? Math.max(...uniqueMatches.map(m => m.matchScore))
       : 0;
 
-    const status = coverageScore >= 0.7 ? 'covered'
-      : coverageScore > 0 ? 'partial'
+    const status = uniqueMatches.some(m => m.matchType === 'cost_code') ? 'covered'
+      : coverageScore >= 0.75 ? 'partial'
       : 'missing';
 
     coverageItems.push({ lineItem: li, matches: uniqueMatches, coverageScore, status });

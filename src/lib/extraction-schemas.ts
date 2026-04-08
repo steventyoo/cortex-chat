@@ -171,7 +171,8 @@ export function buildGeneralExtractionTool(): Anthropic.Messages.Tool {
           type: 'object',
           description:
             'All key-value pairs extracted from the document. Use descriptive snake_case keys. ' +
-            'Include parties, dates, amounts, identifiers, descriptions, scope items, and any other relevant data.',
+            'Include parties, dates, amounts, identifiers, descriptions, scope items, and any other relevant data. ' +
+            'IMPORTANT: If the document references any cost codes (3-digit numbers like 011, 039, 120 that map to budget line items), extract them into a field called "Cost Code".',
           additionalProperties: EXTRACTED_FIELD_JSON_SCHEMA,
         },
       },
