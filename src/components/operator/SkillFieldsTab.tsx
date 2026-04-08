@@ -135,7 +135,7 @@ export default function SkillFieldsTab({ fields, setFields, markDirty }: Props) 
                     {f.required && <span className="text-[#dc2626]">*</span>}
                   </td>
                   <td className="px-2 py-1.5 text-[#999] truncate max-w-[300px]">{f.description}</td>
-                  <td className="px-2 py-1.5 text-right whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                  <td className="px-2 py-1.5 text-right whitespace-nowrap">
                     <button onClick={() => startEdit(i)} className="text-[11px] text-[#007aff] hover:underline mr-2">Edit</button>
                     <button onClick={() => remove(i)} className="text-[11px] text-[#dc2626] hover:underline">Del</button>
                   </td>
