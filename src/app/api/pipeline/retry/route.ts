@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
       const result = await processDocument(payload);
       if (result.success) {
         console.log(`[retry] Direct processing complete for ${recordId}: status=${result.status}`);
-        return Response.json({ success: true, recordId, direct: true, ...result });
+        return Response.json({ ...result, recordId, direct: true });
       }
       throw new Error(result.error || 'Processing failed');
     } catch (directErr) {
