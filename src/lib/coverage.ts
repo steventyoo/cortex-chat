@@ -246,13 +246,20 @@ export async function runCoverageAnalysis(
     jcrQuery = jcrQuery.eq('project_id', projectId);
   }
 
-  const { data: jcrDocs } = await jcrQuery.limit(1);
+  const { data: jcrDocs } = await jcrQuery.limit(10);
 
   if (!jcrDocs || jcrDocs.length === 0) {
     return null;
   }
 
-  const jcrDoc = jcrDocs[0];
+  // Prefer the JCR that actually has multi-record line items
+  const jcrDoc = jcrDocs.reduce((best, doc) => {
+    const ed = doc.extracted_data as { records?: unknown[] } | null;
+    const bestEd = best.extracted_data as { records?: unknown[] } | null;
+    const docRecords = ed?.records?.length || 0;
+    const bestRecords = bestEd?.records?.length || 0;
+    return docRecords > bestRecords ? doc : best;
+  }, jcrDocs[0]);
   const jcrData = jcrDoc.extracted_data as {
     skillId: string;
     fields: Record<string, { value: string | number | null; confidence: number }>;
@@ -261,7 +268,7 @@ export async function runCoverageAnalysis(
 
   // Parse JCR header
   const projectName = String(jcrData.fields['Project Name / Description']?.value || 'Unknown');
-  const totalBudget = extractNumber(jcrData.fields['Total Revised Budget']?.value) || 0;
+  let totalBudget = extractNumber(jcrData.fields['Total Revised Budget']?.value) || 0;
   const totalJtdCost = extractNumber(jcrData.fields['Total Job-to-Date Cost']?.value) || 0;
 
   // Parse JCR line items — from records array or from extra_fields cost codes
@@ -344,6 +351,11 @@ export async function runCoverageAnalysis(
         });
       }
     }
+  }
+
+  // If header total budget wasn't extracted, sum from line items
+  if (totalBudget === 0 && lineItems.length > 0) {
+    totalBudget = lineItems.reduce((sum, li) => sum + (li.revisedBudget || 0), 0);
   }
 
   // Fetch all other documents in the org/project
