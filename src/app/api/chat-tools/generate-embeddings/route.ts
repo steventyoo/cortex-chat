@@ -1,11 +1,19 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { getSupabase, pushToExtractedRecords } from '@/lib/supabase';
-import { embedAndStoreForRecord } from '@/lib/embeddings';
+import { buildEmbeddingText, generateEmbeddingsBatch } from '@/lib/embeddings';
 import { ExtractionResult } from '@/lib/pipeline';
 import { getSkill } from '@/lib/skills';
 
-export const maxDuration = 120;
+export const maxDuration = 300;
+
+const EMBED_BATCH_SIZE = 50;
+
+interface PreparedRecord {
+  erRecordId: string;
+  embeddingText: string;
+  pipelineLogId: string;
+}
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
@@ -23,6 +31,10 @@ export async function POST(request: NextRequest) {
     }
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    return Response.json({ error: 'OPENAI_API_KEY is not configured' }, { status: 500 });
   }
 
   const orgId = session.orgId;
@@ -49,6 +61,8 @@ export async function POST(request: NextRequest) {
   let embedded = 0;
   let skipped = 0;
   const errors: string[] = [];
+
+  const prepared: PreparedRecord[] = [];
 
   for (const record of records) {
     try {
@@ -98,19 +112,48 @@ export async function POST(request: NextRequest) {
       }
 
       if (erRecordId) {
-        await embedAndStoreForRecord(
-          erRecordId,
-          extractedData.documentType,
-          singleFields,
-          record.source_text || undefined,
-        );
-        embedded++;
+        const text = buildEmbeddingText({
+          documentType: extractedData.documentType,
+          fields: singleFields,
+          rawText: record.source_text || undefined,
+        });
+        prepared.push({ erRecordId, embeddingText: text, pipelineLogId: record.id });
       } else {
         skipped++;
       }
     } catch (err) {
       errors.push(`Record ${record.id}: ${err instanceof Error ? err.message : String(err)}`);
       skipped++;
+    }
+  }
+
+  for (let i = 0; i < prepared.length; i += EMBED_BATCH_SIZE) {
+    const batch = prepared.slice(i, i + EMBED_BATCH_SIZE);
+    try {
+      const texts = batch.map(b => b.embeddingText);
+      const embeddings = await generateEmbeddingsBatch(texts);
+
+      const updates = batch.map((item, idx) => {
+        const embeddingStr = `[${embeddings[idx].join(',')}]`;
+        return sb
+          .from('extracted_records')
+          .update({ embedding: embeddingStr })
+          .eq('id', item.erRecordId);
+      });
+
+      const results = await Promise.all(updates);
+      for (let j = 0; j < results.length; j++) {
+        if (results[j].error) {
+          errors.push(`Store embedding for record ${batch[j].pipelineLogId}: ${results[j].error!.message}`);
+          skipped++;
+        } else {
+          embedded++;
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Batch ${i / EMBED_BATCH_SIZE}: ${msg}`);
+      skipped += batch.length;
     }
   }
 
