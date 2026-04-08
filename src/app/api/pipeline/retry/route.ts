@@ -2,6 +2,9 @@ import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
 import { getSupabase } from '@/lib/supabase';
 import { publishProcessJob, ProcessPayload } from '@/lib/qstash';
+import { processDocument } from '@/lib/process-document';
+
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
@@ -65,7 +68,6 @@ export async function POST(request: NextRequest) {
     validation_flags: null,
   }).eq('id', recordId);
 
-  const baseUrl = getBaseUrl(request);
   const payload: ProcessPayload = {
     recordId: String(record.id),
     orgId,
@@ -82,8 +84,9 @@ export async function POST(request: NextRequest) {
     } : {}),
   };
 
-  // Try QStash first; if rate-limited, fall back to direct processing
+  // Try QStash first; if rate-limited, process directly in this request
   try {
+    const baseUrl = getBaseUrl(request);
     console.log(`[retry] Re-queuing ${recordId}: storagePath=${storagePath} driveFileId=${driveFileId}`);
     const messageId = await publishProcessJob(payload, baseUrl);
     console.log(`[retry] Re-queued ${recordId} — qstash_msg=${messageId}`);
@@ -108,23 +111,15 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'Failed to queue retry' }, { status: 500 });
     }
 
-    // QStash rate-limited — process directly via internal fetch
+    // QStash rate-limited — process directly (no HTTP hop)
     console.log(`[retry] QStash rate-limited, processing ${recordId} directly`);
     try {
-      const processRes = await fetch(`${baseUrl}/api/pipeline/process`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-cortex-direct-retry': 'true',
-        },
-        body: JSON.stringify(payload),
-      });
-      const result = await processRes.json();
-      if (processRes.ok) {
+      const result = await processDocument(payload);
+      if (result.success) {
         console.log(`[retry] Direct processing complete for ${recordId}: status=${result.status}`);
         return Response.json({ success: true, recordId, direct: true, ...result });
       }
-      throw new Error(result.error || `Process returned ${processRes.status}`);
+      throw new Error(result.error || 'Processing failed');
     } catch (directErr) {
       console.error('[retry] Direct processing also failed:', directErr);
       await sb.from('pipeline_log').update({

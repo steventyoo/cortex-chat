@@ -353,14 +353,23 @@ export async function extractWithSkill(
 
   const maxTokens = skill.multiRecordConfig ? 32768 : 8192;
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-20250514',
+  // Use streaming for multi-record skills (large documents can exceed Anthropic's non-streaming timeout)
+  const messageParams = {
+    model: 'claude-sonnet-4-20250514' as const,
     max_tokens: maxTokens,
     system: skill.systemPrompt,
-    messages: [{ role: 'user', content: extractionPrompt }],
+    messages: [{ role: 'user' as const, content: extractionPrompt }],
     tools: [tool],
-    tool_choice: { type: 'tool', name: 'extract_document' },
-  });
+    tool_choice: { type: 'tool' as const, name: 'extract_document' },
+  };
+
+  let response;
+  if (skill.multiRecordConfig) {
+    const stream = client.messages.stream(messageParams);
+    response = await stream.finalMessage();
+  } else {
+    response = await client.messages.create(messageParams);
+  }
   const tExtract = Date.now() - tStep;
 
   const toolBlock = response.content.find(b => b.type === 'tool_use');
