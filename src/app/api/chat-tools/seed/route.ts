@@ -395,7 +395,170 @@ const UC_TOOLS_3 = [
   },
 ];
 
-const ALL_SEED_TOOLS = [...DEFAULT_TOOLS, ...UC_TOOLS, ...UC_TOOLS_2, ...UC_TOOLS_3];
+const SCAN_TOOLS = [
+  {
+    tool_name: 'project_overview',
+    display_name: 'Project Overview',
+    description: 'Get project metadata (name, address, trade, status, contract value) and a count of all document records by type. Use this when the user asks general questions about a project or wants to know what data is available.',
+    input_schema: {
+      properties: {},
+      required: [],
+    },
+    implementation_type: 'project_overview',
+    implementation_config: {},
+    sample_prompts: [
+      'Tell me about this project',
+      'What data do we have?',
+      'Project overview',
+    ],
+  },
+  {
+    tool_name: 'scan_sub_bids',
+    display_name: 'Scan All Sub Bids',
+    description: 'Retrieve ALL subcontractor bid records for comparison and aggregate analysis. Use this instead of search when the user wants to compare bids, rank vendors, or analyze pricing across all subs. Returns every sub_bid record, not just similar ones.',
+    input_schema: {
+      properties: {
+        skill_id: { type: 'string', description: 'Document type to scan', default: 'sub_bid' },
+      },
+      required: [],
+    },
+    implementation_type: 'skill_scan',
+    implementation_config: { skill_id: 'sub_bid', limit: 200 },
+    sample_prompts: [
+      'Compare all subcontractor bids',
+      'Who gives us the best pricing?',
+      'Rank our sub bids by trade',
+    ],
+  },
+  {
+    tool_name: 'scan_estimates',
+    display_name: 'Scan All Estimates',
+    description: 'Retrieve ALL estimate records for comparison and aggregate analysis. Use this instead of search when the user wants to compare estimates, analyze bid ranges, or summarize all bidding data.',
+    input_schema: {
+      properties: {
+        skill_id: { type: 'string', description: 'Document type to scan', default: 'estimate' },
+      },
+      required: [],
+    },
+    implementation_type: 'skill_scan',
+    implementation_config: { skill_id: 'estimate', limit: 200 },
+    sample_prompts: [
+      'Show me all our estimates',
+      'What size projects are in our estimates?',
+      'Summarize our bidding history',
+    ],
+  },
+  {
+    tool_name: 'scan_change_orders',
+    display_name: 'Scan All Change Orders',
+    description: 'Retrieve ALL change order records for comparison and aggregate analysis. Use this instead of search when the user wants totals, trends, status breakdowns, or comparisons across all COs.',
+    input_schema: {
+      properties: {
+        skill_id: { type: 'string', description: 'Document type to scan', default: 'change_order' },
+      },
+      required: [],
+    },
+    implementation_type: 'skill_scan',
+    implementation_config: { skill_id: 'change_order', limit: 200 },
+    sample_prompts: [
+      'Show me all change orders',
+      'What is the total CO exposure?',
+      'Break down change orders by status',
+    ],
+  },
+  {
+    tool_name: 'scan_submittals',
+    display_name: 'Scan All Submittals',
+    description: 'Retrieve ALL submittal records for comparison and aggregate analysis. Use this for submittal log reviews, status tracking, or approval pipeline analysis.',
+    input_schema: {
+      properties: {
+        skill_id: { type: 'string', description: 'Document type to scan', default: 'submittal' },
+      },
+      required: [],
+    },
+    implementation_type: 'skill_scan',
+    implementation_config: { skill_id: 'submittal', limit: 200 },
+    sample_prompts: [
+      'Show me all submittals',
+      'What is the submittal approval status?',
+      'List pending submittals',
+    ],
+  },
+  {
+    tool_name: 'scan_contracts',
+    display_name: 'Scan All Contracts',
+    description: 'Retrieve ALL contract records for review and analysis. Use for contract comparisons, clause analysis, or coverage review.',
+    input_schema: {
+      properties: {
+        skill_id: { type: 'string', description: 'Document type to scan', default: 'contract' },
+      },
+      required: [],
+    },
+    implementation_type: 'skill_scan',
+    implementation_config: { skill_id: 'contract', limit: 200 },
+    sample_prompts: [
+      'Show me all contracts',
+      'What are the key contract terms?',
+      'Compare contract values',
+    ],
+  },
+  {
+    tool_name: 'scan_daily_reports',
+    display_name: 'Scan All Daily Reports',
+    description: 'Retrieve ALL daily report records. Use for timeline analysis, weather impact tracking, or labor trend analysis across reporting periods.',
+    input_schema: {
+      properties: {
+        skill_id: { type: 'string', description: 'Document type to scan', default: 'daily_report' },
+      },
+      required: [],
+    },
+    implementation_type: 'skill_scan',
+    implementation_config: { skill_id: 'daily_report', limit: 200 },
+    sample_prompts: [
+      'Show me all daily reports',
+      'What does the daily log show?',
+      'Analyze daily report trends',
+    ],
+  },
+  {
+    tool_name: 'scan_job_cost_reports',
+    display_name: 'Scan All Job Cost Reports',
+    description: 'Retrieve ALL job cost report records. Use for budget analysis, cost code breakdowns, or variance tracking across all cost items.',
+    input_schema: {
+      properties: {
+        skill_id: { type: 'string', description: 'Document type to scan', default: 'job_cost_report' },
+      },
+      required: [],
+    },
+    implementation_type: 'skill_scan',
+    implementation_config: { skill_id: 'job_cost_report', limit: 200 },
+    sample_prompts: [
+      'Show me all job cost data',
+      'What are the biggest cost variances?',
+      'Break down costs by category',
+    ],
+  },
+  {
+    tool_name: 'scan_production_activity',
+    display_name: 'Scan All Production Activity',
+    description: 'Retrieve ALL production activity records. Use for labor analysis, productivity tracking, or crew performance comparison across all activities.',
+    input_schema: {
+      properties: {
+        skill_id: { type: 'string', description: 'Document type to scan', default: 'production_activity' },
+      },
+      required: [],
+    },
+    implementation_type: 'skill_scan',
+    implementation_config: { skill_id: 'production_activity', limit: 200 },
+    sample_prompts: [
+      'Show me all production data',
+      'How is labor productivity?',
+      'Compare crew performance',
+    ],
+  },
+];
+
+const ALL_SEED_TOOLS = [...DEFAULT_TOOLS, ...UC_TOOLS, ...UC_TOOLS_2, ...UC_TOOLS_3, ...SCAN_TOOLS];
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;

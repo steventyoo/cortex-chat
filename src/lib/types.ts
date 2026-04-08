@@ -1,8 +1,18 @@
+export interface ToolCallEntry {
+  name: string;
+  displayName?: string;
+  input: Record<string, unknown>;
+  result?: unknown;
+  resultCount?: number;
+  status: 'calling' | 'done' | 'error';
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  toolCalls?: ToolCallEntry[];
 }
 
 export interface ProjectData {
@@ -20,12 +30,6 @@ export interface ProjectData {
     fetchedAt: number;
     recordCounts: Record<string, number>;
   };
-}
-
-export interface AirtableRecord {
-  id: string;
-  fields: Record<string, unknown>;
-  createdTime: string;
 }
 
 export interface ProjectSummary {
@@ -49,7 +53,7 @@ export type HealthStatus = 'healthy' | 'warning' | 'critical';
 export interface ProjectHealth {
   projectId: string;
   projectName: string;
-  status: string; // Project Status from Airtable
+  status: string;
   contractValue: number;
   jobToDate: number;
   percentComplete: number;

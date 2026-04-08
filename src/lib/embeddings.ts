@@ -111,6 +111,9 @@ export async function searchByEmbedding(opts: {
   fields: Record<string, unknown>;
   similarity: number;
   project_id: string;
+  source_file?: string;
+  overall_confidence?: number;
+  status?: string;
 }>> {
   if (!process.env.OPENAI_API_KEY) {
     console.warn('OPENAI_API_KEY not set, cannot perform vector search');

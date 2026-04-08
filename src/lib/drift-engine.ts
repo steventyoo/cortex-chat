@@ -4,7 +4,7 @@
 
 // ─── Types ──────────────────────────────────────────────────
 
-// Generic record type (Airtable fields extracted)
+// Generic record type
 type FieldRecord = Record<string, unknown>;
 
 export interface DriftMetrics {

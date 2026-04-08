@@ -1,10 +1,9 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData, resolveProjectId, verifyProjectAccess } from '@/lib/supabase';
-import { CORTEX_SYSTEM_PROMPT, assembleContext, assemblePortfolioContext } from '@/lib/prompts';
+import { fetchProjectList, resolveProjectId, verifyProjectAccess, getSupabase } from '@/lib/supabase';
+import { CORTEX_SYSTEM_PROMPT } from '@/lib/prompts';
 import { streamChatWithTools, ChatEvent } from '@/lib/claude';
-import { ChatMessage, SourceRef } from '@/lib/types';
-import { searchByEmbedding } from '@/lib/embeddings';
+import { ChatMessage } from '@/lib/types';
 import { getLangfuse } from '@/lib/langfuse';
 import {
   fetchActiveTools,
@@ -17,55 +16,83 @@ import {
 
 export const maxDuration = 60;
 
-function buildSourceRegistry(
-  recordCounts: Record<string, number>,
-  ragResults: Array<{ id: string; document_type: string; skill_id: string; similarity: number; source_file?: string }>
-): SourceRef[] {
-  const sources: SourceRef[] = [];
-  let sIdx = 1;
-  let vIdx = 1;
-
-  const tableLabels: Record<string, string> = {
-    changeOrders: 'change_orders',
-    jobCosts: 'job_costs',
-    production: 'production',
-    designChanges: 'design_changes',
-    documentLinks: 'document_links',
-    documents: 'documents',
-    staffing: 'staffing',
+async function fetchProjectMeta(projectId: string): Promise<{
+  name: string;
+  address: string;
+  trade: string;
+  status: string;
+} | null> {
+  const sb = getSupabase();
+  const { data } = await sb
+    .from('projects')
+    .select('project_name, address, trade, project_status')
+    .eq('project_id', projectId)
+    .single();
+  if (!data) return null;
+  return {
+    name: String(data.project_name || ''),
+    address: String(data.address || ''),
+    trade: String(data.trade || ''),
+    status: String(data.project_status || ''),
   };
-
-  for (const [key, table] of Object.entries(tableLabels)) {
-    const count = recordCounts[key] || 0;
-    if (count > 0) {
-      sources.push({
-        tag: `S${sIdx++}`,
-        type: 'structured',
-        label: `${table} (${count} record${count !== 1 ? 's' : ''})`,
-        table,
-      });
-    }
-  }
-
-  for (const r of ragResults) {
-    sources.push({
-      tag: `V${vIdx++}`,
-      type: 'extracted',
-      label: r.source_file
-        ? `${r.source_file} (${(r.similarity * 100).toFixed(0)}% match)`
-        : `${r.document_type} — ${r.skill_id} (${(r.similarity * 100).toFixed(0)}% match)`,
-      similarity: r.similarity,
-      sourceFile: r.source_file,
-    });
-  }
-
-  return sources;
 }
 
-function buildSourceLegend(sources: SourceRef[]): string {
-  if (sources.length === 0) return '';
-  const lines = sources.map((s) => `${s.tag}: ${s.label}`);
-  return `When citing data, use inline tags like [S1] or [V1] after the relevant fact.\n${lines.join('\n')}`;
+async function fetchDataInventory(
+  projectId: string | null,
+  orgId: string
+): Promise<Record<string, number>> {
+  const sb = getSupabase();
+  let query = sb
+    .from('extracted_records')
+    .select('skill_id')
+    .eq('org_id', orgId)
+    .not('embedding', 'is', null);
+
+  if (projectId) {
+    query = query.eq('project_id', projectId);
+  }
+
+  const { data } = await query;
+  if (!data) return {};
+
+  const counts: Record<string, number> = {};
+  for (const row of data) {
+    const sk = String((row as Record<string, unknown>).skill_id || 'unknown');
+    counts[sk] = (counts[sk] || 0) + 1;
+  }
+  return counts;
+}
+
+function buildProjectContext(
+  projectId: string,
+  meta: { name: string; address: string; trade: string; status: string } | null,
+  inventory: Record<string, number>
+): string {
+  const lines: string[] = [];
+  lines.push(`## PROJECT: ${projectId}`);
+  if (meta) {
+    if (meta.name) lines.push(`- Name: ${meta.name}`);
+    if (meta.address) lines.push(`- Address: ${meta.address}`);
+    if (meta.trade) lines.push(`- Trade: ${meta.trade}`);
+    if (meta.status) lines.push(`- Status: ${meta.status}`);
+  }
+
+  const inventoryEntries = Object.entries(inventory).sort((a, b) => b[1] - a[1]);
+  if (inventoryEntries.length > 0) {
+    lines.push('');
+    lines.push('## AVAILABLE DOCUMENT DATA');
+    for (const [skill, count] of inventoryEntries) {
+      lines.push(`- ${skill}: ${count} record${count !== 1 ? 's' : ''}`);
+    }
+  } else {
+    lines.push('');
+    lines.push('## AVAILABLE DOCUMENT DATA');
+    lines.push('No embedded document records found for this project yet.');
+  }
+
+  lines.push('');
+  lines.push('Use your tools to query specific document types. Do not guess — always call a tool first.');
+  return lines.join('\n');
 }
 
 export async function POST(request: NextRequest) {
@@ -136,128 +163,41 @@ export async function POST(request: NextRequest) {
     { id: 'current', role: 'user', content: message, timestamp: Date.now() },
   ];
 
-  const crossProjectKeywords = [
-    'all projects', 'every project', 'across projects', 'portfolio',
-    'which projects', 'compare projects', 'trending', 'overall',
-    'biggest risk', 'most over budget', 'worst performing',
-    'how are we doing', 'company', 'all jobs', 'across the board',
-  ];
-  const msgLower = message.toLowerCase();
-  const isCrossProject = !projectId && crossProjectKeywords.some((kw) => msgLower.includes(kw));
-
-  const structuredSpan = trace.span({
-    name: 'structured-retrieval',
-    input: { projectId, isCrossProject },
+  const contextSpan = trace.span({
+    name: 'project-context',
+    input: { projectId },
   });
 
   let projectContext: string;
-  let recordCounts: Record<string, number> = {};
 
   if (projectId) {
-    try {
-      const data = await fetchAllProjectData(projectId);
-      projectContext = assembleContext(data);
-      recordCounts = data.meta.recordCounts;
-    } catch (err) {
-      console.error('Airtable fetch error:', err);
-      projectContext =
-        'ERROR: Could not fetch project data from Airtable. Please try again.';
-    }
-  } else if (isCrossProject) {
-    try {
-      const [healthData, allProjects] = await Promise.all([
-        fetchProjectHealthData(orgId),
-        fetchProjectList(orgId),
-      ]);
-      const activeHealth = healthData.filter(
-        (p) => !p.status.toLowerCase().includes('complete') && !p.status.toLowerCase().includes('closed')
-      );
-      const detailedResults = await Promise.allSettled(
-        activeHealth.slice(0, 5).map((p) => fetchAllProjectData(p.projectId))
-      );
-      const detailedData = detailedResults
-        .filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof fetchAllProjectData>>> => r.status === 'fulfilled')
-        .map((r) => r.value);
-      projectContext = assemblePortfolioContext(detailedData, healthData);
-      recordCounts = { portfolio: allProjects.length };
-    } catch (err) {
-      console.error('Portfolio fetch error:', err);
-      projectContext = 'ERROR: Could not fetch portfolio data. Please try again.';
-    }
+    const [meta, inventory] = await Promise.all([
+      fetchProjectMeta(projectId),
+      fetchDataInventory(projectId, orgId),
+    ]);
+    projectContext = buildProjectContext(projectId, meta, inventory);
   } else {
     const projects = await fetchProjectList(orgId);
     if (projects.length === 1) {
       projectId = projects[0].projectId;
-      try {
-        const data = await fetchAllProjectData(projectId);
-        projectContext = assembleContext(data);
-        recordCounts = data.meta.recordCounts;
-      } catch {
-        projectContext = 'ERROR: Could not fetch project data.';
-      }
+      const [meta, inventory] = await Promise.all([
+        fetchProjectMeta(projectId),
+        fetchDataInventory(projectId, orgId),
+      ]);
+      projectContext = buildProjectContext(projectId, meta, inventory);
+    } else if (projects.length > 0) {
+      const inventory = await fetchDataInventory(null, orgId);
+      const inventoryLines = Object.entries(inventory)
+        .sort((a, b) => b[1] - a[1])
+        .map(([sk, count]) => `- ${sk}: ${count} record${count !== 1 ? 's' : ''}`);
+      projectContext = `No specific project was identified. The user has ${projects.length} projects: ${projects.map((p) => p.projectName).join(', ')}. Ask which project they want to look at, or answer cross-project questions using tools.\n\n## AVAILABLE DOCUMENT DATA (all projects)\n${inventoryLines.join('\n') || 'No embedded records yet.'}`;
     } else {
-      projectContext =
-        `No specific project was identified. The user has ${projects.length} projects: ${projects.map((p) => p.projectName).join(', ')}. Ask which project they want to look at, or suggest they ask a cross-project question like "how are all projects doing?"`;
+      projectContext = 'No projects found for this organization.';
     }
   }
 
-  structuredSpan.end({ output: { recordCounts } });
+  contextSpan.end({ output: { projectId } });
 
-  const vectorSpan = trace.span({
-    name: 'vector-search',
-    input: { query: message, projectId, matchCount: 15, matchThreshold: 0.4 },
-  });
-
-  let ragContext = '';
-  let ragResults: Array<{
-    id: string;
-    skill_id: string;
-    document_type: string;
-    fields: Record<string, unknown>;
-    similarity: number;
-    project_id: string;
-    source_file?: string;
-  }> = [];
-
-  try {
-    ragResults = await searchByEmbedding({
-      query: message,
-      projectId: projectId || undefined,
-      orgId: orgId,
-      matchCount: 15,
-      matchThreshold: 0.4,
-      includePending,
-    }) as typeof ragResults;
-
-    if (ragResults.length > 0) {
-      const ragLines = ragResults.map((r, i) => {
-        const fieldSummary = Object.entries(r.fields as Record<string, { value: unknown }>)
-          .filter(([, v]) => v?.value != null)
-          .map(([k, v]) => `  ${k}: ${v.value}`)
-          .join('\n');
-        return `[${i + 1}] ${r.document_type} (${r.skill_id}) — similarity: ${(r.similarity * 100).toFixed(0)}%\n${fieldSummary}`;
-      });
-      ragContext = `\n\n[EXTRACTED DOCUMENT RECORDS — from vector search]\n${ragLines.join('\n\n')}`;
-    }
-  } catch (err) {
-    console.error('RAG search error (non-blocking):', err);
-  }
-
-  vectorSpan.end({
-    output: {
-      resultCount: ragResults.length,
-      topSimilarity: ragResults[0]?.similarity ?? null,
-      results: ragResults.map((r) => ({
-        id: r.id,
-        documentType: r.document_type,
-        skillId: r.skill_id,
-        similarity: r.similarity,
-        sourceFile: r.source_file,
-      })),
-    },
-  });
-
-  // -- Fetch chat tools + prompt templates for this org --
   const toolSpan = trace.span({ name: 'chat-tools-fetch', input: { orgId } });
   const [orgTools, orgTemplates] = await Promise.all([
     fetchActiveTools(orgId),
@@ -277,13 +217,12 @@ export async function POST(request: NextRequest) {
     systemPrompt += `\n\n${templateInstructions}`;
   }
 
-  if (orgTools.length > 0) {
-    systemPrompt += `\n\nYou have access to tools that can query the project database, search documents, and retrieve live data. Use them when the user asks questions that require specific data lookups. Always prefer tool results over the static project data when both are available.`;
-  }
-
-  const sources = buildSourceRegistry(recordCounts, ragResults);
-  const sourceLegend = buildSourceLegend(sources);
-  const fullContext = projectContext + ragContext;
+  const toolUseHandler = async (name: string, input: Record<string, unknown>) => {
+    const tool = toolMap.get(name);
+    if (!tool) return { error: `Unknown tool: ${name}` };
+    const result = await executeChatTool(tool, input, { orgId, projectId: projectId || undefined, includePending });
+    return result.error ? { error: result.error } : result.result;
+  };
 
   const generation = trace.generation({
     name: 'claude-response',
@@ -291,19 +230,11 @@ export async function POST(request: NextRequest) {
     modelParameters: { max_tokens: 4096 },
     input: {
       messageCount: messages.length,
-      contextLength: fullContext.length,
-      sourcesCount: sources.length,
+      contextLength: projectContext.length,
       toolCount: anthropicTools.length,
       matchedTemplates: matchedTemplates.map(t => t.template_name),
     },
   });
-
-  const toolUseHandler = async (name: string, input: Record<string, unknown>) => {
-    const tool = toolMap.get(name);
-    if (!tool) return { error: `Unknown tool: ${name}` };
-    const result = await executeChatTool(tool, input, { orgId, projectId: projectId || undefined, includePending });
-    return result.error ? { error: result.error } : result.result;
-  };
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -316,17 +247,11 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        if (sources.length > 0) {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ sources })}\n\n`)
-          );
-        }
-
         const { stream: textStream, finalUsage } = streamChatWithTools(
           systemPrompt,
           messages,
-          fullContext,
-          sourceLegend,
+          projectContext,
+          '',
           anthropicTools.length > 0 ? anthropicTools : undefined,
           anthropicTools.length > 0 ? toolUseHandler : undefined
         );
