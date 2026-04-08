@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
 import { runCoverageAnalysis } from '@/lib/coverage';
 
+export const maxDuration = 120;
+
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = await validateUserSession(token || '');
