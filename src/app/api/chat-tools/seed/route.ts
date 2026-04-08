@@ -6,7 +6,7 @@ const DEFAULT_TOOLS = [
   {
     tool_name: 'query_job_costs',
     display_name: 'Query Job Costs',
-    description: 'Look up job cost line items by cost code, description, or vendor. Returns matching job cost records for the current project.',
+    description: 'Search job cost records by cost code, description, or vendor name. Returns matching extracted_records for the current project where skill_id is job_cost_report.',
     input_schema: {
       properties: {
         search_term: { type: 'string', description: 'Cost code, description, or vendor name to search for' },
@@ -14,12 +14,11 @@ const DEFAULT_TOOLS = [
       },
       required: ['search_term'],
     },
-    implementation_type: 'sql_query',
+    implementation_type: 'rag_search',
     implementation_config: {
-      table: 'pipeline_log',
-      select: 'id,project_id,skill_id,extracted_fields,source_file,created_at',
-      limit: 30,
-      params_mapping: { search_term: 'source_file' },
+      skill_id: 'job_cost_report',
+      match_count: 20,
+      similarity_threshold: 0.35,
     },
     sample_prompts: [
       'What are the costs for electrical work?',
@@ -30,7 +29,7 @@ const DEFAULT_TOOLS = [
   {
     tool_name: 'query_change_orders',
     display_name: 'Query Change Orders',
-    description: 'Find change orders by status, amount, description, or reason. Returns matching change order records for the current project.',
+    description: 'Search change order records by status, amount, description, or reason. Returns matching extracted_records for the current project where skill_id is change_order.',
     input_schema: {
       properties: {
         search_term: { type: 'string', description: 'Description, reason, or status to search for' },
@@ -38,12 +37,11 @@ const DEFAULT_TOOLS = [
       },
       required: ['search_term'],
     },
-    implementation_type: 'sql_query',
+    implementation_type: 'rag_search',
     implementation_config: {
-      table: 'pipeline_log',
-      select: 'id,project_id,skill_id,extracted_fields,source_file,created_at',
-      limit: 30,
-      params_mapping: { search_term: 'source_file' },
+      skill_id: 'change_order',
+      match_count: 20,
+      similarity_threshold: 0.35,
     },
     sample_prompts: [
       'Show me all pending change orders',
