@@ -168,6 +168,10 @@ export default function PipelineReview() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
 
+  // Doc linking state
+  const [linking, setLinking] = useState(false);
+  const [linkResult, setLinkResult] = useState<string | null>(null);
+
   // Drive connection state
   const [showDriveSetup, setShowDriveSetup] = useState(false);
   const [driveFolderId, setDriveFolderId] = useState('');
@@ -650,6 +654,35 @@ export default function PipelineReview() {
     } finally {
       setScanning(false);
       setTimeout(() => setScanResult(null), 5000);
+    }
+  };
+
+  const handleLinkDocs = async () => {
+    setLinking(true);
+    setLinkResult(null);
+    try {
+      const res = await fetch('/api/pipeline/link-docs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: selectedProject || null }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const msg = data.linksCreated > 0
+          ? `Created ${data.linksCreated} link${data.linksCreated !== 1 ? 's' : ''} (${data.linksSkipped} duplicates skipped, ${data.totalCandidates} candidates found)`
+          : data.totalCandidates > 0
+            ? `${data.totalCandidates} candidates found, all already linked`
+            : 'No linkable document pairs found';
+        setLinkResult(msg);
+      } else {
+        setLinkResult(data.error || 'Linking failed');
+      }
+    } catch (err) {
+      console.error('Linking error:', err);
+      setLinkResult('Failed to run document linking');
+    } finally {
+      setLinking(false);
+      setTimeout(() => setLinkResult(null), 8000);
     }
   };
 
@@ -1173,7 +1206,7 @@ export default function PipelineReview() {
                                 </select>
                               ) : (
                                 <input
-                                  type={def?.type === 'date' ? 'date' : def?.type === 'number' ? 'number' : 'text'}
+                                  type={def?.type === 'date' ? 'date' : 'text'}
                                   value={editedFields[fieldName] ?? ''}
                                   onChange={(e) => setEditedFields({ ...editedFields, [fieldName]: e.target.value })}
                                   className={`w-full px-3 py-1.5 rounded-lg border text-[13px] transition-colors ${
@@ -1460,6 +1493,30 @@ export default function PipelineReview() {
               {scanning ? 'Scanning...' : 'Scan Drive'}
             </motion.button>
 
+            {/* Link Docs button */}
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={handleLinkDocs}
+              disabled={linking}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl border border-[#e0e0e0] text-[13px] font-medium text-[#555] hover:bg-[#f7f7f5] transition-colors disabled:opacity-50"
+              title="Run coverage analysis — link related documents across types"
+            >
+              <svg className={`w-3.5 h-3.5 ${linking ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                {linking ? (
+                  <>
+                    <circle cx="12" cy="12" r="10" className="opacity-25" />
+                    <path d="M4 12a8 8 0 018-8" />
+                  </>
+                ) : (
+                  <>
+                    <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
+                    <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
+                  </>
+                )}
+              </svg>
+              {linking ? 'Linking...' : 'Link Docs'}
+            </motion.button>
+
             <motion.button
               whileTap={{ scale: 0.97 }}
               onClick={() => setShowUpload(true)}
@@ -1665,6 +1722,21 @@ export default function PipelineReview() {
           >
             <span className="text-[13px]">📂</span>
             <span className="text-[12px] font-medium text-blue-800">{scanResult}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Link result notification */}
+      <AnimatePresence>
+        {linkResult && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="px-6 py-2.5 bg-purple-50 border-b border-purple-200 flex items-center gap-2"
+          >
+            <span className="text-[13px]">🔗</span>
+            <span className="text-[12px] font-medium text-purple-800">{linkResult}</span>
           </motion.div>
         )}
       </AnimatePresence>
