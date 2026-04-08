@@ -103,28 +103,54 @@ export function buildExtractionTool(
 
   const requiredFields = Object.keys(fieldProperties);
 
+  const properties: Record<string, unknown> = {
+    documentType: { type: 'string' },
+    documentTypeConfidence: { type: 'number', minimum: 0, maximum: 1 },
+    fields: {
+      type: 'object',
+      properties: fieldProperties,
+      required: requiredFields,
+    },
+    extra_fields: {
+      type: 'object',
+      description:
+        'Any additional fields discovered in the document beyond the defined schema. ' +
+        'Use descriptive snake_case keys (e.g. "payment_terms", "insurance_requirements").',
+      additionalProperties: EXTRACTED_FIELD_JSON_SCHEMA,
+    },
+  };
+  const required = ['documentType', 'documentTypeConfidence', 'fields', 'extra_fields'];
+
+  if (skill.multiRecordConfig) {
+    const recordFields: Record<string, unknown> = {};
+    for (const fieldName of skill.multiRecordConfig.fields) {
+      const fd = skill.fieldDefinitions.find(f => f.name === fieldName);
+      recordFields[fieldName] = fd
+        ? fieldTypeToJsonSchema(fd)
+        : { ...EXTRACTED_FIELD_JSON_SCHEMA, description: fieldName };
+    }
+
+    properties.records = {
+      type: 'array',
+      description:
+        'Array of line-item records extracted from the document. ' +
+        'Each record represents one cost code / line item with its own values.',
+      items: {
+        type: 'object',
+        properties: recordFields,
+        required: Object.keys(recordFields),
+      },
+    };
+    required.push('records');
+  }
+
   return {
     name: 'extract_document',
     description: `Extract structured data from a ${skill.displayName} document.`,
     input_schema: {
       type: 'object',
-      properties: {
-        documentType: { type: 'string' },
-        documentTypeConfidence: { type: 'number', minimum: 0, maximum: 1 },
-        fields: {
-          type: 'object',
-          properties: fieldProperties,
-          required: requiredFields,
-        },
-        extra_fields: {
-          type: 'object',
-          description:
-            'Any additional fields discovered in the document beyond the defined schema. ' +
-            'Use descriptive snake_case keys (e.g. "payment_terms", "insurance_requirements").',
-          additionalProperties: EXTRACTED_FIELD_JSON_SCHEMA,
-        },
-      },
-      required: ['documentType', 'documentTypeConfidence', 'fields', 'extra_fields'],
+      properties,
+      required,
     },
   };
 }

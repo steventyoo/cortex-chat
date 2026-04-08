@@ -281,8 +281,15 @@ export function buildSkillPrompt(skill: DocumentSkill, sourceText: string): stri
 
   if (skill.multiRecordConfig) {
     lines.push('## Multi-Record Extraction');
-    lines.push('This document may contain multiple records. Extract each as a separate object in the "records" array.');
-    lines.push(`Primary target table fields: ${skill.multiRecordConfig.fields.join(', ')}`);
+    lines.push('This document contains MULTIPLE line items / cost codes. You MUST extract EVERY line item as a separate record in the "records" array.');
+    lines.push('Each record should contain these fields:');
+    for (const f of skill.multiRecordConfig.fields) {
+      lines.push(`  - ${f}`);
+    }
+    lines.push('');
+    lines.push('The "fields" object should contain document-level summary data (totals, project info, report metadata).');
+    lines.push('The "records" array should contain one entry per cost code / line item found in the document.');
+    lines.push('Extract ALL line items — do not summarize or skip any. Even if there are hundreds of line items, extract every single one.');
     if (skill.multiRecordConfig.secondaryTables) {
       for (const st of skill.multiRecordConfig.secondaryTables) {
         lines.push(`Also extract into "${st.table}": ${st.fields.join(', ')}`);
@@ -344,9 +351,11 @@ export async function extractWithSkill(
   console.log(`[extract] tool schema debug: mode=${isTypedSkill ? 'typed' : 'general'} skill=${skill.skillId}`);
   console.log(`[extract] tool JSON: ${JSON.stringify(tool)}`);
 
+  const maxTokens = skill.multiRecordConfig ? 32768 : 8192;
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 8192,
+    max_tokens: maxTokens,
     system: skill.systemPrompt,
     messages: [{ role: 'user', content: extractionPrompt }],
     tools: [tool],
@@ -364,14 +373,17 @@ export async function extractWithSkill(
     documentTypeConfidence: number;
     fields: Record<string, { value: string | number | null; confidence: number }>;
     extra_fields?: Record<string, { value: string | number | null; confidence: number }>;
+    records?: Array<Record<string, { value: string | number | null; confidence: number }>>;
   };
 
   const schemaFieldNames = Object.keys(rawExtraction.fields);
   const extraFieldNames = rawExtraction.extra_fields ? Object.keys(rawExtraction.extra_fields) : [];
+  const recordCount = rawExtraction.records?.length ?? 0;
   console.log(`[extract] tool_use raw: docType="${rawExtraction.documentType}" ` +
     `docTypeConf=${rawExtraction.documentTypeConfidence.toFixed(2)} ` +
     `schemaFields=[${schemaFieldNames.join(', ')}] (${schemaFieldNames.length}) ` +
-    `extraFields=[${extraFieldNames.join(', ')}] (${extraFieldNames.length})`);
+    `extraFields=[${extraFieldNames.join(', ')}] (${extraFieldNames.length}) ` +
+    `records=${recordCount}`);
 
   if (rawExtraction.extra_fields) {
     rawExtraction.fields = { ...rawExtraction.fields, ...rawExtraction.extra_fields };
@@ -382,6 +394,7 @@ export async function extractWithSkill(
     documentType: rawExtraction.documentType,
     documentTypeConfidence: rawExtraction.documentTypeConfidence,
     fields: rawExtraction.fields,
+    records: rawExtraction.records,
     skillId: skill.skillId,
     skillVersion: skill.version,
     classifierConfidence: classification.confidence,

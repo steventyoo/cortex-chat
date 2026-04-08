@@ -13,7 +13,7 @@ import {
 const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false });
 
 type ViewMode = 'list' | 'review';
-type ListView = 'recent' | 'categories' | 'drive';
+type ListView = 'recent' | 'categories' | 'drive' | 'coverage';
 
 interface CategoryInfo {
   id: string;
@@ -172,6 +172,12 @@ export default function PipelineReview() {
   const [linking, setLinking] = useState(false);
   const [linkResult, setLinkResult] = useState<string | null>(null);
 
+  // Coverage analysis state
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [coverageReport, setCoverageReport] = useState<any>(null);
+  const [coverageLoading, setCoverageLoading] = useState(false);
+  const [coverageError, setCoverageError] = useState<string | null>(null);
+
   // Drive connection state
   const [showDriveSetup, setShowDriveSetup] = useState(false);
   const [driveFolderId, setDriveFolderId] = useState('');
@@ -328,6 +334,10 @@ export default function PipelineReview() {
       setSelectedCategoryId(null);
     }
     if (listView !== 'drive') setSelectedDrivePath(null);
+    if (listView === 'coverage' && !coverageReport && !coverageLoading) {
+      fetchCoverage();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listView]);
 
   useEffect(() => {
@@ -683,6 +693,29 @@ export default function PipelineReview() {
     } finally {
       setLinking(false);
       setTimeout(() => setLinkResult(null), 8000);
+    }
+  };
+
+  const fetchCoverage = async () => {
+    setCoverageLoading(true);
+    setCoverageError(null);
+    try {
+      const res = await fetch('/api/pipeline/coverage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: selectedProject || null }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCoverageReport(data.report);
+      } else {
+        setCoverageError(data.error || 'Failed to load coverage');
+      }
+    } catch (err) {
+      console.error('Coverage error:', err);
+      setCoverageError('Failed to load coverage analysis');
+    } finally {
+      setCoverageLoading(false);
     }
   };
 
@@ -2032,6 +2065,13 @@ export default function PipelineReview() {
               onSelectCategory={(catId) => { setSelectedCategoryId(catId); setCurrentPage(1); }}
             />
           )
+        ) : listView === 'coverage' ? (
+          <CoveragePanel
+            report={coverageReport}
+            loading={coverageLoading}
+            error={coverageError}
+            onRefresh={fetchCoverage}
+          />
         ) : listView === 'drive' ? (
           selectedDrivePath ? (
             <div>
@@ -2124,7 +2164,8 @@ export default function PipelineReview() {
       {/* Pagination controls — only show when viewing a document list, not folder listings */}
       {pagination && pagination.totalPages > 1 && !(
         (listView === 'categories' && !selectedCategoryId) ||
-        (listView === 'drive' && !selectedDrivePath)
+        (listView === 'drive' && !selectedDrivePath) ||
+        listView === 'coverage'
       ) && (
         <PaginationControls
           pagination={pagination}
@@ -2226,6 +2267,7 @@ function ViewToggle({ value, onChange }: { value: ListView; onChange: (v: ListVi
     { key: 'recent', label: 'Recent' },
     { key: 'categories', label: 'Categories' },
     { key: 'drive', label: 'Drive Folders' },
+    { key: 'coverage', label: 'Coverage' },
   ];
 
   return (
@@ -2243,6 +2285,280 @@ function ViewToggle({ value, onChange }: { value: ListView; onChange: (v: ListVi
           {opt.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ── Coverage Panel ────────────────────────────────────────────
+
+interface CoveragePanelProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  report: any;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}
+
+function CoveragePanel({ report, loading, error, onRefresh }: CoveragePanelProps) {
+  const [expandedCodes, setExpandedCodes] = useState<Set<string>>(new Set());
+
+  const toggleCode = (code: string) => {
+    setExpandedCodes(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="flex flex-col items-center gap-3">
+          <svg className="animate-spin w-6 h-6 text-[#999]" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+            <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          <span className="text-[13px] text-[#999]">Analyzing coverage against JCR...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-14 h-14 rounded-2xl bg-red-50 flex items-center justify-center mb-4">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="1.5" strokeLinecap="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+        </div>
+        <p className="text-[14px] font-medium text-[#1a1a1a]">{error}</p>
+        <button
+          onClick={onRefresh}
+          className="mt-3 text-[13px] text-blue-600 hover:text-blue-800 underline"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-14 h-14 rounded-2xl bg-[#f7f7f5] flex items-center justify-center mb-4">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#999" strokeWidth="1.5" strokeLinecap="round">
+            <path d="M9 17H7A5 5 0 017 7h2M15 7h2a5 5 0 010 10h-2M8 12h8" />
+          </svg>
+        </div>
+        <p className="text-[14px] font-medium text-[#1a1a1a]">No coverage data yet</p>
+        <p className="text-[13px] text-[#999] mt-1">A Job Cost Report is needed to run coverage analysis</p>
+        <button
+          onClick={onRefresh}
+          className="mt-3 px-4 py-2 bg-[#1a1a1a] text-white text-[13px] font-medium rounded-lg hover:bg-[#333] transition-colors"
+        >
+          Run Coverage Analysis
+        </button>
+      </div>
+    );
+  }
+
+  const { summary, lineItems, projectName, totalBudget, totalJtdCost, jcrFileName } = report;
+  const scoreColor = summary.overallScore >= 0.7 ? 'text-green-600' : summary.overallScore >= 0.3 ? 'text-amber-600' : 'text-red-600';
+  const scoreBg = summary.overallScore >= 0.7 ? 'bg-green-50' : summary.overallScore >= 0.3 ? 'bg-amber-50' : 'bg-red-50';
+
+  const formatCurrency = (v: number | null) => {
+    if (v == null) return '—';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
+  };
+
+  return (
+    <div className="divide-y divide-[#f0f0f0]">
+      {/* Header */}
+      <div className="px-6 py-5 bg-gradient-to-r from-[#f8f8f6] to-white">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h3 className="text-[16px] font-semibold text-[#1a1a1a]">Documentation Coverage</h3>
+            <p className="text-[13px] text-[#999] mt-0.5">
+              Anchored to <span className="font-medium text-[#555]">{jcrFileName}</span>
+              {projectName && projectName !== 'Unknown' && (
+                <> — {projectName}</>
+              )}
+            </p>
+          </div>
+          <button
+            onClick={onRefresh}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#e0e0e0] text-[12px] font-medium text-[#555] hover:bg-[#f7f7f5] transition-colors"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M1 4v6h6M23 20v-6h-6" />
+              <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
+            </svg>
+            Refresh
+          </button>
+        </div>
+
+        {/* Score cards */}
+        <div className="grid grid-cols-5 gap-3">
+          <div className={`rounded-xl p-3 ${scoreBg}`}>
+            <div className={`text-[24px] font-bold ${scoreColor}`}>
+              {Math.round(summary.overallScore * 100)}%
+            </div>
+            <div className="text-[11px] font-medium text-[#999] uppercase tracking-wider mt-0.5">Overall Score</div>
+          </div>
+          <div className="rounded-xl p-3 bg-green-50">
+            <div className="text-[24px] font-bold text-green-600">{summary.covered}</div>
+            <div className="text-[11px] font-medium text-[#999] uppercase tracking-wider mt-0.5">Covered</div>
+          </div>
+          <div className="rounded-xl p-3 bg-amber-50">
+            <div className="text-[24px] font-bold text-amber-600">{summary.partial}</div>
+            <div className="text-[11px] font-medium text-[#999] uppercase tracking-wider mt-0.5">Partial</div>
+          </div>
+          <div className="rounded-xl p-3 bg-red-50">
+            <div className="text-[24px] font-bold text-red-600">{summary.missing}</div>
+            <div className="text-[11px] font-medium text-[#999] uppercase tracking-wider mt-0.5">Missing</div>
+          </div>
+          <div className="rounded-xl p-3 bg-[#f7f7f5]">
+            <div className="text-[24px] font-bold text-[#1a1a1a]">{summary.totalCostCodes}</div>
+            <div className="text-[11px] font-medium text-[#999] uppercase tracking-wider mt-0.5">Total Codes</div>
+          </div>
+        </div>
+
+        {/* Budget bar */}
+        {totalBudget > 0 && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[12px] text-[#999]">
+                Budget: {formatCurrency(totalBudget)} | JTD: {formatCurrency(totalJtdCost)}
+              </span>
+              <span className="text-[12px] text-[#999]">
+                {formatCurrency(summary.budgetCovered)} documented | {formatCurrency(summary.budgetMissing)} undocumented
+              </span>
+            </div>
+            <div className="w-full h-2 bg-[#eee] rounded-full overflow-hidden">
+              <div
+                className="h-full bg-green-500 rounded-full transition-all"
+                style={{ width: `${totalBudget > 0 ? Math.round((summary.budgetCovered / totalBudget) * 100) : 0}%` }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Column header */}
+      <div className="px-6 py-2.5 flex items-center gap-4 bg-[#f7f7f5] border-b border-[#e8e8e8] text-[11px] font-semibold text-[#999] uppercase tracking-wider">
+        <div className="w-6 flex-shrink-0" />
+        <div className="w-16 flex-shrink-0">Code</div>
+        <div className="flex-1 min-w-0">Description</div>
+        <div className="w-20 flex-shrink-0 text-right">Budget</div>
+        <div className="w-20 flex-shrink-0 text-right">JTD Cost</div>
+        <div className="w-16 flex-shrink-0 text-center">Status</div>
+        <div className="w-10 flex-shrink-0 text-center">Docs</div>
+      </div>
+
+      {/* Line items */}
+      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+      {lineItems.map((item: any, idx: number) => {
+        const li = item.lineItem;
+        const isExpanded = expandedCodes.has(li.costCode + idx);
+        const statusColor =
+          item.status === 'covered' ? 'bg-green-100 text-green-700' :
+          item.status === 'partial' ? 'bg-amber-100 text-amber-700' :
+          'bg-red-100 text-red-700';
+        const statusIcon =
+          item.status === 'covered' ? '✓' :
+          item.status === 'partial' ? '◐' :
+          '✗';
+
+        return (
+          <div key={`${li.costCode}-${idx}`}>
+            <button
+              onClick={() => toggleCode(li.costCode + idx)}
+              className="w-full text-left px-6 py-3 hover:bg-[#fafafa] transition-colors flex items-center gap-4"
+            >
+              <div className="w-6 flex-shrink-0">
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="#999"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                >
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </div>
+              <div className="w-16 flex-shrink-0 font-mono text-[13px] text-[#1a1a1a] font-medium">
+                {li.costCode || '—'}
+              </div>
+              <div className="flex-1 min-w-0 text-[13px] text-[#555] truncate">
+                {li.description || '—'}
+                {li.costCategory && (
+                  <span className="ml-2 text-[11px] text-[#999] bg-[#f5f5f5] px-1.5 py-0.5 rounded">
+                    {li.costCategory}
+                  </span>
+                )}
+              </div>
+              <div className="w-20 flex-shrink-0 text-right text-[13px] font-mono text-[#555]">
+                {li.revisedBudget != null ? formatCurrency(li.revisedBudget) : '—'}
+              </div>
+              <div className="w-20 flex-shrink-0 text-right text-[13px] font-mono text-[#555]">
+                {li.jtdCost != null ? formatCurrency(li.jtdCost) : '—'}
+              </div>
+              <div className="w-16 flex-shrink-0 text-center">
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${statusColor}`}>
+                  {statusIcon}
+                </span>
+              </div>
+              <div className="w-10 flex-shrink-0 text-center text-[13px] text-[#999]">
+                {item.matches.length}
+              </div>
+            </button>
+
+            {/* Expanded: matching documents */}
+            {isExpanded && item.matches.length > 0 && (
+              <div className="bg-[#f9f9f7] border-t border-[#eee]">
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                {item.matches.map((m: any, mi: number) => (
+                  <div
+                    key={mi}
+                    className="px-6 py-2 ml-10 flex items-center gap-3 text-[12px] border-b border-[#f0f0f0] last:border-0"
+                  >
+                    <span className="px-1.5 py-0.5 rounded bg-[#eee] text-[#666] font-mono text-[10px] uppercase">
+                      {m.skillId}
+                    </span>
+                    <span className="flex-1 text-[#555] truncate">{m.fileName}</span>
+                    <span className="text-[#999] text-[11px]">
+                      {m.matchType === 'cost_code' ? 'Code match' :
+                       m.matchType === 'description' ? 'Description' :
+                       m.matchType === 'amount' ? 'Amount' : 'Category'}
+                    </span>
+                    <span className="text-[11px] font-mono text-[#999]">
+                      {Math.round(m.matchScore * 100)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {isExpanded && item.matches.length === 0 && (
+              <div className="bg-red-50/50 border-t border-red-100 px-6 py-3 ml-10">
+                <p className="text-[12px] text-red-600 font-medium">
+                  No matching documents found for this cost code
+                </p>
+                <p className="text-[11px] text-red-500 mt-0.5">
+                  Missing documentation for: {li.description || li.costCode}
+                  {li.revisedBudget != null && ` (Budget: ${formatCurrency(li.revisedBudget)})`}
+                </p>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
