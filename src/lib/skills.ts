@@ -351,7 +351,7 @@ export async function extractWithSkill(
   console.log(`[extract] tool schema debug: mode=${isTypedSkill ? 'typed' : 'general'} skill=${skill.skillId}`);
   console.log(`[extract] tool JSON: ${JSON.stringify(tool)}`);
 
-  const maxTokens = skill.multiRecordConfig ? 65536 : 8192;
+  const maxTokens = skill.multiRecordConfig ? 64000 : 8192;
 
   // Use streaming for multi-record skills (large documents can exceed Anthropic's non-streaming timeout)
   const messageParams = {
