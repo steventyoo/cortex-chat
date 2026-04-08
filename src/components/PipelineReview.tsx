@@ -1502,7 +1502,7 @@ export default function PipelineReview() {
                   ? 'bg-amber-100 text-amber-800 border border-amber-300'
                   : 'bg-[#f0f0f0] text-[#999] hover:bg-[#e8e8e8]'
               }`}
-              title={testMode ? 'Test mode ON — approvals will NOT push to Airtable' : 'Test mode OFF — approvals WILL push to real data'}
+              title={testMode ? 'Test mode ON — approvals will NOT push to records' : 'Test mode OFF — approvals WILL push to real data'}
             >
               <div className={`w-7 h-4 rounded-full relative transition-colors ${testMode ? 'bg-amber-400' : 'bg-[#ccc]'}`}>
                 <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${testMode ? 'left-3.5' : 'left-0.5'}`} />

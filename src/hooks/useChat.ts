@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { ChatMessage, SourceRef } from '@/lib/types';
+import { ChatMessage, SourceRef, ToolCallEntry } from '@/lib/types';
 import { nanoid } from 'nanoid';
 
 export function useChat() {
@@ -95,6 +95,56 @@ export function useChat() {
                   ...prev,
                   [assistantId]: data.sources as SourceRef[],
                 }));
+              }
+
+              if (data.type === 'tool_call') {
+                const entry: ToolCallEntry = {
+                  name: data.name,
+                  displayName: data.displayName,
+                  input: data.input || {},
+                  status: 'calling',
+                };
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last && last.role === 'assistant') {
+                    updated[updated.length - 1] = {
+                      ...last,
+                      toolCalls: [...(last.toolCalls || []), entry],
+                    };
+                  }
+                  return updated;
+                });
+              }
+
+              if (data.type === 'tool_result') {
+                let resultCount = 0;
+                const res = data.result;
+                if (Array.isArray(res)) {
+                  resultCount = res.length;
+                } else if (res && typeof res === 'object' && Array.isArray((res as Record<string, unknown>).records)) {
+                  resultCount = ((res as Record<string, unknown>).records as unknown[]).length;
+                }
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last && last.role === 'assistant' && last.toolCalls) {
+                    const calls = [...last.toolCalls];
+                    const idx = calls.findLastIndex(
+                      (tc) => tc.name === data.name && tc.status === 'calling'
+                    );
+                    if (idx !== -1) {
+                      calls[idx] = {
+                        ...calls[idx],
+                        result: data.result,
+                        resultCount,
+                        status: data.error ? 'error' : 'done',
+                      };
+                    }
+                    updated[updated.length - 1] = { ...last, toolCalls: calls };
+                  }
+                  return updated;
+                });
               }
 
               if (data.text) {

@@ -314,7 +314,7 @@ export function getStatusDisplay(status: PipelineStatus): { label: string; color
   }
 }
 
-// Parse pipeline item from Airtable record
+// Parse pipeline item from record
 export function parsePipelineItem(record: { id: string; fields: Record<string, unknown> }): PipelineItem {
   const f = record.fields;
 
