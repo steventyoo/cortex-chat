@@ -142,23 +142,13 @@ export async function POST(request: NextRequest) {
       });
 
       const results = await Promise.all(updates);
-      const successIds: string[] = [];
       for (let j = 0; j < results.length; j++) {
         if (results[j].error) {
           errors.push(`Store embedding for record ${batch[j].pipelineLogId}: ${results[j].error!.message}`);
           skipped++;
         } else {
           embedded++;
-          successIds.push(batch[j].erRecordId);
         }
-      }
-
-      if (successIds.length > 0) {
-        await sb
-          .from('extracted_records')
-          .update({ status: 'approved' })
-          .in('id', successIds)
-          .eq('status', 'pending');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
