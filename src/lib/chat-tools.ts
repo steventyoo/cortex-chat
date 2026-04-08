@@ -127,18 +127,57 @@ async function executeRagSearch(
     return { result: null, error: 'No query/search_query/text field in tool input' };
   }
 
-  try {
-    const results = await searchByEmbedding({
-      query,
-      orgId: ctx.orgId,
-      projectId: ctx.projectId,
-      skillId: config.skill_id as string | undefined,
-      matchCount: Number(config.match_count) || 10,
-      matchThreshold: Number(config.similarity_threshold) || 0.4,
-      includePending: ctx.includePending,
-    });
+  const matchCount = Number(config.match_count) || 10;
+  const matchThreshold = Number(config.similarity_threshold) || 0.4;
+  const skillIds = config.skill_ids as string[] | undefined;
+  const singleSkillId = config.skill_id as string | undefined;
 
-    const formatted = results.map(r => ({
+  try {
+    let allResults: Array<{
+      id: string;
+      skill_id: string;
+      document_type: string;
+      fields: Record<string, unknown>;
+      similarity: number;
+      project_id: string;
+    }>;
+
+    if (skillIds && skillIds.length > 0) {
+      const perSkillResults = await Promise.all(
+        skillIds.map(sid =>
+          searchByEmbedding({
+            query,
+            orgId: ctx.orgId,
+            projectId: ctx.projectId,
+            skillId: sid,
+            matchCount,
+            matchThreshold,
+            includePending: ctx.includePending,
+          })
+        )
+      );
+      const flat = perSkillResults.flat();
+      const seen = new Set<string>();
+      const deduped = flat.filter(r => {
+        if (seen.has(r.id)) return false;
+        seen.add(r.id);
+        return true;
+      });
+      deduped.sort((a, b) => b.similarity - a.similarity);
+      allResults = deduped.slice(0, matchCount);
+    } else {
+      allResults = await searchByEmbedding({
+        query,
+        orgId: ctx.orgId,
+        projectId: ctx.projectId,
+        skillId: singleSkillId,
+        matchCount,
+        matchThreshold,
+        includePending: ctx.includePending,
+      });
+    }
+
+    const formatted = allResults.map(r => ({
       document_type: r.document_type,
       skill_id: r.skill_id,
       similarity: r.similarity,
