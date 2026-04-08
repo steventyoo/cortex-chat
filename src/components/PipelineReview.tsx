@@ -2701,7 +2701,7 @@ function DocumentRow({
         </button>
       )}
 
-      {(item.status === 'pending_review' || item.status === 'approved' || item.status === 'flagged') && (
+      {(item.status === 'pending_review' || item.status === 'approved' || item.status === 'tier2_flagged') && (
         <button
           onClick={(e) => handleRetry(item.id, e)}
           disabled={retryingId === item.id}
