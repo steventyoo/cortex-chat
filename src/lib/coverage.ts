@@ -133,7 +133,7 @@ async function aiMatchDocuments(
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  for (const chunk of chunks) {
+  async function processChunk(chunk: PipelineDoc[]): Promise<void> {
     const docBlock = chunk
       .map((doc, i) => `[${i}] ${summarizeDoc(doc)}`)
       .join('\n');
@@ -215,10 +215,10 @@ Use the tool to report your findings.`;
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
       );
 
-      if (!toolBlock) continue;
+      if (!toolBlock) return;
 
       const payload = toolBlock.input as { matches: AiMatchResult[] };
-      if (!payload.matches || !Array.isArray(payload.matches)) continue;
+      if (!payload.matches || !Array.isArray(payload.matches)) return;
 
       for (const m of payload.matches) {
         if (!m.costCode || !Array.isArray(m.docIndices)) continue;
@@ -246,6 +246,11 @@ Use the tool to report your findings.`;
     } catch (err) {
       console.error('[coverage] AI matching failed for batch:', err);
     }
+  }
+
+  const CONCURRENCY = 3;
+  for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+    await Promise.all(chunks.slice(i, i + CONCURRENCY).map(processChunk));
   }
 
   return result;
