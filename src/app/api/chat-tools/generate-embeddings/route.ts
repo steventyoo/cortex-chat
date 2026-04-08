@@ -33,9 +33,10 @@ export async function POST(request: NextRequest) {
     .select('id, extracted_data, source_text, file_name, project_id, org_id')
     .eq('project_id', projectId)
     .eq('org_id', orgId)
-    .is('pushed_record_ids', null)
+    .or('pushed_record_ids.is.null,pushed_record_ids.eq.')
     .not('extracted_data', 'is', null)
-    .neq('status', 'rejected');
+    .neq('status', 'rejected')
+    .neq('status', 'failed');
 
   if (fetchErr) {
     return Response.json({ error: fetchErr.message }, { status: 500 });
