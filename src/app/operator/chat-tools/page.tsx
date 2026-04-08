@@ -96,6 +96,7 @@ export default function ChatToolsPage() {
   const [selectedProject, setSelectedProject] = useState('');
   const [embedLoading, setEmbedLoading] = useState(false);
   const [embedResult, setEmbedResult] = useState<{ embedded: number; skipped: number; total: number; errors?: string[] } | null>(null);
+  const [includePending, setIncludePending] = useState(true);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -122,6 +123,17 @@ export default function ChatToolsPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('cortex-include-pending');
+    if (saved !== null) setIncludePending(saved === 'true');
+  }, []);
+
+  const toggleIncludePending = () => {
+    const next = !includePending;
+    setIncludePending(next);
+    localStorage.setItem('cortex-include-pending', String(next));
+  };
 
   const toggleToolActive = async (tool: ChatTool) => {
     await fetch(`/api/chat-tools/${tool.id}`, {
@@ -386,6 +398,23 @@ export default function ChatToolsPage() {
           <p className="text-[12px] text-[#888] mb-4">
             Push unapproved pipeline records to the vector store with <span className="font-mono text-[11px] bg-[#f5f5f5] px-1 rounded">pending</span> status so you can test chat and RAG search tools before formal approval. Records will be re-embedded when approved.
           </p>
+
+          <div className="flex items-center justify-between mb-4 p-3 bg-white rounded-md border border-[#e8e8e8]">
+            <div>
+              <div className="text-[13px] font-medium text-[#1a1a1a]">Include pending records in chat</div>
+              <div className="text-[11px] text-[#999] mt-0.5">When enabled, chat and tool searches will include records that haven&apos;t been formally approved yet.</div>
+            </div>
+            <button
+              onClick={toggleIncludePending}
+              className={`relative w-10 h-[22px] rounded-full transition-colors flex-shrink-0 ml-4 ${
+                includePending ? 'bg-[#16a34a]' : 'bg-[#d4d4d4]'
+              }`}
+            >
+              <span className={`absolute top-[3px] w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${
+                includePending ? 'left-[22px]' : 'left-[3px]'
+              }`} />
+            </button>
+          </div>
 
           <div className="flex items-end gap-3">
             <div className="flex-1 max-w-xs">

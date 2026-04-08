@@ -53,6 +53,7 @@ export function useChat() {
             message: content,
             projectId: currentProjectId,
             history,
+            includePending: localStorage.getItem('cortex-include-pending') !== 'false',
           }),
           signal: abortRef.current.signal,
         });

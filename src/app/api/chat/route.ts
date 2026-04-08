@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
   let projectId: string | null;
   let history: ChatMessage[];
   let conversationId: string | undefined;
-  let includePending = false;
+  let includePending = true;
 
   try {
     const body = await request.json();
@@ -99,7 +99,9 @@ export async function POST(request: NextRequest) {
     projectId = body.projectId || null;
     history = body.history || [];
     conversationId = body.conversationId || undefined;
-    includePending = body.includePending === true;
+    if (body.includePending !== undefined) {
+      includePending = body.includePending !== false;
+    }
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid request' }), {
       status: 400,
