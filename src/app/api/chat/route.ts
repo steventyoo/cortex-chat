@@ -2,10 +2,18 @@ import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { fetchAllProjectData, fetchProjectList, fetchProjectHealthData, resolveProjectId, verifyProjectAccess } from '@/lib/supabase';
 import { CORTEX_SYSTEM_PROMPT, assembleContext, assemblePortfolioContext } from '@/lib/prompts';
-import { streamChatResponse } from '@/lib/claude';
+import { streamChatWithTools, ChatEvent } from '@/lib/claude';
 import { ChatMessage, SourceRef } from '@/lib/types';
 import { searchByEmbedding } from '@/lib/embeddings';
 import { getLangfuse } from '@/lib/langfuse';
+import {
+  fetchActiveTools,
+  fetchActiveTemplates,
+  matchTemplates,
+  toolToAnthropicDef,
+  executeChatTool,
+  ChatTool,
+} from '@/lib/chat-tools';
 
 export const maxDuration = 60;
 
@@ -63,7 +71,6 @@ function buildSourceLegend(sources: SourceRef[]): string {
 export async function POST(request: NextRequest) {
   const langfuse = getLangfuse();
 
-  // 1. Auth check
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   if (!token) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -80,11 +87,11 @@ export async function POST(request: NextRequest) {
   }
   const orgId = session.orgId;
 
-  // 2. Parse request
   let message: string;
   let projectId: string | null;
   let history: ChatMessage[];
   let conversationId: string | undefined;
+  let includePending = false;
 
   try {
     const body = await request.json();
@@ -92,6 +99,7 @@ export async function POST(request: NextRequest) {
     projectId = body.projectId || null;
     history = body.history || [];
     conversationId = body.conversationId || undefined;
+    includePending = body.includePending === true;
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid request' }), {
       status: 400,
@@ -99,7 +107,6 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // Create Langfuse trace
   const trace = langfuse.trace({
     name: 'chat',
     userId: session.userId,
@@ -108,7 +115,6 @@ export async function POST(request: NextRequest) {
     metadata: { orgId, projectId },
   });
 
-  // 3. Resolve project ID (scoped to org)
   if (!projectId) {
     projectId = await resolveProjectId(message, orgId);
   } else {
@@ -128,7 +134,6 @@ export async function POST(request: NextRequest) {
     { id: 'current', role: 'user', content: message, timestamp: Date.now() },
   ];
 
-  // 4. Detect cross-project queries
   const crossProjectKeywords = [
     'all projects', 'every project', 'across projects', 'portfolio',
     'which projects', 'compare projects', 'trending', 'overall',
@@ -138,7 +143,6 @@ export async function POST(request: NextRequest) {
   const msgLower = message.toLowerCase();
   const isCrossProject = !projectId && crossProjectKeywords.some((kw) => msgLower.includes(kw));
 
-  // 5. Fetch project data — Span 1: structured retrieval
   const structuredSpan = trace.span({
     name: 'structured-retrieval',
     input: { projectId, isCrossProject },
@@ -197,7 +201,6 @@ export async function POST(request: NextRequest) {
 
   structuredSpan.end({ output: { recordCounts } });
 
-  // 6. Vector search — Span 2: vector-search
   const vectorSpan = trace.span({
     name: 'vector-search',
     input: { query: message, projectId, matchCount: 15, matchThreshold: 0.4 },
@@ -221,6 +224,7 @@ export async function POST(request: NextRequest) {
       orgId: orgId,
       matchCount: 15,
       matchThreshold: 0.4,
+      includePending,
     }) as typeof ragResults;
 
     if (ragResults.length > 0) {
@@ -251,19 +255,53 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  // 7. Build source registry + legend
+  // -- Fetch chat tools + prompt templates for this org --
+  const toolSpan = trace.span({ name: 'chat-tools-fetch', input: { orgId } });
+  const [orgTools, orgTemplates] = await Promise.all([
+    fetchActiveTools(orgId),
+    fetchActiveTemplates(orgId),
+  ]);
+  toolSpan.end({ output: { toolCount: orgTools.length, templateCount: orgTemplates.length } });
+
+  const anthropicTools = orgTools.map(toolToAnthropicDef);
+  const toolMap = new Map<string, ChatTool>(orgTools.map(t => [t.tool_name, t]));
+
+  const matchedTemplates = matchTemplates(orgTemplates, message);
+  let systemPrompt = CORTEX_SYSTEM_PROMPT;
+  if (matchedTemplates.length > 0) {
+    const templateInstructions = matchedTemplates
+      .map(t => `[TEMPLATE: ${t.template_name}]\n${t.system_instructions}`)
+      .join('\n\n');
+    systemPrompt += `\n\n${templateInstructions}`;
+  }
+
+  if (orgTools.length > 0) {
+    systemPrompt += `\n\nYou have access to tools that can query the project database, search documents, and retrieve live data. Use them when the user asks questions that require specific data lookups. Always prefer tool results over the static project data when both are available.`;
+  }
+
   const sources = buildSourceRegistry(recordCounts, ragResults);
   const sourceLegend = buildSourceLegend(sources);
-
   const fullContext = projectContext + ragContext;
 
-  // 8. Stream Claude response — Generation span
   const generation = trace.generation({
     name: 'claude-response',
     model: 'claude-sonnet-4-20250514',
     modelParameters: { max_tokens: 4096 },
-    input: { messageCount: messages.length, contextLength: fullContext.length, sourcesCount: sources.length },
+    input: {
+      messageCount: messages.length,
+      contextLength: fullContext.length,
+      sourcesCount: sources.length,
+      toolCount: anthropicTools.length,
+      matchedTemplates: matchedTemplates.map(t => t.template_name),
+    },
   });
+
+  const toolUseHandler = async (name: string, input: Record<string, unknown>) => {
+    const tool = toolMap.get(name);
+    if (!tool) return { error: `Unknown tool: ${name}` };
+    const result = await executeChatTool(tool, input, { orgId, projectId: projectId || undefined, includePending });
+    return result.error ? { error: result.error } : result.result;
+  };
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -282,18 +320,27 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const { stream: textStream, finalUsage } = streamChatResponse(
-          CORTEX_SYSTEM_PROMPT,
+        const { stream: textStream, finalUsage } = streamChatWithTools(
+          systemPrompt,
           messages,
           fullContext,
-          sourceLegend
+          sourceLegend,
+          anthropicTools.length > 0 ? anthropicTools : undefined,
+          anthropicTools.length > 0 ? toolUseHandler : undefined
         );
 
         for await (const chunk of textStream) {
-          accumulated += chunk;
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`)
-          );
+          if (typeof chunk === 'string') {
+            accumulated += chunk;
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`)
+            );
+          } else {
+            const event = chunk as ChatEvent;
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
+            );
+          }
         }
 
         controller.enqueue(
