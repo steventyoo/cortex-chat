@@ -577,22 +577,46 @@ export async function POST(request: NextRequest) {
 
   const existingNames = new Set((existing || []).map((t: { tool_name: string }) => t.tool_name));
   const toInsert = ALL_SEED_TOOLS.filter(t => !existingNames.has(t.tool_name));
+  const toUpdate = ALL_SEED_TOOLS.filter(t => existingNames.has(t.tool_name));
 
-  if (toInsert.length === 0) {
-    return Response.json({ message: 'All default tools already exist', seeded: 0 });
+  let inserted = 0;
+  let updated = 0;
+
+  if (toInsert.length > 0) {
+    const rows = toInsert.map(t => ({
+      org_id: orgId,
+      ...t,
+      created_by: session.userId,
+    }));
+    const { error } = await sb.from('chat_tools').insert(rows);
+    if (error) {
+      return Response.json({ error: error.message }, { status: 500 });
+    }
+    inserted = toInsert.length;
   }
 
-  const rows = toInsert.map(t => ({
-    org_id: orgId,
-    ...t,
-    created_by: session.userId,
-  }));
-
-  const { error } = await sb.from('chat_tools').insert(rows);
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  for (const t of toUpdate) {
+    const { error } = await sb
+      .from('chat_tools')
+      .update({
+        display_name: t.display_name,
+        description: t.description,
+        input_schema: t.input_schema,
+        implementation_type: t.implementation_type,
+        implementation_config: t.implementation_config,
+        sample_prompts: t.sample_prompts,
+      })
+      .eq('org_id', orgId)
+      .eq('tool_name', t.tool_name);
+    if (error) {
+      return Response.json({ error: `Failed to update ${t.tool_name}: ${error.message}` }, { status: 500 });
+    }
+    updated++;
   }
 
-  return Response.json({ message: `Seeded ${toInsert.length} default tools`, seeded: toInsert.length });
+  return Response.json({
+    message: `Seeded ${inserted} new tools, updated ${updated} existing tools`,
+    seeded: inserted,
+    updated,
+  });
 }

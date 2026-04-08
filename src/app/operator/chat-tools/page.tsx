@@ -250,17 +250,15 @@ export default function ChatToolsPage() {
           <div className="flex-1" />
           {activeTab === 'tools' ? (
             <div className="flex gap-2">
-              {tools.length === 0 && (
-                <button
-                  onClick={async () => {
-                    await fetch('/api/chat-tools/seed', { method: 'POST' });
-                    fetchData();
-                  }}
-                  className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#f0f0f0] text-[#666] hover:bg-[#e0e0e0] transition-colors"
-                >
-                  Seed Defaults
-                </button>
-              )}
+              <button
+                onClick={async () => {
+                  await fetch('/api/chat-tools/seed', { method: 'POST' });
+                  fetchData();
+                }}
+                className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#f0f0f0] text-[#666] hover:bg-[#e0e0e0] transition-colors"
+              >
+                {tools.length === 0 ? 'Seed Defaults' : 'Sync Defaults'}
+              </button>
               <button
                 onClick={createNewTool}
                 className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#007aff] text-white hover:bg-[#0066dd] transition-colors"
