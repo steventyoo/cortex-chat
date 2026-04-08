@@ -217,11 +217,26 @@ export async function POST(request: NextRequest) {
     systemPrompt += `\n\n${templateInstructions}`;
   }
 
+  const toolCallLog: Array<{ name: string; input: Record<string, unknown>; result?: unknown; error?: string; durationMs?: number }> = [];
+
   const toolUseHandler = async (name: string, input: Record<string, unknown>) => {
+    const start = Date.now();
     const tool = toolMap.get(name);
-    if (!tool) return { error: `Unknown tool: ${name}` };
+    if (!tool) {
+      toolCallLog.push({ name, input, error: `Unknown tool: ${name}` });
+      return { error: `Unknown tool: ${name}` };
+    }
     const result = await executeChatTool(tool, input, { orgId, projectId: projectId || undefined, includePending });
-    return result.error ? { error: result.error } : result.result;
+    const durationMs = Date.now() - start;
+    if (result.error) {
+      toolCallLog.push({ name, input, error: result.error, durationMs });
+      return { error: result.error };
+    }
+    const summary = result.result && typeof result.result === 'object' && '_summary' in (result.result as Record<string, unknown>)
+      ? (result.result as Record<string, unknown>)._summary
+      : undefined;
+    toolCallLog.push({ name, input, result: summary || `${Array.isArray(result.result) ? result.result.length : 1} records`, durationMs });
+    return result.result;
   };
 
   const generation = trace.generation({
@@ -281,14 +296,22 @@ export async function POST(request: NextRequest) {
             input: usage.inputTokens,
             output: usage.outputTokens,
           },
+          metadata: {
+            toolCalls: toolCallLog,
+            toolCallCount: toolCallLog.length,
+          },
         });
-        trace.update({ output: accumulated });
+        trace.update({
+          output: accumulated,
+          metadata: { orgId, projectId, toolCallCount: toolCallLog.length },
+        });
       } catch (err) {
         console.error('Streaming error:', err);
         generation.end({
           output: accumulated || 'ERROR',
           level: 'ERROR',
           statusMessage: err instanceof Error ? err.message : 'Unknown error',
+          metadata: { toolCalls: toolCallLog },
         });
         controller.enqueue(
           encoder.encode(

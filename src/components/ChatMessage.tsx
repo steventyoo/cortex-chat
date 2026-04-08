@@ -1,16 +1,209 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChatMessage as ChatMessageType, SourceRef, ToolCallEntry } from '@/lib/types';
 import MarkdownRenderer from './MarkdownRenderer';
 import { StreamingProvider } from './DataTable';
 import LoadingDots from './LoadingDots';
 
+interface ParsedRecord {
+  source_file: string | null;
+  document_type: string | null;
+  skill_id: string | null;
+  similarity: number | null;
+  overall_confidence: number | null;
+  status: string | null;
+  keyFields: { label: string; value: string; confidence: number }[];
+  allFields: Record<string, unknown>;
+}
+
+function parseRecord(raw: Record<string, unknown>): ParsedRecord {
+  const fields = (raw.fields || {}) as Record<string, unknown>;
+  const keyFields: ParsedRecord['keyFields'] = [];
+
+  for (const [key, val] of Object.entries(fields)) {
+    if (val && typeof val === 'object' && 'value' in (val as Record<string, unknown>)) {
+      const f = val as { value: unknown; confidence?: number };
+      if (f.value === null || f.value === undefined) continue;
+      const conf = typeof f.confidence === 'number' ? f.confidence : 0;
+      if (conf < 0.1) continue;
+      keyFields.push({
+        label: key.replace(/_/g, ' '),
+        value: typeof f.value === 'number'
+          ? f.value.toLocaleString('en-US', f.value > 100 ? { style: 'currency', currency: 'USD', maximumFractionDigits: 0 } : { maximumFractionDigits: 2 })
+          : String(f.value),
+        confidence: conf,
+      });
+    }
+  }
+
+  keyFields.sort((a, b) => b.confidence - a.confidence);
+
+  return {
+    source_file: raw.source_file ? String(raw.source_file) : null,
+    document_type: raw.document_type ? String(raw.document_type) : null,
+    skill_id: raw.skill_id ? String(raw.skill_id) : null,
+    similarity: typeof raw.similarity === 'number' ? raw.similarity : null,
+    overall_confidence: typeof raw.overall_confidence === 'number' ? raw.overall_confidence : null,
+    status: raw.status ? String(raw.status) : null,
+    keyFields,
+    allFields: fields,
+  };
+}
+
+function ConfidenceBadge({ value }: { value: number }) {
+  const color = value >= 0.85 ? 'bg-emerald-500/20 text-emerald-400'
+    : value >= 0.7 ? 'bg-yellow-500/20 text-yellow-400'
+    : 'bg-red-500/20 text-red-400';
+  return (
+    <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium ${color}`}>
+      {Math.round(value * 100)}%
+    </span>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const color = status === 'approved' || status === 'pushed'
+    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20'
+    : status === 'pending'
+    ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/20'
+    : 'bg-zinc-500/15 text-zinc-400 border-zinc-500/20';
+  return (
+    <span className={`inline-flex px-1.5 py-0.5 rounded border text-[10px] font-medium ${color}`}>
+      {status}
+    </span>
+  );
+}
+
+function RecordCard({ record, index }: { record: ParsedRecord; index: number }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const topFields = record.keyFields.slice(0, 8);
+  const hasMore = record.keyFields.length > 8;
+
+  return (
+    <div className="rounded-lg bg-[#0a0a0a] border border-[#1f1f1f] overflow-hidden">
+      {/* Source file header */}
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-[#0f0f0f] border-b border-[#1a1a1a]">
+        <svg className="w-3.5 h-3.5 text-[#555] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+        <span className="text-[11px] text-[#888] truncate flex-1 font-mono">
+          {record.source_file || `Record ${index + 1}`}
+        </span>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {record.status ? <StatusBadge status={record.status} /> : null}
+          {record.overall_confidence !== null ? <ConfidenceBadge value={record.overall_confidence} /> : null}
+          {record.similarity !== null ? (
+            <span className="text-[10px] text-[#555] font-mono">
+              {(record.similarity * 100).toFixed(0)}% match
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Key extracted fields */}
+      <div className="px-3 py-2">
+        {topFields.length > 0 ? (
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            {topFields.map((f, i) => (
+              <div key={i} className="flex items-baseline gap-1.5 min-w-0">
+                <span className="text-[11px] text-[#555] capitalize flex-shrink-0 truncate max-w-[40%]">{f.label}</span>
+                <span className="text-[11px] text-[#ccc] truncate">{f.value}</span>
+                {f.confidence < 0.7 && (
+                  <span className="text-[10px] text-yellow-500 flex-shrink-0">⚠️</span>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <span className="text-[11px] text-[#444]">No extracted fields</span>
+        )}
+        {hasMore && !showRaw && (
+          <button onClick={() => setShowRaw(true)} className="text-[10px] text-[#007aff] mt-1.5 hover:underline">
+            +{record.keyFields.length - 8} more fields
+          </button>
+        )}
+      </div>
+
+      {/* Raw JSON toggle */}
+      <div className="border-t border-[#1a1a1a] px-3 py-1">
+        <button
+          onClick={() => setShowRaw(!showRaw)}
+          className="text-[10px] text-[#555] hover:text-[#888] transition-colors flex items-center gap-1"
+        >
+          <svg className={`w-3 h-3 transition-transform ${showRaw ? 'rotate-90' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M9 18l6-6-6-6" />
+          </svg>
+          Raw data
+        </button>
+        <AnimatePresence>
+          {showRaw && (
+            <motion.pre
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="text-[10px] text-[#666] whitespace-pre-wrap break-words mt-1 max-h-[200px] overflow-y-auto font-mono leading-relaxed"
+            >
+              {JSON.stringify(record.allFields, null, 2)}
+            </motion.pre>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+}
+
+function SourceSummary({ records }: { records: ParsedRecord[] }) {
+  const sources = useMemo(() => {
+    const map = new Map<string, { count: number; types: Set<string> }>();
+    for (const r of records) {
+      const file = r.source_file || 'Unknown';
+      const entry = map.get(file) || { count: 0, types: new Set<string>() };
+      entry.count++;
+      if (r.document_type) entry.types.add(r.document_type);
+      map.set(file, entry);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 10);
+  }, [records]);
+
+  if (sources.length === 0) return null;
+
+  return (
+    <div className="px-3 py-2 border-b border-[#1a1a1a]">
+      <div className="text-[11px] text-[#555] font-medium mb-1.5 uppercase tracking-wider">
+        Source Documents ({sources.length})
+      </div>
+      <div className="space-y-1">
+        {sources.map(([file, info], i) => (
+          <div key={i} className="flex items-center gap-2 text-[11px]">
+            <svg className="w-3 h-3 text-[#444] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+            <span className="text-[#999] truncate font-mono">{file}</span>
+            <span className="text-[#444] flex-shrink-0">
+              {info.count} record{info.count > 1 ? 's' : ''}
+              {info.types.size > 0 ? ` · ${Array.from(info.types).join(', ')}` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
   const [expanded, setExpanded] = useState(false);
   const label = tc.displayName || tc.name.replace(/_/g, ' ');
-  const query = typeof tc.input?.query === 'string' ? tc.input.query : null;
+  const query = typeof tc.input?.query === 'string'
+    ? tc.input.query
+    : typeof tc.input?.search_term === 'string'
+    ? tc.input.search_term
+    : null;
 
   let resultArr: Record<string, unknown>[] = [];
   let summary: string | null = null;
@@ -25,7 +218,12 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
     }
   }
 
+  const parsedRecords = useMemo(() => resultArr.map(parseRecord), [resultArr]);
   const count = tc.resultCount ?? resultArr.length;
+  const hasError = tc.status === 'error' || (tc.result && typeof tc.result === 'object' && 'error' in (tc.result as Record<string, unknown>));
+  const errorMsg = hasError && tc.result && typeof tc.result === 'object'
+    ? String((tc.result as Record<string, unknown>).error || '')
+    : null;
 
   return (
     <div className="my-2 rounded-lg border border-[#2a2a2a] bg-[#111111] text-[13px] overflow-hidden">
@@ -37,7 +235,7 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
           <span className="w-4 h-4 flex items-center justify-center flex-shrink-0">
             <span className="block w-3 h-3 rounded-full border-2 border-[#007aff] border-t-transparent animate-spin" />
           </span>
-        ) : tc.status === 'error' ? (
+        ) : hasError ? (
           <svg className="w-4 h-4 text-red-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
         ) : (
           <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
@@ -63,8 +261,14 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
         </div>
       )}
 
+      {Boolean(hasError) && errorMsg ? (
+        <div className="px-3 py-2 text-[12px] text-red-400/80 border-t border-[#222] bg-red-500/5">
+          {errorMsg}
+        </div>
+      ) : null}
+
       <AnimatePresence>
-        {expanded && resultArr.length > 0 && (
+        {expanded && parsedRecords.length > 0 && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
@@ -72,23 +276,11 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
             transition={{ duration: 0.2 }}
             className="border-t border-[#222]"
           >
-            <div className="max-h-[300px] overflow-y-auto p-3 space-y-2">
-              {resultArr.map((record: Record<string, unknown>, i: number) => (
-                <div key={i} className="rounded bg-[#0a0a0a] border border-[#1f1f1f] p-2 text-[12px]">
-                  {record.source_file ? (
-                    <div className="text-[#555] mb-1 truncate">{String(record.source_file)}</div>
-                  ) : null}
-                  <pre className="whitespace-pre-wrap break-words text-[#aaa] leading-relaxed">
-                    {JSON.stringify(record.fields || record, null, 2)}
-                  </pre>
-                  {record.similarity !== undefined && (
-                    <div className="mt-1 text-[11px] text-[#555]">
-                      Similarity: {Number(record.similarity).toFixed(3)}
-                      {record.overall_confidence !== undefined ? ` | Confidence: ${Number(record.overall_confidence).toFixed(2)}` : null}
-                      {record.status ? ` | ${String(record.status)}` : null}
-                    </div>
-                  )}
-                </div>
+            <SourceSummary records={parsedRecords} />
+
+            <div className="max-h-[400px] overflow-y-auto p-3 space-y-2">
+              {parsedRecords.map((record, i) => (
+                <RecordCard key={i} record={record} index={i} />
               ))}
             </div>
           </motion.div>
