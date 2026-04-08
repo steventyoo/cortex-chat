@@ -178,14 +178,17 @@ async function executeRagSearch(
     const targetSkills = skillIds || (singleSkillId ? [singleSkillId] : null);
     let totalCount: number | null = null;
 
-    if (targetSkills && targetSkills.length > 0 && ctx.projectId) {
+    if (ctx.projectId) {
       let countQuery = sb
         .from('extracted_records')
         .select('*', { count: 'exact', head: true })
         .eq('project_id', ctx.projectId)
         .eq('org_id', ctx.orgId)
-        .not('embedding', 'is', null)
-        .in('skill_id', targetSkills);
+        .not('embedding', 'is', null);
+
+      if (targetSkills && targetSkills.length > 0) {
+        countQuery = countQuery.in('skill_id', targetSkills);
+      }
 
       if (!ctx.includePending) {
         countQuery = countQuery.in('status', ['approved', 'pushed']);
@@ -205,8 +208,11 @@ async function executeRagSearch(
       fields: r.fields,
     }));
 
+    const skillLabel = targetSkills && targetSkills.length > 0
+      ? targetSkills.length === 1 ? targetSkills[0] : `${targetSkills.length} types`
+      : 'all types';
     const summary = totalCount !== null
-      ? `Showing ${formatted.length} of ${totalCount} total records (similarity > ${matchThreshold})`
+      ? `Showing top ${formatted.length} of ${totalCount} ${skillLabel} records (similarity > ${matchThreshold})`
       : `Found ${formatted.length} records (similarity > ${matchThreshold})`;
 
     return { result: { _summary: summary, records: formatted } };
