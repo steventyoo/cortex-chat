@@ -30,6 +30,7 @@ export interface ChatPromptTemplate {
 export interface ToolExecContext {
   orgId: string;
   projectId?: string;
+  includePending?: boolean;
 }
 
 export interface ToolExecResult {
@@ -134,6 +135,7 @@ async function executeRagSearch(
       skillId: config.skill_id as string | undefined,
       matchCount: Number(config.match_count) || 10,
       matchThreshold: Number(config.similarity_threshold) || 0.4,
+      includePending: ctx.includePending,
     });
 
     const formatted = results.map(r => ({

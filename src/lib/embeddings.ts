@@ -89,6 +89,7 @@ export async function searchByEmbedding(opts: {
   skillId?: string;
   matchCount?: number;
   matchThreshold?: number;
+  includePending?: boolean;
 }): Promise<Array<{
   id: string;
   skill_id: string;
@@ -112,6 +113,7 @@ export async function searchByEmbedding(opts: {
     filter_project_id: opts.projectId || null,
     filter_org_id: opts.orgId || null,
     filter_skill_id: opts.skillId || null,
+    include_pending: opts.includePending || false,
   });
 
   if (error) {

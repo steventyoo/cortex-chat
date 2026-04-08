@@ -143,19 +143,38 @@ export async function POST(request: NextRequest) {
             singleFields[fieldName] = fieldData;
           }
 
-          const erRecordId = await pushToExtractedRecords({
-            projectId,
-            orgId,
-            skillId,
-            skillVersion: skill?.version || 1,
-            pipelineLogId: recordId,
-            documentType: extractedData.documentType,
-            sourceFile: record.file_name || undefined,
-            fields: singleFields,
-            rawText: record.source_text || undefined,
-            overallConfidence: extractedData.documentTypeConfidence,
-            status: 'approved',
-          });
+          const existingPending = await sb
+            .from('extracted_records')
+            .select('id')
+            .eq('pipeline_log_id', recordId)
+            .maybeSingle();
+
+          let erRecordId: string | null = null;
+
+          if (existingPending.data?.id) {
+            erRecordId = String(existingPending.data.id);
+            await sb.from('extracted_records').update({
+              fields: Object.fromEntries(
+                Object.entries(singleFields).map(([k, v]) => [k, { value: v.value, confidence: v.confidence }])
+              ),
+              status: 'approved',
+              updated_at: new Date().toISOString(),
+            }).eq('id', erRecordId);
+          } else {
+            erRecordId = await pushToExtractedRecords({
+              projectId,
+              orgId,
+              skillId,
+              skillVersion: skill?.version || 1,
+              pipelineLogId: recordId,
+              documentType: extractedData.documentType,
+              sourceFile: record.file_name || undefined,
+              fields: singleFields,
+              rawText: record.source_text || undefined,
+              overallConfidence: extractedData.documentTypeConfidence,
+              status: 'approved',
+            });
+          }
 
           if (erRecordId) {
             pushedRecordId = erRecordId;

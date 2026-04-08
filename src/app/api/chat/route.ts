@@ -91,6 +91,7 @@ export async function POST(request: NextRequest) {
   let projectId: string | null;
   let history: ChatMessage[];
   let conversationId: string | undefined;
+  let includePending = false;
 
   try {
     const body = await request.json();
@@ -98,6 +99,7 @@ export async function POST(request: NextRequest) {
     projectId = body.projectId || null;
     history = body.history || [];
     conversationId = body.conversationId || undefined;
+    includePending = body.includePending === true;
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid request' }), {
       status: 400,
@@ -222,6 +224,7 @@ export async function POST(request: NextRequest) {
       orgId: orgId,
       matchCount: 15,
       matchThreshold: 0.4,
+      includePending,
     }) as typeof ragResults;
 
     if (ragResults.length > 0) {
@@ -296,7 +299,7 @@ export async function POST(request: NextRequest) {
   const toolUseHandler = async (name: string, input: Record<string, unknown>) => {
     const tool = toolMap.get(name);
     if (!tool) return { error: `Unknown tool: ${name}` };
-    const result = await executeChatTool(tool, input, { orgId, projectId: projectId || undefined });
+    const result = await executeChatTool(tool, input, { orgId, projectId: projectId || undefined, includePending });
     return result.error ? { error: result.error } : result.result;
   };
 

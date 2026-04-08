@@ -26,6 +26,11 @@ interface PromptTemplate {
   created_at: string;
 }
 
+interface Project {
+  projectId: string;
+  projectName: string;
+}
+
 const TYPE_LABELS: Record<string, string> = {
   sql_query: 'SQL Query',
   rag_search: 'RAG Search',
@@ -87,12 +92,18 @@ export default function ChatToolsPage() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProject, setSelectedProject] = useState('');
+  const [embedLoading, setEmbedLoading] = useState(false);
+  const [embedResult, setEmbedResult] = useState<{ embedded: number; skipped: number; total: number; errors?: string[] } | null>(null);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [toolsRes, templatesRes] = await Promise.all([
+      const [toolsRes, templatesRes, projectsRes] = await Promise.all([
         fetch('/api/chat-tools'),
         fetch('/api/chat-tools/templates'),
+        fetch('/api/projects'),
       ]);
       if (toolsRes.ok) {
         const d = await toolsRes.json();
@@ -101,6 +112,10 @@ export default function ChatToolsPage() {
       if (templatesRes.ok) {
         const d = await templatesRes.json();
         setTemplates(d.templates || []);
+      }
+      if (projectsRes.ok) {
+        const d = await projectsRes.json();
+        setProjects(d.projects || []);
       }
     } catch { /* ignore */ }
     setLoading(false);
@@ -160,6 +175,29 @@ export default function ChatToolsPage() {
       const data = await res.json();
       router.push(`/operator/chat-tools/templates/${data.template.id}`);
     }
+  };
+
+  const generateTestEmbeddings = async () => {
+    if (!selectedProject) return;
+    setEmbedLoading(true);
+    setEmbedResult(null);
+    try {
+      const res = await fetch('/api/chat-tools/generate-embeddings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: selectedProject }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setEmbedResult(data);
+      } else {
+        const err = await res.json();
+        setEmbedResult({ embedded: 0, skipped: 0, total: 0, errors: [err.error || 'Request failed'] });
+      }
+    } catch (err) {
+      setEmbedResult({ embedded: 0, skipped: 0, total: 0, errors: [String(err)] });
+    }
+    setEmbedLoading(false);
   };
 
   return (
@@ -338,6 +376,64 @@ export default function ChatToolsPage() {
             </div>
           )
         )}
+
+        {/* Debug: Generate Test Embeddings */}
+        <div className="mt-10 border border-dashed border-[#e0c97f] rounded-lg p-5 bg-[#fffdf5]">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-[#b8960c] bg-[#fef3c7] px-2 py-0.5 rounded">Debug</span>
+            <h3 className="text-[14px] font-semibold text-[#1a1a1a]">Generate Test Embeddings</h3>
+          </div>
+          <p className="text-[12px] text-[#888] mb-4">
+            Push unapproved pipeline records to the vector store with <span className="font-mono text-[11px] bg-[#f5f5f5] px-1 rounded">pending</span> status so you can test chat and RAG search tools before formal approval. Records will be re-embedded when approved.
+          </p>
+
+          <div className="flex items-end gap-3">
+            <div className="flex-1 max-w-xs">
+              <label className="block text-[11px] font-medium text-[#666] mb-1">Project</label>
+              <select
+                value={selectedProject}
+                onChange={e => { setSelectedProject(e.target.value); setEmbedResult(null); }}
+                className="w-full border border-[#ddd] rounded-md px-3 py-1.5 text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 focus:border-[#007aff]"
+              >
+                <option value="">Select a project...</option>
+                {projects.map(p => (
+                  <option key={p.projectId} value={p.projectId}>{p.projectName}</option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              onClick={generateTestEmbeddings}
+              disabled={!selectedProject || embedLoading}
+              className="px-4 py-1.5 rounded-md text-[13px] font-medium bg-[#b8960c] text-white hover:bg-[#a0820a] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+            >
+              {embedLoading && (
+                <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                  <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                </svg>
+              )}
+              {embedLoading ? 'Generating...' : 'Generate Embeddings'}
+            </button>
+          </div>
+
+          {embedResult && (
+            <div className={`mt-4 p-3 rounded-md text-[12px] ${embedResult.errors?.length ? 'bg-[#fef2f2] border border-[#fecaca] text-[#991b1b]' : 'bg-[#f0fdf4] border border-[#bbf7d0] text-[#166534]'}`}>
+              {embedResult.embedded > 0 ? (
+                <p>Embedded <strong>{embedResult.embedded}</strong> of {embedResult.total} records (skipped {embedResult.skipped}). These are now searchable in chat with <span className="font-mono bg-white/50 px-1 rounded">pending</span> status.</p>
+              ) : embedResult.total === 0 ? (
+                <p>No un-pushed pipeline records found for this project. Upload and extract documents first.</p>
+              ) : (
+                <p>Embedded 0 records. Skipped {embedResult.skipped} of {embedResult.total}.</p>
+              )}
+              {embedResult.errors && embedResult.errors.length > 0 && (
+                <ul className="mt-2 list-disc list-inside">
+                  {embedResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
