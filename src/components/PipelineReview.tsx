@@ -2701,6 +2701,28 @@ function DocumentRow({
         </button>
       )}
 
+      {(item.status === 'pending_review' || item.status === 'approved' || item.status === 'flagged') && (
+        <button
+          onClick={(e) => handleRetry(item.id, e)}
+          disabled={retryingId === item.id}
+          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-violet-700 bg-violet-50 hover:bg-violet-100 border border-violet-200 transition-colors flex-shrink-0 disabled:opacity-50"
+          title="Re-extract this document with the latest skill configuration"
+        >
+          {retryingId === item.id ? (
+            <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M1 4v6h6" />
+              <path d="M3.51 15a9 9 0 102.13-9.36L1 10" />
+            </svg>
+          )}
+          Re-extract
+        </button>
+      )}
+
       {item.status !== 'pushed' && item.status !== 'rejected' && item.status !== 'queued' && item.status !== 'processing' && item.status !== 'failed' && item.status !== 'stored_only' && (
         <button
           onClick={(e) => handleMarkAsPushed(item.id, item.fileName, e)}

@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Record not found' }, { status: 404 });
   }
 
-  if (record.status !== 'failed' && record.status !== 'queued' && record.status !== 'stored_only') {
+  const retryableStatuses = ['failed', 'queued', 'stored_only', 'pending_review', 'approved', 'flagged'];
+  if (!retryableStatuses.includes(record.status as string)) {
     return Response.json({ error: `Cannot retry record with status "${record.status}"` }, { status: 400 });
   }
 
