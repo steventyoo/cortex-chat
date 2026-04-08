@@ -741,6 +741,30 @@ export default function PipelineReview() {
     }
   };
 
+  const [clearingQueue, setClearingQueue] = useState(false);
+
+  const handleClearQueue = async () => {
+    if (!confirm('Clear the processing queue? This will mark all queued/processing documents as failed so they can be retried individually.')) return;
+    setClearingQueue(true);
+    try {
+      const res = await fetch('/api/pipeline/clear-queue', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        setScanResult(`Queue cleared: ${data.cleared} document${data.cleared !== 1 ? 's' : ''} reset`);
+        await fetchItems();
+        fetchGlobalStats();
+      } else {
+        setScanResult(data.error || 'Failed to clear queue');
+      }
+    } catch (err) {
+      console.error('Clear queue error:', err);
+      setScanResult('Failed to clear queue');
+    } finally {
+      setClearingQueue(false);
+      setTimeout(() => setScanResult(null), 5000);
+    }
+  };
+
   const handleDelete = async (recordId: string, fileName: string, e: React.MouseEvent) => {
     e.stopPropagation(); // Don't open review view
     if (!confirm(`Delete "${fileName}" from the pipeline?`)) return;
@@ -1739,7 +1763,7 @@ export default function PipelineReview() {
             exit={{ opacity: 0, height: 0 }}
             className="border-b border-[#e8e8e8] overflow-hidden"
           >
-            <IngestionProgressBar stats={globalStats} onStopIngest={handleStopIngest} stopping={stoppingIngest} />
+            <IngestionProgressBar stats={globalStats} onStopIngest={handleStopIngest} stopping={stoppingIngest} onClearQueue={handleClearQueue} clearingQueue={clearingQueue} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -3901,7 +3925,7 @@ function parseCSVRows(csvText: string): string[][] {
 
 // ─── Ingestion Progress Bar ─────────────────────────────────
 
-function IngestionProgressBar({ stats, onStopIngest, stopping }: { stats: GlobalStats; onStopIngest: () => void; stopping?: boolean }) {
+function IngestionProgressBar({ stats, onStopIngest, stopping, onClearQueue, clearingQueue }: { stats: GlobalStats; onStopIngest: () => void; stopping?: boolean; onClearQueue: () => void; clearingQueue?: boolean }) {
   const done = stats.completed + stats.failed + stats.storedOnly;
   const inFlight = stats.processing;
   const total = stats.total;
@@ -3969,6 +3993,13 @@ function IngestionProgressBar({ stats, onStopIngest, stopping }: { stats: Global
               {stopping ? 'Stopping...' : 'Stop Ingest'}
             </button>
           )}
+          <button
+            onClick={onClearQueue}
+            disabled={clearingQueue}
+            className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors border border-amber-200 disabled:opacity-50"
+          >
+            {clearingQueue ? 'Clearing...' : 'Clear Queue'}
+          </button>
         </div>
       </div>
       <div className="h-2 bg-white/60 rounded-full overflow-hidden border border-blue-100">

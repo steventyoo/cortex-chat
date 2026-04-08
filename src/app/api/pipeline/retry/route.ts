@@ -65,38 +65,78 @@ export async function POST(request: NextRequest) {
     validation_flags: null,
   }).eq('id', recordId);
 
+  const baseUrl = getBaseUrl(request);
+  const payload: ProcessPayload = {
+    recordId: String(record.id),
+    orgId,
+    projectId: (record.project_id as string) || null,
+    fileName,
+    mimeType,
+    storagePath: storagePath || '',
+    ...(record.status === 'stored_only' ? { forceProcess: true } : {}),
+    ...(driveFileId ? {
+      driveFileId,
+      driveModifiedTime: (record.drive_modified_time as string) || undefined,
+      driveWebViewLink: (record.drive_web_view_link as string) || undefined,
+      driveFolderPath: (record.drive_folder_path as string) || undefined,
+    } : {}),
+  };
+
+  // Try QStash first; if rate-limited, fall back to direct processing
   try {
-    const baseUrl = getBaseUrl(request);
-    const payload: ProcessPayload = {
-      recordId: String(record.id),
-      orgId,
-      projectId: (record.project_id as string) || null,
-      fileName,
-      mimeType,
-      storagePath: storagePath || '',
-      ...(record.status === 'stored_only' ? { forceProcess: true } : {}),
-      ...(driveFileId ? {
-        driveFileId,
-        driveModifiedTime: (record.drive_modified_time as string) || undefined,
-        driveWebViewLink: (record.drive_web_view_link as string) || undefined,
-        driveFolderPath: (record.drive_folder_path as string) || undefined,
-      } : {}),
-    };
     console.log(`[retry] Re-queuing ${recordId}: storagePath=${storagePath} driveFileId=${driveFileId}`);
     const messageId = await publishProcessJob(payload, baseUrl);
     console.log(`[retry] Re-queued ${recordId} — qstash_msg=${messageId}`);
     return Response.json({ success: true, recordId, qstashMessageId: messageId });
-  } catch (err) {
-    console.error('[retry] Failed to re-queue processing:', err);
-    await sb.from('pipeline_log').update({
-      status: 'failed',
-      validation_flags: [{
-        field: 'queue',
-        issue: `Failed to re-queue: ${err instanceof Error ? err.message : 'Unknown'}`,
-        severity: 'error',
-      }],
-    }).eq('id', recordId);
-    return Response.json({ error: 'Failed to queue retry' }, { status: 500 });
+  } catch (qstashErr) {
+    const isRateLimit = qstashErr instanceof Error && (
+      qstashErr.message.includes('rate limit') ||
+      qstashErr.message.includes('Ratelimit') ||
+      (qstashErr as { status?: number }).status === 429
+    );
+
+    if (!isRateLimit) {
+      console.error('[retry] Failed to re-queue processing:', qstashErr);
+      await sb.from('pipeline_log').update({
+        status: 'failed',
+        validation_flags: [{
+          field: 'queue',
+          issue: `Failed to re-queue: ${qstashErr instanceof Error ? qstashErr.message : 'Unknown'}`,
+          severity: 'error',
+        }],
+      }).eq('id', recordId);
+      return Response.json({ error: 'Failed to queue retry' }, { status: 500 });
+    }
+
+    // QStash rate-limited — process directly via internal fetch
+    console.log(`[retry] QStash rate-limited, processing ${recordId} directly`);
+    try {
+      const processRes = await fetch(`${baseUrl}/api/pipeline/process`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-cortex-direct-retry': 'true',
+        },
+        body: JSON.stringify(payload),
+      });
+      const result = await processRes.json();
+      if (processRes.ok) {
+        console.log(`[retry] Direct processing complete for ${recordId}: status=${result.status}`);
+        return Response.json({ success: true, recordId, direct: true, ...result });
+      }
+      throw new Error(result.error || `Process returned ${processRes.status}`);
+    } catch (directErr) {
+      console.error('[retry] Direct processing also failed:', directErr);
+      await sb.from('pipeline_log').update({
+        status: 'failed',
+        validation_flags: [{
+          field: 'queue',
+          issue: `QStash rate-limited and direct processing failed: ${directErr instanceof Error ? directErr.message : 'Unknown'}`,
+          severity: 'error',
+        }],
+      }).eq('id', recordId);
+      return Response.json({ error: 'QStash rate-limited and direct processing failed' }, { status: 500 });
+    }
   }
 }
 

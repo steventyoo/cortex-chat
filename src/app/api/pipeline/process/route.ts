@@ -31,15 +31,18 @@ export async function POST(request: NextRequest) {
   const isVercel = !!process.env.VERCEL;
   if (isVercel) {
     const signature = request.headers.get('upstash-signature');
-    if (!signature) {
+    const isDirectRetry = request.headers.get('x-cortex-direct-retry') === 'true';
+    if (!signature && !isDirectRetry) {
       return Response.json({ error: 'Missing signature' }, { status: 401 });
     }
-    try {
-      const receiver = getQStashReceiver();
-      await receiver.verify({ signature, body, url: `${getBaseUrl(request)}/api/pipeline/process` });
-    } catch (err) {
-      console.error('[process] QStash signature verification failed:', err);
-      return Response.json({ error: 'Invalid signature' }, { status: 401 });
+    if (signature) {
+      try {
+        const receiver = getQStashReceiver();
+        await receiver.verify({ signature, body, url: `${getBaseUrl(request)}/api/pipeline/process` });
+      } catch (err) {
+        console.error('[process] QStash signature verification failed:', err);
+        return Response.json({ error: 'Invalid signature' }, { status: 401 });
+      }
     }
   }
 
