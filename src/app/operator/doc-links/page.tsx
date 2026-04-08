@@ -282,6 +282,53 @@ function ChainsTab() {
             </div>
           </div>
 
+          {/* Missing document types alert */}
+          {(() => {
+            const missingSkills = new Map<string, string[]>();
+            for (const chain of chainsToShow) {
+              for (const lt of chain.linkTypes) {
+                if (lt.sourceDocs === 0 && lt.sourceSkill) {
+                  const arr = missingSkills.get(lt.sourceSkill) || [];
+                  if (!arr.includes(chain.chainName)) arr.push(chain.chainName);
+                  missingSkills.set(lt.sourceSkill, arr);
+                }
+                if (lt.targetDocs === 0 && lt.targetSkill) {
+                  const arr = missingSkills.get(lt.targetSkill) || [];
+                  if (!arr.includes(chain.chainName)) arr.push(chain.chainName);
+                  missingSkills.set(lt.targetSkill, arr);
+                }
+              }
+            }
+            if (missingSkills.size === 0) return null;
+            return (
+              <div className="border border-[#fecaca] rounded-lg p-4 mb-6 bg-[#fef2f2]">
+                <div className="flex items-center gap-2 mb-2">
+                  <svg className="w-4 h-4 text-[#dc2626]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                  </svg>
+                  <span className="text-[13px] font-semibold text-[#991b1b]">
+                    {missingSkills.size} document type{missingSkills.size > 1 ? 's' : ''} missing from this project
+                  </span>
+                </div>
+                <p className="text-[12px] text-[#7f1d1d] mb-3">
+                  These document types are required by chain relationships but have 0 documents ingested. Upload them to enable full coverage analysis.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {[...missingSkills.entries()].map(([skill, chains]) => (
+                    <div key={skill} className="flex items-start gap-2 bg-white border border-[#fecaca] rounded px-3 py-2">
+                      <span className="text-[12px] font-semibold text-[#1a1a1a] whitespace-nowrap">
+                        {SKILL_LABELS[skill] || skill}
+                      </span>
+                      <span className="text-[11px] text-[#999] leading-relaxed">
+                        — blocks {chains.join(', ')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Chain summary cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
             {chainsToShow.map(chain => (
