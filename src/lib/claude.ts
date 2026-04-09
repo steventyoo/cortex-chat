@@ -35,7 +35,7 @@ export interface StreamResultWithTools {
   finalUsage: Promise<StreamUsage>;
 }
 
-const MAX_TOOL_ROUNDS = 7;
+const MAX_TOOL_ROUNDS = 12;
 
 export function streamChatResponse(
   systemPrompt: string,
