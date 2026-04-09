@@ -760,17 +760,39 @@ export async function POST(request: NextRequest) {
   }
 
   for (const card of toUpdate) {
+    let embeddingStr: string | null = null;
+
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        const text = [
+          card.display_name,
+          card.description,
+          ...card.trigger_concepts,
+          ...card.example_questions,
+        ].join('\n');
+        const embedding = await generateEmbedding(text);
+        embeddingStr = `[${embedding.join(',')}]`;
+      } catch (err) {
+        console.error(`Failed to re-embed card ${card.card_name}:`, err);
+      }
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      display_name: card.display_name,
+      description: card.description,
+      trigger_concepts: card.trigger_concepts,
+      skills_involved: card.skills_involved,
+      business_logic: card.business_logic,
+      key_fields: card.key_fields,
+      example_questions: card.example_questions,
+    };
+    if (embeddingStr) {
+      updatePayload.embedding = embeddingStr;
+    }
+
     const { error } = await sb
       .from('context_cards')
-      .update({
-        display_name: card.display_name,
-        description: card.description,
-        trigger_concepts: card.trigger_concepts,
-        skills_involved: card.skills_involved,
-        business_logic: card.business_logic,
-        key_fields: card.key_fields,
-        example_questions: card.example_questions,
-      })
+      .update(updatePayload)
       .eq('org_id', orgId)
       .eq('card_name', card.card_name);
 
