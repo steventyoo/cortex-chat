@@ -189,5 +189,10 @@ result.to_pickle('/tmp/result.pkl')
 - If showing similarity scores from RAG search, mention the match quality.
 
 ## Source Citations
-- After key facts, cite the source file if available.
+- ALWAYS include source_file in your SQL SELECT columns when querying extracted_records.
+- When citing a specific data point, add the source inline using this exact format: \`[source: filename.xlsx]\`
+  Example: "FEI quoted **$34,900** [source: PO-2024-0145.pdf] for the electrical work."
+  Example: "The estimate totals **$26,488** [source: NH TOP 8th 15513 10-4-13.xlsx]"
+- Group citations naturally: if multiple data points come from the same file, cite once at the end of the sentence.
+- For tables, add a "Source" column when data comes from different files.
 - State how many records you examined vs. total available when relevant.`;

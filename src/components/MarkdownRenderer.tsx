@@ -16,26 +16,49 @@ import { SourceRef } from '@/lib/types';
 const SourceContext = createContext<SourceRef[]>([]);
 
 const CITATION_PATTERN = /\[(S|V)\d+\]/g;
+const SOURCE_FILE_PATTERN = /\[source:\s*([^\]]+)\]/g;
+
+function SourceFilePill({ filename }: { filename: string }) {
+  return (
+    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 mx-0.5 rounded bg-[#f0f4ff] text-[11px] text-[#4a7cca] font-medium align-baseline leading-none border border-[#dce6f5] cursor-default" title={filename}>
+      <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+      {filename.length > 40 ? filename.slice(0, 37) + '...' : filename}
+    </span>
+  );
+}
 
 function renderTextWithCitations(text: string, sources: SourceRef[]): React.ReactNode[] {
-  if (sources.length === 0 || !CITATION_PATTERN.test(text)) {
+  const hasCitations = CITATION_PATTERN.test(text);
+  CITATION_PATTERN.lastIndex = 0;
+  const hasSourceFiles = SOURCE_FILE_PATTERN.test(text);
+  SOURCE_FILE_PATTERN.lastIndex = 0;
+
+  if (!hasCitations && !hasSourceFiles) {
     return [text];
   }
 
-  CITATION_PATTERN.lastIndex = 0;
-
+  // Unified regex that matches both patterns
+  const combinedPattern = /\[(S|V)\d+\]|\[source:\s*([^\]]+)\]/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
-  while ((match = CITATION_PATTERN.exec(text)) !== null) {
+  while ((match = combinedPattern.exec(text)) !== null) {
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
 
-    const tag = match[0].slice(1, -1);
-    const source = sources.find((s) => s.tag === tag);
-    parts.push(<SourceTag key={`${tag}-${match.index}`} tag={tag} source={source} />);
+    if (match[1]) {
+      // Legacy citation tag [S1], [V2]
+      const tag = match[0].slice(1, -1);
+      const source = sources.find((s) => s.tag === tag);
+      parts.push(<SourceTag key={`${tag}-${match.index}`} tag={tag} source={source} />);
+    } else if (match[2]) {
+      // Source file citation [source: filename.xlsx]
+      const filename = match[2].trim();
+      parts.push(<SourceFilePill key={`sf-${match.index}`} filename={filename} />);
+    }
+
     lastIndex = match.index + match[0].length;
   }
 

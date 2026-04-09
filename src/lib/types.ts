@@ -8,12 +8,17 @@ export interface ToolCallEntry {
   status: 'calling' | 'done' | 'error';
 }
 
+export type MessagePart =
+  | { type: 'text'; content: string }
+  | { type: 'tool_call'; toolCall: ToolCallEntry };
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
   toolCalls?: ToolCallEntry[];
+  parts?: MessagePart[];
 }
 
 export interface ProjectData {

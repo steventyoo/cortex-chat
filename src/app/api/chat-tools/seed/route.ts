@@ -49,12 +49,16 @@ const CORE_TOOLS = [
     description: 'Run a read-only SQL SELECT query against the extracted_records table. Use for counting, grouping, aggregating, joining, and filtering document data. The org_id filter is auto-applied. Returns JSON rows. ALWAYS use this for data aggregation — never count or sum records yourself.',
     input_schema: {
       properties: {
+        description: {
+          type: 'string',
+          description: 'A brief plain-English explanation of what this query does (e.g. "Get total PO amounts grouped by vendor"). Shown to the user instead of raw SQL.',
+        },
         query: {
           type: 'string',
           description: 'A SELECT SQL query. Table: extracted_records (columns: id, org_id, project_id, skill_id, document_type, source_file, overall_confidence, status, fields JSONB, created_at). Access JSONB: fields->\'field_name\'->>\'value\'. Cast numbers: (fields->\'amount\'->>\'value\')::numeric. org_id is auto-injected. Use {{project_id}} for project filtering.',
         },
       },
-      required: ['query'],
+      required: ['description', 'query'],
     },
     implementation_type: 'sql_analytics',
     implementation_config: {},

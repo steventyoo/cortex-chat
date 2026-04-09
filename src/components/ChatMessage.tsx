@@ -2,18 +2,33 @@
 
 import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChatMessage as ChatMessageType, SourceRef, ToolCallEntry } from '@/lib/types';
+import { ChatMessage as ChatMessageType, SourceRef, ToolCallEntry, MessagePart } from '@/lib/types';
 import MarkdownRenderer from './MarkdownRenderer';
 import { StreamingProvider } from './DataTable';
 import LoadingDots from './LoadingDots';
+
+function extractSourceFiles(
+  resultArr: Record<string, unknown>[],
+  resultRows: Record<string, unknown>[],
+): string[] {
+  const files = new Set<string>();
+  for (const r of resultArr) {
+    if (typeof r.source_file === 'string' && r.source_file) files.add(r.source_file);
+  }
+  for (const r of resultRows) {
+    if (typeof r.source_file === 'string' && r.source_file) files.add(r.source_file);
+  }
+  return Array.from(files);
+}
 
 function ToolCallCard({ tc, suppressArtifact }: { tc: ToolCallEntry; suppressArtifact?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const label = tc.displayName || tc.name.replace(/_/g, ' ');
 
+  const inputDescription = typeof tc.input?.description === 'string' ? tc.input.description : null;
   const inputQuery = typeof tc.input?.query === 'string' ? tc.input.query : null;
   const inputQuestion = typeof tc.input?.question === 'string' ? tc.input.question : null;
-  const displayInput = inputQuery || inputQuestion;
+  const displayInput = inputDescription || inputQuestion || (tc.name === 'execute_sql_analytics' ? null : inputQuery);
 
   let resultArr: Record<string, unknown>[] = [];
   let resultRows: Record<string, unknown>[] = [];
@@ -55,6 +70,8 @@ function ToolCallCard({ tc, suppressArtifact }: { tc: ToolCallEntry; suppressArt
     || (!suppressArtifact && (stdout || tc.htmlArtifact))
     || (suppressArtifact && (hasError || resultArr.length > 0 || resultRows.length > 0));
 
+  const sourceFiles = extractSourceFiles(resultArr, resultRows);
+
   return (
     <div className="my-2 rounded-lg border border-[#2a2a2a] bg-[#111111] text-[13px] overflow-hidden">
       <button
@@ -91,6 +108,23 @@ function ToolCallCard({ tc, suppressArtifact }: { tc: ToolCallEntry; suppressArt
       {displayInput && (
         <div className="px-3 pb-2 text-[12px] text-[#777] border-t border-[#222]">
           <span className="text-[#555]">Input:</span> {displayInput}
+        </div>
+      )}
+
+      {sourceFiles.length > 0 && tc.status === 'done' && (
+        <div className="px-3 pb-2 text-[11px] border-t border-[#222] flex flex-wrap items-center gap-1.5 pt-1.5">
+          <span className="text-[#555] flex items-center gap-1">
+            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+            Sources:
+          </span>
+          {sourceFiles.slice(0, 5).map((file) => (
+            <span key={file} className="px-1.5 py-0.5 rounded bg-[#1a1a1a] text-[#999] truncate max-w-[200px]" title={file}>
+              {file}
+            </span>
+          ))}
+          {sourceFiles.length > 5 && (
+            <span className="px-1.5 py-0.5 text-[#666]">+{sourceFiles.length - 5} more</span>
+          )}
         </div>
       )}
 
@@ -248,6 +282,44 @@ function getStdout(tc: ToolCallEntry): string | null {
   return null;
 }
 
+function MessageSourcesFooter({ toolCalls }: { toolCalls: ToolCallEntry[] }) {
+  const allFiles = new Set<string>();
+  for (const tc of toolCalls) {
+    if (tc.status !== 'done' || !tc.result || typeof tc.result !== 'object') continue;
+    const res = tc.result as Record<string, unknown>;
+    const collections = [
+      ...(Array.isArray(res.records) ? res.records : []),
+      ...(Array.isArray(res.rows) ? res.rows : []),
+      ...(Array.isArray(res.catalog) ? res.catalog : []),
+    ] as Record<string, unknown>[];
+    for (const r of collections) {
+      if (typeof r.source_file === 'string' && r.source_file) allFiles.add(r.source_file);
+    }
+  }
+  if (allFiles.size === 0) return null;
+
+  const files = Array.from(allFiles);
+  return (
+    <div className="mt-3 pt-3 border-t border-[#e8e8e8]">
+      <div className="text-[11px] uppercase tracking-wide text-[#999] mb-1.5 font-medium flex items-center gap-1">
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+        {files.length} source document{files.length !== 1 ? 's' : ''} referenced
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {files.map((file) => (
+          <span
+            key={file}
+            className="inline-flex items-center px-2 py-0.5 rounded-md bg-[#f5f5f5] text-[11px] text-[#666] truncate max-w-[260px]"
+            title={file}
+          >
+            {file}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 interface ChatMessageProps {
   message: ChatMessageType;
   sources?: SourceRef[];
@@ -270,10 +342,78 @@ export default function ChatMessage({
   }, [message.content]);
 
   const toolCalls = message.toolCalls || [];
+  const parts = message.parts || [];
 
   const hasInlineArtifact = toolCalls.some(
     (tc) => tc.name === 'execute_analysis' && tc.status === 'done' && (tc.htmlArtifact || getStdout(tc))
   );
+
+  const renderParts = () => {
+    if (parts.length === 0) {
+      // Fallback for messages without parts (e.g. from history)
+      return (
+        <>
+          {toolCalls.length > 0 && (
+            <div className="my-1">
+              {toolCalls.map((tc, i) => (
+                <ToolCallCard
+                  key={`${tc.name}-${i}`}
+                  tc={tc}
+                  suppressArtifact={hasInlineArtifact && tc.name === 'execute_analysis'}
+                />
+              ))}
+            </div>
+          )}
+
+          {hasInlineArtifact && <InlineArtifact toolCalls={toolCalls} />}
+
+          {!message.content && isStreaming && toolCalls.length === 0 && <LoadingDots />}
+
+          {message.content && (
+            <StreamingProvider isStreaming={isStreaming}>
+              <MarkdownRenderer content={message.content} sources={sources} />
+            </StreamingProvider>
+          )}
+        </>
+      );
+    }
+
+    // Render parts in natural order
+    const isLastPartText = parts.length > 0 && parts[parts.length - 1].type === 'text';
+    return (
+      <>
+        {parts.map((part, i) => {
+          if (part.type === 'tool_call') {
+            return (
+              <ToolCallCard
+                key={`tc-${part.toolCall.name}-${i}`}
+                tc={part.toolCall}
+                suppressArtifact={hasInlineArtifact && part.toolCall.name === 'execute_analysis'}
+              />
+            );
+          }
+          // Text part
+          const isLast = i === parts.length - 1;
+          return (
+            <div key={`text-${i}`}>
+              {hasInlineArtifact && isLast && <InlineArtifact toolCalls={toolCalls} />}
+              <StreamingProvider isStreaming={isStreaming && isLast}>
+                <MarkdownRenderer content={part.content} sources={sources} />
+              </StreamingProvider>
+            </div>
+          );
+        })}
+
+        {!message.content && isStreaming && parts.length === 0 && <LoadingDots />}
+
+        {isStreaming && !isLastPartText && parts.length > 0 && (() => {
+          const lastPart = parts[parts.length - 1];
+          if (lastPart.type === 'tool_call' && lastPart.toolCall.status === 'calling') return null;
+          return <LoadingDots />;
+        })()}
+      </>
+    );
+  };
 
   return (
     <motion.div
@@ -303,27 +443,9 @@ export default function ChatMessage({
           <p className="text-[15px] leading-[1.5]">{message.content}</p>
         ) : (
           <>
-            {toolCalls.length > 0 && (
-              <div className="my-1">
-                {toolCalls.map((tc, i) => (
-                  <ToolCallCard
-                    key={`${tc.name}-${i}`}
-                    tc={tc}
-                    suppressArtifact={hasInlineArtifact && tc.name === 'execute_analysis'}
-                  />
-                ))}
-              </div>
-            )}
+            {renderParts()}
 
-            {hasInlineArtifact && <InlineArtifact toolCalls={toolCalls} />}
-
-            {!message.content && isStreaming && toolCalls.length === 0 && <LoadingDots />}
-
-            {message.content && (
-              <StreamingProvider isStreaming={isStreaming}>
-                <MarkdownRenderer content={message.content} sources={sources} />
-              </StreamingProvider>
-            )}
+            {!isStreaming && <MessageSourcesFooter toolCalls={toolCalls} />}
           </>
         )}
 
