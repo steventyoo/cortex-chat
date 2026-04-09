@@ -459,6 +459,7 @@ async function executeFieldCatalog(
       const { data: freqData } = await sb.rpc('get_field_frequency', {
         p_org_id: ctx.orgId,
         p_skill_id: skillId,
+        p_include_pending: ctx.includePending || false,
       });
       if (freqData) {
         actual_fields = (freqData as { field_name: string; record_count: number; sample_value: string }[])
