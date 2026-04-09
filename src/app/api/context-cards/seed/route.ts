@@ -16,7 +16,7 @@ const SEED_CARDS = [
 3. Records where Billed Amount < Approved Amount represent unbilled revenue
 4. Cross-reference with job_cost_report to verify costs were incurred
 5. Key metric: Total Unbilled = SUM(Approved Amount - Billed Amount) where Billed Amount < Approved Amount`,
-    key_fields: { change_order: ['Status', 'Approved_Amount', 'Billed_Amount', 'CO_Number'], job_cost_report: ['Cost_Code', 'Actual_Cost'] },
+    key_fields: { change_order: ['CO Number', 'Owner Approved Amount', 'GC Proposed Amount', 'Disputed (Y/N) + Outcome'], job_cost_report: ['Line Item Number / Cost Code', 'Job-to-Date Cost (line)', 'Total Job-to-Date Cost'] },
     example_questions: ['Are there any approved change orders we haven\'t billed yet?', 'What is our total unbilled CO exposure?', 'Which COs have billing gaps?'],
   },
   {
@@ -32,7 +32,7 @@ const SEED_CARDS = [
 4. Calculate variance: (Actual - Estimated) / Estimated * 100
 5. Group by project type, trade, or size range to find patterns
 6. Negative variance = under budget (good), Positive = over budget (bad)`,
-    key_fields: { estimate: ['Total_Amount', 'Line_Items', 'Project_Type'], job_cost_report: ['Budget_Amount', 'Actual_Cost', 'Cost_Code'] },
+    key_fields: { estimate: ['Total Bid Amount', 'Cost Breakdown by Division', 'Project Type', 'Final Project Cost (if complete)'], job_cost_report: ['Revised Budget (line)', 'Job-to-Date Cost (line)', 'Line Item Number / Cost Code'] },
     example_questions: ['How accurate are our bids?', 'Which project types do we over-estimate?', 'Compare bid to actual across projects'],
   },
   {
@@ -48,7 +48,7 @@ const SEED_CARDS = [
 4. Group projects into size ranges (e.g., <$100K, $100K-500K, $500K-1M, >$1M)
 5. The sweet spot is the size range with the highest average margin AND win rate
 6. Also factor in project_type and trade if available`,
-    key_fields: { estimate: ['Total_Amount', 'Project_Type', 'Trade'], job_cost_report: ['Budget_Amount', 'Actual_Cost'] },
+    key_fields: { estimate: ['Total Bid Amount', 'Project Type', 'Building Type', 'Contract Amount (if won)'], job_cost_report: ['Revised Budget (line)', 'Job-to-Date Cost (line)', 'Estimated Margin at Completion'] },
     example_questions: ['What size projects are we most profitable on?', 'Where is our bidding sweet spot?', 'What is our ideal project range?'],
   },
   {
@@ -64,7 +64,7 @@ const SEED_CARDS = [
 4. For quality: check submittal approval rates and rejection counts
 5. Rank subs by: lowest average bid, fewest COs generated, highest submittal approval rate
 6. The best sub has competitive pricing AND low CO/rejection rates`,
-    key_fields: { sub_bid: ['Vendor', 'Bid_Amount', 'Trade', 'Scope'], change_order: ['Vendor', 'Status', 'Amount'], submittal: ['Vendor', 'Status'] },
+    key_fields: { sub_bid: ['Subcontractor Name', 'Bid Amount', 'CSI Division(s)', 'Scope Description'], change_order: ['CO Number', 'GC Proposed Amount', 'Owner Approved Amount', 'Change Reason (Root Cause)'], submittal: ['Submittal Number', 'Status / Disposition', 'Submitted By (Sub)'] },
     example_questions: ['Who gives us the best pricing?', 'Compare our subcontractor bids by trade', 'Which subs are most reliable?'],
   },
   {
@@ -80,7 +80,7 @@ const SEED_CARDS = [
 4. Calculate: Total Approved = SUM(Amount) WHERE Status = 'Approved'
 5. Show breakdown by CO type (owner-directed, field condition, design error) if available
 6. Flag any COs over 90 days pending as at-risk`,
-    key_fields: { change_order: ['Status', 'Amount', 'CO_Number', 'Description', 'Date_Submitted'] },
+    key_fields: { change_order: ['CO Number', 'GC Proposed Amount', 'Owner Approved Amount', 'Change Reason (Root Cause)', 'Dates (Initiated / Approved / Closed)'] },
     example_questions: ['What is our total CO exposure?', 'Break down change orders by status', 'How many COs are pending?'],
   },
   {
@@ -97,7 +97,7 @@ const SEED_CARDS = [
 5. Flag cost codes where actual > 110% of budget as 🔴
 6. Cross-reference with change_order approved amounts to adjust expectations
 7. Health: 🟢 <95% budget, ⚠️ 95-105%, 🔴 >105%`,
-    key_fields: { job_cost_report: ['Cost_Code', 'Description', 'Budget_Amount', 'Actual_Cost', 'Committed_Cost'] },
+    key_fields: { job_cost_report: ['Line Item Number / Cost Code', 'Line Item Description', 'Revised Budget (line)', 'Job-to-Date Cost (line)', 'Over/Under Budget — $ (line)', 'Total Revised Budget', 'Total Job-to-Date Cost', 'Total Over/Under Budget'] },
     example_questions: ['Are we over budget?', 'What is the project cost status?', 'Which cost codes are over budget?'],
   },
   {
@@ -113,7 +113,7 @@ const SEED_CARDS = [
 4. Identify bottlenecks: submittals pending > 14 days
 5. Group by trade/spec section to find which areas are delayed
 6. Flag any critical submittals (structural, MEP) that aren't approved`,
-    key_fields: { submittal: ['Submittal_Number', 'Description', 'Status', 'Date_Submitted', 'Trade', 'Spec_Section'] },
+    key_fields: { submittal: ['Submittal Number', 'Submittal Title / Description', 'Status / Disposition', 'Dates (Submitted/Required/Returned)', 'CSI Division / Spec Section', 'Submitted By (Sub)'] },
     example_questions: ['What submittals are pending?', 'What is our submittal approval rate?', 'Which submittals are delayed?'],
   },
   {
@@ -129,7 +129,7 @@ const SEED_CARDS = [
 4. Check rfi records for related clarification requests
 5. Total Impact = SUM(CO amounts linked to design changes)
 6. Categorize: owner-directed vs. error/omission vs. field condition`,
-    key_fields: { design_change: ['Description', 'Type', 'Date', 'Impact'], change_order: ['Amount', 'Description', 'Reason'], rfi: ['Subject', 'Response'] },
+    key_fields: { design_change: ['Document Number', 'Document Type', 'Classification', 'Cost Impact', 'Date Issued'], change_order: ['GC Proposed Amount', 'Owner Approved Amount', 'Change Reason (Root Cause)'], rfi: ['Document ID', 'Root Cause (Level 1)', 'Schedule Impact (Estimated Range)'] },
     example_questions: ['What is the cost impact of design changes?', 'Which design changes generated the most COs?', 'How do design changes affect our schedule?'],
   },
   {
@@ -145,7 +145,7 @@ const SEED_CARDS = [
 4. Group by foreman/crew if available in daily_report
 5. Best performers have lowest hours-per-unit AND highest quality
 6. Flag activities where actual rate > 1.2x budgeted rate`,
-    key_fields: { production_activity: ['Activity', 'Hours', 'Quantity', 'Crew_Size', 'Foreman'], daily_report: ['Date', 'Weather', 'Crew_Count'], job_cost_report: ['Budget_Hours', 'Actual_Hours'] },
+    key_fields: { production_activity: ['Activity Type', 'Total Labor Hours', 'Quantity Installed', 'Crew Composition', 'Production Rate (calculated)'], daily_report: ['Report ID / Date', 'Weather Conditions', 'Crews on Site (Structured)'], job_cost_report: ['Quantity (labor hours or units)', 'Job-to-Date Cost (line)', 'Estimated Labor Rate (from bid)'] },
     example_questions: ['How is our labor productivity?', 'Which crews are most efficient?', 'Where are we losing productivity?'],
   },
   {
@@ -161,7 +161,7 @@ const SEED_CARDS = [
 4. Group by material type/category
 5. Materials with >10% escalation should be flagged for future bid adjustments
 6. Consider adding escalation clauses for high-volatility materials`,
-    key_fields: { estimate: ['Material_Items', 'Material_Cost', 'Unit_Price'], job_cost_report: ['Cost_Code', 'Material_Cost', 'Actual_Cost'] },
+    key_fields: { estimate: ['Cost Breakdown by Division', 'Final Cost by Division', 'Escalation Assumptions'], job_cost_report: ['Line Item Number / Cost Code', 'Material Price Variance', 'Job-to-Date Cost (line)'] },
     example_questions: ['Which materials have seen the biggest price increases?', 'How much has material escalation cost us?', 'Compare bid material prices to actuals'],
   },
   {
@@ -177,7 +177,7 @@ const SEED_CARDS = [
 4. Check payment terms (net 30, 45, 60 — longer = higher risk)
 5. Look for flow-down clauses that transfer risk
 6. Risk score: count of unfavorable clauses`,
-    key_fields: { contract: ['Contract_Value', 'Payment_Terms', 'Retention_Rate', 'Key_Clauses', 'Penalties'] },
+    key_fields: { contract: ['Contract Type', 'Contract Value', 'Risk Score (1–5)', 'Risk Direction', 'Clause Category (12 types)', 'Recommended Contingency %'] },
     example_questions: ['What are the riskiest contract terms?', 'What are the payment terms?', 'Are there liquidated damages?'],
   },
   {
@@ -193,7 +193,7 @@ const SEED_CARDS = [
 4. Group by responsible party to identify slow responders
 5. Average response time is a key project health indicator
 6. Unresolved RFIs can indicate coordination issues`,
-    key_fields: { rfi: ['RFI_Number', 'Subject', 'Date_Submitted', 'Date_Responded', 'Status', 'Responsible_Party'] },
+    key_fields: { rfi: ['Document ID', 'Dates (Submit / Required / Response)', 'Response Time (calendar days)', 'Responsibility Attribution', 'Root Cause (Level 1)'] },
     example_questions: ['How long do RFIs take to get answered?', 'Which RFIs are still pending?', 'Who is slowest to respond to RFIs?'],
   },
   {
@@ -209,7 +209,7 @@ const SEED_CARDS = [
 4. Identify repeat violations by type
 5. Cross-reference with daily_report for incident mentions
 6. Flag any areas with <90% compliance`,
-    key_fields: { safety_inspection: ['Inspection_Type', 'Result', 'Date', 'Violations', 'Corrective_Actions'], daily_report: ['Safety_Notes', 'Incidents'] },
+    key_fields: { safety_inspection: ['Inspection Type', 'Result', 'Project / Date / Time', 'Hazard Category', 'Corrective Action Taken'], daily_report: ['Issues / Delays Reported', 'Safety Observations'] },
     example_questions: ['What is our safety compliance rate?', 'Are there any repeated safety violations?', 'Show me recent inspection results'],
   },
   {
@@ -241,7 +241,7 @@ const SEED_CARDS = [
 4. Score: <30 days = Fast (🟢), 30-60 = Average (⚠️), >60 = Slow (🔴)
 5. Consider contract payment terms as baseline
 6. Best GCs: fastest approval AND fastest payment after approval`,
-    key_fields: { change_order: ['Date_Submitted', 'Date_Approved', 'Amount', 'Status'], contract: ['Payment_Terms', 'Owner'] },
+    key_fields: { change_order: ['Dates (Initiated / Approved / Closed)', 'Owner Approved Amount', 'GC Proposed Amount'], contract: ['Contract Type', 'Parties'] },
     example_questions: ['Which GCs pay the fastest?', 'How long does it take to get COs approved?', 'Score our GCs by payment speed'],
   },
 ];
@@ -263,12 +263,10 @@ export async function POST(request: NextRequest) {
 
   const existingNames = new Set((existing || []).map((c: { card_name: string }) => c.card_name));
   const toInsert = SEED_CARDS.filter(c => !existingNames.has(c.card_name));
-
-  if (toInsert.length === 0) {
-    return Response.json({ message: 'All context cards already exist', seeded: 0 });
-  }
+  const toUpdate = SEED_CARDS.filter(c => existingNames.has(c.card_name));
 
   let seeded = 0;
+  let updated = 0;
   const errors: string[] = [];
 
   for (const card of toInsert) {
@@ -303,9 +301,32 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  for (const card of toUpdate) {
+    const { error } = await sb
+      .from('context_cards')
+      .update({
+        display_name: card.display_name,
+        description: card.description,
+        trigger_concepts: card.trigger_concepts,
+        skills_involved: card.skills_involved,
+        business_logic: card.business_logic,
+        key_fields: card.key_fields,
+        example_questions: card.example_questions,
+      })
+      .eq('org_id', orgId)
+      .eq('card_name', card.card_name);
+
+    if (error) {
+      errors.push(`update ${card.card_name}: ${error.message}`);
+    } else {
+      updated++;
+    }
+  }
+
   return Response.json({
-    message: `Seeded ${seeded} context cards${errors.length > 0 ? `, ${errors.length} errors` : ''}`,
+    message: `Seeded ${seeded} new, updated ${updated} existing${errors.length > 0 ? `, ${errors.length} errors` : ''}`,
     seeded,
+    updated,
     errors: errors.length > 0 ? errors : undefined,
   });
 }
