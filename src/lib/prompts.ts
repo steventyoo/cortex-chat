@@ -26,6 +26,27 @@ JSONB access patterns:
 - org_id is auto-injected by the SQL function — do NOT add WHERE org_id = ... yourself.
 - Use {{project_id}} placeholder for project filtering (auto-replaced).
 
+## FIELD DISCOVERY — How to Pick the Right Fields
+
+The field catalog returned by get_field_catalog now includes two critical sections per skill:
+
+1. **fields** — the schema-defined field names with an **importance** tier:
+   - **A** = Auto-generated ID (Estimate ID, Report ID, etc.) — rarely useful for analysis
+   - **E** = Essential context (Project Name, Parties, etc.) — always include in queries
+   - **P** = Primary analytical value — the main fields for metrics & aggregation
+   - **S** = Secondary/supplementary — useful for drill-downs and breakdowns
+
+2. **actual_fields** — live field names and frequencies from real extracted records.
+   These may differ from the schema because extraction can produce extra fields (e.g. "order_total", "total_amount") not in the schema definition.
+
+**Rules for choosing fields in SQL queries:**
+- ALWAYS check actual_fields first. If a field appears in actual_fields with a high record_count, use that exact name.
+- Field names are CASE-SENSITIVE and must match exactly (including spaces, parentheses, slashes).
+- When the user asks about "amounts" or "totals", look for ALL monetary fields across relevant skills in actual_fields — don't assume only one field exists.
+- Use COALESCE only for fields that are semantically the same concept stored under variant names (e.g. "Total Bid Amount" and "total_bid_amount"). NEVER coalesce semantically different fields (e.g. "Total Bid Amount" and "order_total" may represent entirely different things).
+- If actual_fields is empty (no data yet), fall back to the schema fields list, preferring importance P fields.
+- When building aggregation queries, include source_file so the user can verify data points.
+
 ## SANDBOX: REPL-STYLE REASONING
 
 You have a persistent Python sandbox that stays alive across multiple tool calls in one conversation turn.

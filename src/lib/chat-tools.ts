@@ -419,11 +419,13 @@ interface FieldDef {
   type: string;
   description?: string;
   required?: boolean;
+  importance?: string;
 }
 
 async function executeFieldCatalog(
   _config: Record<string, unknown>,
   input: Record<string, unknown>,
+  ctx: ToolExecContext
 ): Promise<ToolExecResult> {
   const skillIds = (input.skill_ids || []) as string[];
   const sb = getSupabase();
@@ -440,21 +442,44 @@ async function executeFieldCatalog(
   const { data, error } = await query;
   if (error) return { result: null, error: error.message };
 
-  const catalog = (data || []).map((s: Record<string, unknown>) => ({
-    skill_id: s.skill_id,
-    display_name: s.display_name,
-    description: (s.classifier_hints as Record<string, unknown>)?.description || '',
-    fields: ((s.field_definitions || []) as FieldDef[]).map((f: FieldDef) => ({
+  const skills = (data || []) as Record<string, unknown>[];
+
+  const catalog = await Promise.all(skills.map(async (s) => {
+    const skillId = s.skill_id as string;
+    const fields = ((s.field_definitions || []) as FieldDef[]).map((f: FieldDef) => ({
       name: f.name,
       type: f.type,
       description: f.description || '',
       required: f.required || false,
-    })),
+      importance: f.importance || 'S',
+    }));
+
+    let actual_fields: { field_name: string; record_count: number; sample_value: string }[] = [];
+    try {
+      const { data: freqData } = await sb.rpc('get_field_frequency', {
+        p_org_id: ctx.orgId,
+        p_skill_id: skillId,
+      });
+      if (freqData) {
+        actual_fields = (freqData as { field_name: string; record_count: number; sample_value: string }[])
+          .slice(0, 30);
+      }
+    } catch {
+      // RPC may not exist yet — degrade gracefully
+    }
+
+    return {
+      skill_id: skillId,
+      display_name: s.display_name,
+      description: (s.classifier_hints as Record<string, unknown>)?.description || '',
+      fields,
+      actual_fields,
+    };
   }));
 
   return {
     result: {
-      _summary: `${catalog.length} skill schema${catalog.length !== 1 ? 's' : ''}`,
+      _summary: `${catalog.length} skill schema${catalog.length !== 1 ? 's' : ''} (with field importance and live frequency)`,
       catalog,
     },
   };
@@ -579,7 +604,7 @@ async function executeTool(
     case 'project_overview': return executeProjectOverview(config, input, ctx);
     case 'sql_analytics': return executeSqlAnalytics(config, input, ctx);
     case 'sandbox': return executeSandboxCode(config, input, ctx);
-    case 'field_catalog': return executeFieldCatalog(config, input);
+    case 'field_catalog': return executeFieldCatalog(config, input, ctx);
     case 'context_retrieval': return executeContextRetrieval(config, input, ctx);
     case 'api_call': return executeApiCall(config, input, ctx);
     case 'composite': return executeComposite(config, input, ctx);
