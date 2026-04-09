@@ -1,6 +1,6 @@
 import { getSupabase } from './supabase';
 import { searchByEmbedding, generateEmbedding } from './embeddings';
-import { runAnalysis } from './sandbox';
+import { SandboxSession } from './sandbox';
 
 export interface ChatTool {
   id: string;
@@ -42,6 +42,7 @@ export interface ToolExecContext {
   orgId: string;
   projectId?: string;
   includePending?: boolean;
+  sandboxSession?: SandboxSession;
 }
 
 export interface ToolExecResult {
@@ -355,6 +356,16 @@ async function executeSqlAnalytics(
   if (error) return { result: null, error: error.message };
 
   const rows = (data || []) as Record<string, unknown>[];
+
+  // Side effect: make SQL results available in the sandbox at /tmp/data.json
+  if (ctx.sandboxSession && rows.length > 0) {
+    try {
+      await ctx.sandboxSession.writeData({ rows });
+    } catch (err) {
+      console.warn('[chat-tools] Failed to write data to sandbox:', err);
+    }
+  }
+
   return {
     result: {
       _summary: `${rows.length} row${rows.length !== 1 ? 's' : ''} returned`,
@@ -363,39 +374,41 @@ async function executeSqlAnalytics(
   };
 }
 
-/* ── NEW: Sandbox code executor ──────────────────────────────── */
+/* ── NEW: Sandbox code executor (session-scoped) ─────────────── */
 
 async function executeSandboxCode(
   _config: Record<string, unknown>,
   input: Record<string, unknown>,
+  ctx: ToolExecContext
 ): Promise<ToolExecResult> {
   const code = input.code as string;
   if (!code) return { result: null, error: 'No code provided' };
 
-  let dataContext: unknown = null;
-  const rawData = input.data_context;
-  if (typeof rawData === 'string') {
-    try {
-      dataContext = JSON.parse(rawData);
-    } catch {
-      dataContext = rawData;
-    }
-  } else if (rawData) {
-    dataContext = rawData;
+  if (!ctx.sandboxSession) {
+    return { result: null, error: 'Sandbox session not available' };
   }
 
-  const result = await runAnalysis(code, dataContext);
+  const runResult = await ctx.sandboxSession.run(code);
 
-  const retryNote = result.retries ? ` (took ${result.retries + 1} attempts)` : '';
+  if (runResult.exitCode !== 0) {
+    return {
+      result: {
+        _summary: `Error (exit ${runResult.exitCode})`,
+        stdout: runResult.stdout,
+        error: runResult.stderr,
+      },
+      htmlArtifact: runResult.htmlArtifact || undefined,
+    };
+  }
+
   return {
     result: {
-      _summary: result.error
-        ? `Error: ${result.error.slice(0, 200)}${retryNote}`
-        : `Analysis complete${result.htmlArtifact ? ' (with visualization)' : ''}${retryNote}`,
-      stdout: result.analysis,
-      error: result.error || undefined,
+      _summary: runResult.htmlArtifact
+        ? 'Analysis complete (with visualization)'
+        : 'Analysis complete',
+      stdout: runResult.stdout,
     },
-    htmlArtifact: result.htmlArtifact || undefined,
+    htmlArtifact: runResult.htmlArtifact || undefined,
   };
 }
 
@@ -565,7 +578,7 @@ async function executeTool(
     case 'skill_scan': return executeSkillScan(config, input, ctx);
     case 'project_overview': return executeProjectOverview(config, input, ctx);
     case 'sql_analytics': return executeSqlAnalytics(config, input, ctx);
-    case 'sandbox': return executeSandboxCode(config, input);
+    case 'sandbox': return executeSandboxCode(config, input, ctx);
     case 'field_catalog': return executeFieldCatalog(config, input);
     case 'context_retrieval': return executeContextRetrieval(config, input, ctx);
     case 'api_call': return executeApiCall(config, input, ctx);

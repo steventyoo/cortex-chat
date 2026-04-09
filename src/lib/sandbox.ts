@@ -1,217 +1,157 @@
 import { Sandbox } from '@vercel/sandbox';
-import Anthropic from '@anthropic-ai/sdk';
 
 const EXEC_TIMEOUT = 30_000;
 const MAX_HTML_SIZE = 100_000;
 const MAX_STDOUT_SIZE = 50_000;
-const MAX_CODE_RETRIES = 2;
-const FIX_MODEL = 'claude-sonnet-4-20250514';
-const FIX_MAX_TOKENS = 4096;
-
 const REQUIRED_PACKAGES = ['pandas', 'plotly', 'numpy'];
 
-export interface AnalysisResult {
-  analysis: string;
+function getCredentials() {
+  const token = process.env.VERCEL_TOKEN;
+  const teamId = process.env.VERCEL_TEAM_ID;
+  const projectId = process.env.VERCEL_PROJECT_ID;
+  if (!token || !teamId || !projectId) {
+    throw new Error(
+      'Missing sandbox credentials. Set VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID in .env'
+    );
+  }
+  return { token, teamId, projectId };
+}
+
+export interface RunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
   htmlArtifact: string | null;
-  error?: string;
-  retries?: number;
 }
 
-async function askClaudeToFix(code: string, stderr: string): Promise<string | null> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
+/**
+ * Session-scoped sandbox that persists across multiple tool calls within a single
+ * chat request. This enables REPL-style reasoning: Claude can run code, inspect
+ * output, fix errors, and iterate — all within the same VM.
+ *
+ * Lifecycle: created lazily on first run(), destroyed in the route's finally block.
+ */
+export class SandboxSession {
+  private sandbox: (Sandbox & AsyncDisposable) | null = null;
+  private creating: Promise<Sandbox & AsyncDisposable> | null = null;
 
-  try {
-    const client = new Anthropic({ apiKey });
-    const msg = await client.messages.create({
-      model: FIX_MODEL,
-      max_tokens: FIX_MAX_TOKENS,
-      system: 'Fix this Python code. Return ONLY the corrected Python code — no explanations, no markdown fences, no commentary. The code runs in a sandbox with pandas, numpy, plotly, json, math, and collections available. Data is at /tmp/data.json. Write HTML charts to /tmp/output.html. Print analysis to stdout.',
-      messages: [
-        {
-          role: 'user',
-          content: `This code failed:\n\n${code}\n\nError:\n${stderr.slice(0, 3000)}`,
-        },
-      ],
-    });
+  private async ensureSandbox(): Promise<Sandbox & AsyncDisposable> {
+    if (this.sandbox) return this.sandbox;
 
-    const text = msg.content.find((b) => b.type === 'text');
-    if (!text || text.type !== 'text') return null;
-
-    let fixed = text.text.trim();
-    if (fixed.startsWith('```')) {
-      fixed = fixed.replace(/^```(?:python)?\n?/, '').replace(/\n?```$/, '');
+    if (!this.creating) {
+      this.creating = this.boot();
     }
-    return fixed;
-  } catch (err) {
-    console.error('[sandbox] Code fix call failed:', err);
-    return null;
-  }
-}
-
-async function syntaxCheck(
-  sandbox: Sandbox & AsyncDisposable,
-  codePath: string,
-): Promise<string | null> {
-  const check = await sandbox.runCommand('python3', [
-    '-c',
-    `import ast; ast.parse(open('${codePath}').read())`,
-  ]);
-  if (check.exitCode !== 0) {
-    return (await check.stderr()).slice(0, 3000);
-  }
-  return null;
-}
-
-async function executeAndCollect(
-  sandbox: Sandbox & AsyncDisposable,
-): Promise<{ analysis: string; htmlArtifact: string | null; exitCode: number; stderr: string }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), EXEC_TIMEOUT);
-
-  let result;
-  try {
-    result = await sandbox.runCommand('python3', ['/tmp/analysis.py'], {
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
+    this.sandbox = await this.creating;
+    return this.sandbox;
   }
 
-  const stdoutStr = await result.stdout();
-  const analysis = stdoutStr.slice(0, MAX_STDOUT_SIZE);
-  let htmlArtifact: string | null = null;
-
-  try {
-    const buf = await sandbox.readFileToBuffer({ path: '/tmp/output.html' });
-    if (buf) {
-      const html = buf.toString('utf-8');
-      if (html.length > 0 && html.length <= MAX_HTML_SIZE) {
-        htmlArtifact = html;
-      }
-    }
-  } catch {
-    // No HTML output is fine
-  }
-
-  const stderr = result.exitCode !== 0 ? (await result.stderr()).slice(0, 5000) : '';
-
-  return { analysis, htmlArtifact, exitCode: result.exitCode, stderr };
-}
-
-export async function runAnalysis(
-  code: string,
-  dataContext: unknown,
-  maxRetries: number = MAX_CODE_RETRIES,
-): Promise<AnalysisResult> {
-  let sandbox: (Sandbox & AsyncDisposable) | null = null;
-
-  try {
+  private async boot(): Promise<Sandbox & AsyncDisposable> {
+    const creds = getCredentials();
     const snapshotId = process.env.SANDBOX_SNAPSHOT_ID;
 
     if (snapshotId) {
-      sandbox = await Sandbox.create({
+      return Sandbox.create({
+        ...creds,
         source: { type: 'snapshot', snapshotId },
-        timeout: EXEC_TIMEOUT + 10_000,
+        timeout: EXEC_TIMEOUT + 30_000,
         networkPolicy: 'deny-all',
         env: { MPLBACKEND: 'Agg' },
       });
-    } else {
-      sandbox = await Sandbox.create({
-        runtime: 'python3.13',
-        timeout: EXEC_TIMEOUT + 60_000,
-        env: { MPLBACKEND: 'Agg' },
-      });
-
-      const pipResult = await sandbox.runCommand('pip', [
-        'install', '-q', ...REQUIRED_PACKAGES,
-      ]);
-      if (pipResult.exitCode !== 0) {
-        const pipStderr = await pipResult.stderr();
-        return {
-          analysis: '',
-          htmlArtifact: null,
-          error: `Failed to install packages: ${pipStderr.slice(0, 2000)}`,
-        };
-      }
-
-      await sandbox.updateNetworkPolicy('deny-all');
     }
 
-    let currentCode = code;
-    let retries = 0;
+    const sb = await Sandbox.create({
+      ...creds,
+      runtime: 'python3.13',
+      timeout: EXEC_TIMEOUT + 90_000,
+      env: { MPLBACKEND: 'Agg' },
+    });
 
-    await sandbox.writeFiles([
-      { path: '/tmp/data.json', content: Buffer.from(JSON.stringify(dataContext)) },
-      { path: '/tmp/analysis.py', content: Buffer.from(currentCode) },
+    const pipResult = await sb.runCommand('pip', [
+      'install', '-q', ...REQUIRED_PACKAGES,
+    ]);
+    if (pipResult.exitCode !== 0) {
+      const stderr = await pipResult.stderr();
+      await sb.stop({ blocking: true }).catch(() => {});
+      throw new Error(`Failed to install packages: ${stderr.slice(0, 2000)}`);
+    }
+
+    await sb.updateNetworkPolicy('deny-all');
+    return sb;
+  }
+
+  /**
+   * Write JSON data to /tmp/data.json inside the sandbox.
+   * Called as a side effect of execute_sql_analytics so Claude
+   * doesn't need a dedicated "upload data" tool call.
+   */
+  async writeData(data: unknown): Promise<void> {
+    const sb = await this.ensureSandbox();
+    await sb.writeFiles([
+      { path: '/tmp/data.json', content: Buffer.from(JSON.stringify(data)) },
+    ]);
+  }
+
+  /**
+   * Execute Python code in the sandbox and collect results.
+   * Automatically reads /tmp/output.html if the code produces one.
+   */
+  async run(code: string): Promise<RunResult> {
+    const sb = await this.ensureSandbox();
+
+    await sb.writeFiles([
+      { path: '/tmp/analysis.py', content: Buffer.from(code) },
     ]);
 
-    // Syntax pre-check before first execution
-    const syntaxErr = await syntaxCheck(sandbox, '/tmp/analysis.py');
-    if (syntaxErr) {
-      const fixed = await askClaudeToFix(currentCode, syntaxErr);
-      if (fixed) {
-        currentCode = fixed;
-        retries++;
-        await sandbox.writeFiles([{ path: '/tmp/analysis.py', content: Buffer.from(currentCode) }]);
-        const recheck = await syntaxCheck(sandbox, '/tmp/analysis.py');
-        if (recheck) {
-          return { analysis: '', htmlArtifact: null, error: `Syntax error (unfixable): ${recheck}`, retries };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EXEC_TIMEOUT);
+
+    let result;
+    try {
+      result = await sb.runCommand('python3', ['/tmp/analysis.py'], {
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const stdoutRaw = await result.stdout();
+    const stdout = stdoutRaw.slice(0, MAX_STDOUT_SIZE);
+    const stderr = result.exitCode !== 0
+      ? (await result.stderr()).slice(0, 5000)
+      : '';
+
+    let htmlArtifact: string | null = null;
+    try {
+      const buf = await sb.readFileToBuffer({ path: '/tmp/output.html' });
+      if (buf) {
+        const html = buf.toString('utf-8');
+        if (html.length > 0 && html.length <= MAX_HTML_SIZE) {
+          htmlArtifact = html;
         }
-      } else {
-        return { analysis: '', htmlArtifact: null, error: `Syntax error: ${syntaxErr}`, retries: 0 };
       }
+    } catch {
+      // No HTML output — that's fine
     }
 
-    // Execute with retry loop
-    let lastResult = await executeAndCollect(sandbox);
-
-    while (lastResult.exitCode !== 0 && retries < maxRetries) {
-      console.log(`[sandbox] Attempt ${retries + 1} failed, asking Claude to fix...`);
-      const fixed = await askClaudeToFix(currentCode, lastResult.stderr);
-      if (!fixed) break;
-
-      currentCode = fixed;
-      retries++;
-      await sandbox.writeFiles([{ path: '/tmp/analysis.py', content: Buffer.from(currentCode) }]);
-
-      const syntaxErr2 = await syntaxCheck(sandbox, '/tmp/analysis.py');
-      if (syntaxErr2) {
-        lastResult = { analysis: '', htmlArtifact: null, exitCode: 1, stderr: syntaxErr2 };
-        continue;
-      }
-
-      lastResult = await executeAndCollect(sandbox);
+    // Clean up the output file so next run starts fresh
+    if (htmlArtifact) {
+      await sb.runCommand('rm', ['-f', '/tmp/output.html']).catch(() => {});
     }
 
-    if (lastResult.exitCode !== 0) {
-      return {
-        analysis: lastResult.analysis,
-        htmlArtifact: lastResult.htmlArtifact,
-        error: lastResult.stderr,
-        retries,
-      };
-    }
+    return { stdout, stderr, exitCode: result.exitCode, htmlArtifact };
+  }
 
-    return {
-      analysis: lastResult.analysis,
-      htmlArtifact: lastResult.htmlArtifact,
-      retries,
-    };
-  } catch (err) {
-    return {
-      analysis: '',
-      htmlArtifact: null,
-      error: `Sandbox error: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  } finally {
-    if (sandbox) {
+  /** Tear down the sandbox VM. Safe to call multiple times. */
+  async destroy(): Promise<void> {
+    if (this.sandbox) {
       try {
-        await sandbox.stop({ blocking: true });
+        await this.sandbox.stop({ blocking: true });
       } catch {
         // Best effort cleanup
       }
+      this.sandbox = null;
     }
+    this.creating = null;
   }
 }
 
@@ -221,7 +161,9 @@ export async function runAnalysis(
  * Snapshots expire after 30 days by default.
  */
 export async function createAnalysisSnapshot(): Promise<string> {
+  const creds = getCredentials();
   const sandbox = await Sandbox.create({
+    ...creds,
     runtime: 'python3.13',
     timeout: 120_000,
     env: { MPLBACKEND: 'Agg' },
