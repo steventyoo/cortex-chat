@@ -114,7 +114,7 @@ const CORE_TOOLS = [
   {
     tool_name: 'project_overview',
     display_name: 'Project Overview',
-    description: 'Get project metadata (name, address, trade, status, contract value) and a count of all document records by type. Use this when the user asks general questions about a project or wants to know what data is available.',
+    description: 'Get project metadata (name, address, trade, status, contract value, GC, owner, project type, building type, delivery method, size) and a count of all document records by type. Use this when the user asks general questions about a project or wants to know what data is available.',
     input_schema: {
       properties: {},
       required: [],

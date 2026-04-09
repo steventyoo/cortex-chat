@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getSupabase, pushToExtractedRecords, checkDuplicatePipeline } from '@/lib/supabase';
+import { getSupabase, pushToExtractedRecords, checkDuplicatePipeline, syncProjectMetadata } from '@/lib/supabase';
 import { ExtractionResult, ReviewAction } from '@/lib/pipeline';
 import { getSkill, recordCorrection } from '@/lib/skills';
 import { embedAndStoreForRecord } from '@/lib/embeddings';
@@ -192,6 +192,9 @@ export async function POST(request: NextRequest) {
               singleFields,
               record.source_text || undefined,
             ).catch(err => console.error('Async embedding failed:', err));
+
+            syncProjectMetadata(projectId, skillId, singleFields)
+              .catch(err => console.error('Async project metadata sync failed:', err));
           }
         }
       } catch (err) {

@@ -26,6 +26,11 @@ Key metric: Total Unbilled = SUM(Approved COs not in Pay Apps) + SUM(Estimated M
     project_admin: ['Disputed / Held Items'],
   },
     example_questions: ['Are there any approved change orders we haven\'t billed yet?', 'What is our total unbilled CO exposure?', 'Which design changes are stuck in the pipeline?', 'Are there bulletins that should have generated COs but didn\'t?', 'What is our CO recovery rate by GC?'],
+    calc_function: 'change_orders.unbilled_recovery',
+    sql_templates: {
+      co_data: `SELECT source_file, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Owner Approved Amount'->>'value' as owner_approved_amount, fields->'Change Reason (Root Cause)'->>'value' as change_reason, fields->'Disputed (Y/N) + Outcome'->>'value' as disputed, fields->'Negotiation Delta ($)'->>'value' as negotiation_delta FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+      dc_data: `SELECT source_file, fields->'Conversion Rate Flag'->>'value' as conversion_rate_flag, fields->'Estimated Missed Revenue'->>'value' as estimated_missed_revenue, fields->'Approval Status'->>'value' as approval_status, fields->'Pipeline Duration (days)'->>'value' as pipeline_duration FROM extracted_records WHERE skill_id = 'design_change' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'retention_float_acceleration',
@@ -46,6 +51,11 @@ Key metric: Total Retainage Held × (% projects ready for release) = actionable 
     project_admin: ['Billed This Period', 'Current Contract Value', 'Days to Complete Punch List', 'Days to Payment', 'Payment Received Date', 'Retainage Held', 'Scheduled Value (original SOV)'],
   },
     example_questions: ['How much retention do we have held across all projects?', 'Which projects are closest to retention release?', 'What is blocking our retention release?', 'How fast do different GCs release retention?'],
+    calc_function: 'cash_flow.retention_readiness',
+    sql_templates: {
+      admin_data: `SELECT source_file, project_id, fields->'Retainage Held'->>'value' as retainage_held, fields->'Days to Complete Punch List'->>'value' as days_to_complete_punch_list, fields->'Total Punch Items'->>'value' as total_punch_items, fields->'Days to Payment'->>'value' as days_to_payment FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+      dc_data: `SELECT source_file, fields->'Approval Status'->>'value' as approval_status, fields->'Pipeline Duration (days)'->>'value' as pipeline_duration FROM extracted_records WHERE skill_id = 'design_change' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'tm_work_underbilling',
@@ -68,6 +78,11 @@ Key metric: (Actual Labor Hours × Rate) + Materials + Markup - Billed Amount = 
     production_activity: ['Hours by Type', 'Total Labor Hours'],
   },
     example_questions: ['Are we under-billing on T&M work?', 'Which projects have the biggest T&M billing gaps?', 'Compare T&M billed hours to actual production hours', 'Is our markup being applied consistently on T&M work?'],
+    calc_function: 'billing.tm_underbilling',
+    sql_templates: {
+      co_data: `SELECT source_file, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Markup Applied'->>'value' as markup_applied, fields->'Change Reason (Root Cause)'->>'value' as change_reason FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+      prod_data: `SELECT source_file, fields->'Total Labor Hours'->>'value' as total_labor_hours, fields->'Hours by Type'->>'value' as hours_by_type FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'back_charge_defense',
@@ -94,6 +109,12 @@ Key metric: Defense score = (documentation completeness × contract favorability
     submittal: ['Status / Disposition'],
   },
     example_questions: ['What back-charges have been issued against us?', 'Do we have documentation to defend this back-charge?', 'Which GCs dispute COs most frequently?', 'Were our contractual notices filed on time?', 'What are our riskiest contract clauses?'],
+    calc_function: 'risk_and_scoring.back_charge_score',
+    sql_templates: {
+      co_data: `SELECT source_file, fields->'Disputed (Y/N) + Outcome'->>'value' as disputed, fields->'Change Reason (Root Cause)'->>'value' as change_reason, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Negotiation Delta ($)'->>'value' as negotiation_delta FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+      contract_data: `SELECT source_file, fields->'Risk Score (1–5)'->>'value' as risk_score, fields->'Clause Category (12 types)'->>'value' as clause_category, fields->'Historical Dispute Flag'->>'value' as historical_dispute_flag FROM extracted_records WHERE skill_id = 'contract' AND project_id = {{project_id}}`,
+      admin_data: `SELECT source_file, fields->'Notice Timeliness'->>'value' as notice_timeliness, fields->'Back-Charges Issued?'->>'value' as back_charges_issued FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'warranty_callback_reduction',
@@ -116,6 +137,11 @@ Key metric: Warranty cost per project × frequency of callbacks by trade = targe
     project_admin: ['Days to Complete Punch List', 'Items by Trade (Punch)', 'Warranty Items (post-closeout)'],
   },
     example_questions: ['What are our warranty callback costs by trade?', 'Which crews have the most warranty issues?', 'Are design changes causing warranty problems?', 'What is the pattern in our punch list and warranty items?'],
+    calc_function: 'billing.warranty_callback_cost',
+    sql_templates: {
+      admin_data: `SELECT source_file, fields->'Warranty Items (post-closeout)'->>'value' as warranty_items, fields->'Days to Complete Punch List'->>'value' as days_to_complete_punch_list, fields->'Total Punch Items'->>'value' as total_punch_items, fields->'Items by Trade (Punch)'->>'value' as items_by_trade FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+      prod_data: `SELECT source_file, fields->'Rework Cost'->>'value' as rework_cost, fields->'Rework Cause'->>'value' as rework_cause, fields->'Rework Labor Hours'->>'value' as rework_labor_hours FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'gc_profitability_contradiction',
@@ -140,6 +166,11 @@ Key metric: True GC Score = Margin - (CO shrinkage + dispute cost + payment dela
     project_admin: ['Back-Charges Issued?', 'Current Contract Value', 'Days to Payment', 'Retainage Held'],
   },
     example_questions: ['Which GCs are actually profitable for us after all costs?', 'Rank our GCs by true profitability', 'Which GC has the biggest gap between apparent and true margin?', 'Who gives us the most CO shrinkage?', 'Compare GC dispute rates and payment velocity'],
+    calc_function: 'financial.gc_profitability_score',
+    sql_templates: {
+      co_data: `SELECT source_file, project_id, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Owner Approved Amount'->>'value' as owner_approved_amount, fields->'Negotiation Delta ($)'->>'value' as negotiation_delta, fields->'Disputed (Y/N) + Outcome'->>'value' as disputed FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+      admin_data: `SELECT source_file, project_id, fields->'Days to Payment'->>'value' as days_to_payment, fields->'Back-Charges Issued?'->>'value' as back_charges_issued, fields->'Retainage Held'->>'value' as retainage_held FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'gc_payment_velocity',
@@ -161,6 +192,11 @@ Key metric: Weighted average Days to Payment across all payment types (invoices 
     project_admin: ['Days to Payment', 'Payment Received Date'],
   },
     example_questions: ['Which GCs pay the fastest?', 'Score our GCs by payment speed', 'How long does each GC take to approve COs?', 'What is our average days-to-payment by GC?'],
+    calc_function: 'cash_flow.payment_velocity_score',
+    sql_templates: {
+      admin_data: `SELECT source_file, project_id, fields->'Days to Payment'->>'value' as days_to_payment, fields->'Payment Received Date'->>'value' as payment_received_date FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+      co_data: `SELECT source_file, project_id, fields->'Dates (Initiated / Approved / Closed)'->>'value' as co_dates, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'gc_co_approval_rate',
@@ -183,6 +219,10 @@ Key metric: Net Approval Rate = (Total Approved / Total Proposed) by GC, weighte
     job_cost_report: ['CO Absorption Rate (line)', 'Change Orders (line)', 'Total Change Orders'],
   },
     example_questions: ['What is our CO approval rate by GC?', 'Which GCs reject the most change orders?', 'Where do our COs get stuck in the pipeline?', 'How much do we lose in CO negotiations by GC?'],
+    calc_function: 'change_orders.co_approval_rate',
+    sql_templates: {
+      co_data: `SELECT source_file, project_id, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Owner Approved Amount'->>'value' as owner_approved_amount, fields->'Negotiation Delta ($)'->>'value' as negotiation_delta, fields->'Change Reason (Root Cause)'->>'value' as change_reason, fields->'Markup Applied'->>'value' as markup_applied FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'gc_risk_concentration',
@@ -203,6 +243,11 @@ Key metric: Concentration Risk Index = % of revenue from GCs with Risk Score > 3
     design_change: ['Disputed? (CCD)'],
   },
     example_questions: ['Are we too concentrated with risky GCs?', 'Which GCs have the highest risk scores?', 'What percentage of our backlog is with high-risk GCs?'],
+    calc_function: 'risk_and_scoring.risk_concentration',
+    sql_templates: {
+      contract_data: `SELECT source_file, project_id, fields->'Risk Score (1–5)'->>'value' as risk_score, fields->'Clause Category (12 types)'->>'value' as clause_category, fields->'Historical Dispute Flag'->>'value' as historical_dispute_flag FROM extracted_records WHERE skill_id = 'contract' AND project_id = {{project_id}}`,
+      co_data: `SELECT source_file, project_id, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'gc_pm_performance',
@@ -223,6 +268,11 @@ Key metric: Average Over/Under Budget across projects per GC PM.`,
     rfi: ['Response Time (calendar days)', 'Responsibility Attribution'],
   },
     example_questions: ['Which GC PMs give us the best project outcomes?', 'Rank project managers by budget performance', 'Which PMs have the slowest CO approvals?'],
+    calc_function: 'risk_and_scoring.gc_pm_ranking',
+    sql_templates: {
+      jcr_data: `SELECT source_file, project_id, fields->'Total Over/Under Budget'->>'value' as total_over_under_budget FROM extracted_records WHERE skill_id = 'job_cost_report' AND project_id = {{project_id}}`,
+      co_data: `SELECT source_file, project_id, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Owner Approved Amount'->>'value' as owner_approved_amount FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'bid_accuracy_by_project_type',
@@ -246,6 +296,11 @@ Key metric: Accuracy Score = 1 - |Actual - Estimated| / Estimated, grouped by Pr
     production_activity: ['Production Rate (calculated)'],
   },
     example_questions: ['How accurate are our bids by project type?', 'Which project types do we consistently over-estimate?', 'What are the main reasons for bid misses?', 'Compare bid to actual cost across completed projects'],
+    calc_function: 'variance.bid_accuracy',
+    sql_templates: {
+      estimate_data: `SELECT source_file, project_id, fields->'Total Bid Amount'->>'value' as total_bid_amount, fields->'Project Type'->>'value' as project_type, fields->'Building Type'->>'value' as building_type, fields->'Gross Square Footage'->>'value' as gross_square_footage FROM extracted_records WHERE skill_id = 'estimate' AND project_id = {{project_id}}`,
+      jcr_data: `SELECT source_file, project_id, fields->'Total Job-to-Date Cost'->>'value' as total_jtd_cost, fields->'Total Revised Budget'->>'value' as total_revised_budget, fields->'Estimated Margin at Completion'->>'value' as estimated_margin_at_completion FROM extracted_records WHERE skill_id = 'job_cost_report' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'bid_sweet_spot',
@@ -265,6 +320,10 @@ Key metric: Sweet Spot Score = Win Rate × Average Margin per segment.`,
     job_cost_report: ['Estimated Margin at Completion', 'Overall % Budget Consumed', 'Project Type', 'Total Job-to-Date Cost', 'Total Revised Budget'],
   },
     example_questions: ['What size projects are we most profitable on?', 'Where is our bidding sweet spot?', 'What is our win rate by project type?', 'Which market conditions favor our bidding?'],
+    calc_function: 'risk_and_scoring.bid_sweet_spot',
+    sql_templates: {
+      estimate_data: `SELECT source_file, project_id, fields->'Total Bid Amount'->>'value' as total_bid_amount, fields->'Project Type'->>'value' as project_type, fields->'Bid Result'->>'value' as bid_result, fields->'Building Type'->>'value' as building_type, fields->'Market Condition at Bid'->>'value' as market_condition FROM extracted_records WHERE skill_id = 'estimate'`,
+    },
   },
   {
     card_name: 'labor_hour_estimation_variance',
@@ -287,6 +346,10 @@ Key metric: Labor Variance = (Actual Hours - Estimated Hours) / Estimated Hours 
     production_activity: ['Activity Type', 'CSI Division', 'Daily Production vs Plan', 'Estimated Production Rate', 'Production Rate (calculated)', 'Quantity Installed', 'Total Labor Hours', 'Unit of Measure'],
   },
     example_questions: ['How do our labor hour estimates compare to actuals?', 'Which work phases have the biggest labor overruns?', 'What is our production rate vs what we estimated?', 'Where are we consistently underestimating labor?'],
+    calc_function: 'variance.labor_hour_variance',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Activity Type'->>'value' as activity_type, fields->'Total Labor Hours'->>'value' as total_labor_hours, fields->'Production Rate (calculated)'->>'value' as production_rate, fields->'Estimated Production Rate'->>'value' as estimated_production_rate, fields->'Daily Production vs Plan'->>'value' as daily_production_vs_plan FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'material_cost_escalation',
@@ -308,6 +371,10 @@ Key metric: Material Escalation % by CSI Division and material category.`,
     submittal: ['Procurement Critical?'],
   },
     example_questions: ['Which materials have seen the biggest price increases?', 'How much has material escalation cost us?', 'Compare bid material prices to actuals by division', 'Should we be including escalation clauses?'],
+    calc_function: 'variance.material_escalation',
+    sql_templates: {
+      jcr_data: `SELECT source_file, fields->'CSI Division (Primary) — JCR'->>'value' as csi_division, fields->'Material Price Variance'->>'value' as material_price_variance, fields->'Cost Category'->>'value' as cost_category FROM extracted_records WHERE skill_id = 'job_cost_report' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'panic_pricing_elimination',
@@ -329,6 +396,11 @@ Key metric: Margin delta = Average margin on disciplined bids - Average margin o
     job_cost_report: ['% Budget Consumed (line)', 'Cost-to-Complete Estimate', 'Estimated Margin at Completion', 'Job-to-Date Cost (line)', 'Lessons Learned / Estimating Flag', 'Line Item Forecast to Complete', 'Over/Under Budget — $ (line)', 'Overall % Budget Consumed', 'Revised Budget (line)', 'Total Job-to-Date Cost', 'Total Over/Under Budget', 'Total Revised Budget', 'Variance Root Cause (per line)', 'Variance Trend (vs prior period)'],
   },
     example_questions: ['Which bids were under-priced due to market pressure?', 'What is the margin difference between panic bids and disciplined bids?', 'Are we bidding with enough contingency?', 'Where do we consistently leave money on the table?'],
+    calc_function: 'change_orders.panic_bid_analysis',
+    sql_templates: {
+      estimate_data: `SELECT source_file, project_id, fields->'Total Bid Amount'->>'value' as total_bid_amount, fields->'Bid Result'->>'value' as bid_result, fields->'Fee / Markup Structure'->>'value' as fee_markup_structure, fields->'Market Condition at Bid'->>'value' as market_condition, fields->'Design Completeness at Bid'->>'value' as design_completeness FROM extracted_records WHERE skill_id = 'estimate'`,
+      jcr_data: `SELECT source_file, project_id, fields->'Estimated Margin at Completion'->>'value' as estimated_margin_at_completion, fields->'Total Revised Budget'->>'value' as total_revised_budget FROM extracted_records WHERE skill_id = 'job_cost_report'`,
+    },
   },
   {
     card_name: 'foreman_productivity_gap',
@@ -351,6 +423,10 @@ Key metric: Production Rate Gap = (Best Foreman Rate - This Foreman Rate) / Best
     production_activity: ['Activity Type', 'CSI Division', 'Crew Composition', 'Cumulative Production Efficiency', 'Daily Production vs Plan', 'Estimated Production Rate', 'Production Rate (calculated)', 'Productive Rate (adjusted)', 'Productivity Trend (7-day)', 'Quantity Installed', 'Total Disruption Hours', 'Total Labor Hours', 'Unit of Measure'],
   },
     example_questions: ['Who are our most productive foremen?', 'What is the productivity gap between best and worst crews?', 'Which foremen are trending down in productivity?', 'How do crew compositions affect production rates?'],
+    calc_function: 'productivity.foreman_gap',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Production Rate (calculated)'->>'value' as production_rate, fields->'Total Labor Hours'->>'value' as total_labor_hours, fields->'Activity Type'->>'value' as activity_type, fields->'Crew Composition'->>'value' as crew_composition, fields->'Cumulative Production Efficiency'->>'value' as cumulative_production_efficiency, fields->'Productivity Trend (7-day)'->>'value' as productivity_trend FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'overtime_pattern_detection',
@@ -372,6 +448,10 @@ Key metric: OT Premium Cost = (OT hours × rate premium) + productivity loss dur
     production_activity: ['Activity Type', 'CSI Division', 'Overtime / Shift', 'Productivity Trend (7-day)', 'Total Labor Hours'],
   },
     example_questions: ['Where are we working the most overtime?', 'What is the cost impact of overtime by project?', 'Is overtime actually helping productivity or hurting it?', 'Which phases consistently require overtime?'],
+    calc_function: 'productivity.overtime_impact',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Total Labor Hours'->>'value' as total_labor_hours, fields->'Overtime / Shift'->>'value' as overtime_shift, fields->'Activity Type'->>'value' as activity_type, fields->'Production Rate (calculated)'->>'value' as production_rate, fields->'Productivity Trend (7-day)'->>'value' as productivity_trend FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'crew_composition_optimization',
@@ -393,6 +473,10 @@ Key metric: Best crew composition per Activity Type = highest Production Rate ÷
     production_activity: ['Activity Type', 'CSI Division', 'Crew Composition', 'Daily Production vs Plan', 'Estimated Production Rate', 'Production Rate (calculated)', 'Productive Rate (adjusted)', 'Quantity Installed', 'Total Labor Hours', 'Unit of Measure'],
   },
     example_questions: ['What is the optimal crew mix for each activity?', 'How does crew composition affect production rates?', 'Are we overstaffing or understaffing certain activities?'],
+    calc_function: 'productivity.crew_optimization',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Crew Composition'->>'value' as crew_composition, fields->'Production Rate (calculated)'->>'value' as production_rate, fields->'Activity Type'->>'value' as activity_type, fields->'Total Labor Hours'->>'value' as total_labor_hours, fields->'Quantity Installed'->>'value' as quantity_installed FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'apprentice_journeyman_ratio',
@@ -414,6 +498,10 @@ Key metric: Productivity delta per 10% change in apprentice ratio, by activity t
     production_activity: ['Activity Type', 'CSI Division', 'Crew Composition', 'Cumulative Production Efficiency', 'Daily Production vs Plan', 'Production Rate (calculated)', 'Total Labor Hours'],
   },
     example_questions: ['How does the apprentice ratio affect our productivity?', 'What is the optimal apprentice-to-journeyman ratio?', 'Is it cheaper to use more apprentices or fewer journeymen?'],
+    calc_function: 'productivity.apprentice_ratio_impact',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Crew Composition'->>'value' as crew_composition, fields->'Production Rate (calculated)'->>'value' as production_rate, fields->'Activity Type'->>'value' as activity_type, fields->'Cumulative Production Efficiency'->>'value' as cumulative_production_efficiency, fields->'Total Labor Hours'->>'value' as total_labor_hours FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'travel_mobilization_cost',
@@ -434,6 +522,11 @@ Key metric: Mobilization Cost % = Travel/Mob Hours × Rate / Total Project Labor
     production_activity: ['CSI Division', 'Total Labor Hours'],
   },
     example_questions: ['How much are we spending on travel and mobilization?', 'Which projects have the highest mob costs as a percentage?', 'Is there a project size below which mob costs kill the margin?'],
+    calc_function: 'productivity.mobilization_cost',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Total Labor Hours'->>'value' as total_labor_hours, fields->'CSI Division'->>'value' as csi_division FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+      estimate_data: `SELECT source_file, fields->'Gross Square Footage'->>'value' as gross_square_footage FROM extracted_records WHERE skill_id = 'estimate' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'design_change_impact',
@@ -462,6 +555,12 @@ Key metric: Total Design Change Cost = CO amounts + rework cost + disruption cos
     submittal: ['Dates (Submitted/Required/Returned)', 'Review Cycle Time (days)', 'Schedule Impact of Late Review'],
   },
     example_questions: ['What is the total cost of design changes on this project?', 'How do design changes flow through the RFI to CO pipeline?', 'Which design changes caused the most rework?', 'What is the schedule impact of design changes?'],
+    calc_function: 'design_and_rework.design_change_cost_rollup',
+    sql_templates: {
+      dc_data: `SELECT source_file, fields->'Cost Impact (ASI)'->>'value' as cost_impact, fields->'ASI Type'->>'value' as asi_type, fields->'CSI Division(s) Affected'->>'value' as csi_divisions, fields->'Schedule Impact (ASI)'->>'value' as schedule_impact, fields->'Rework Required?'->>'value' as rework_required FROM extracted_records WHERE skill_id = 'design_change' AND project_id = {{project_id}}`,
+      co_data: `SELECT source_file, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Owner Approved Amount'->>'value' as owner_approved_amount, fields->'Change Reason (Root Cause)'->>'value' as change_reason FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+      prod_data: `SELECT source_file, fields->'Rework Cost'->>'value' as rework_cost, fields->'Disruption Cost'->>'value' as disruption_cost, fields->'Total Disruption Hours'->>'value' as total_disruption_hours FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'punch_list_cost_pattern',
@@ -483,6 +582,11 @@ Key metric: Punch Cost per Trade = (Rework Labor Hours × Rate + Material) group
     rfi: ['CSI Division (Primary)'],
   },
     example_questions: ['Which trades generate the most punch list items?', 'What are the main causes of punch list items?', 'How much does our punch list cost us per project?', 'What is the pattern between punch lists and warranty callbacks?'],
+    calc_function: 'design_and_rework.punch_list_cost',
+    sql_templates: {
+      admin_data: `SELECT source_file, fields->'Total Punch Items'->>'value' as total_punch_items, fields->'Items by Trade (Punch)'->>'value' as items_by_trade, fields->'Days to Complete Punch List'->>'value' as days_to_complete_punch_list, fields->'Warranty Items (post-closeout)'->>'value' as warranty_items FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+      prod_data: `SELECT source_file, fields->'Rework Cost'->>'value' as rework_cost, fields->'Rework Cause'->>'value' as rework_cause, fields->'Rework Labor Hours'->>'value' as rework_labor_hours FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'coordination_rework_reduction',
@@ -509,6 +613,11 @@ Key metric: Coordination Rework Cost = SUM(Rework Cost where Rework Cause = Desi
     submittal: ['Dates (Submitted/Required/Returned)', 'Procurement Critical?', 'Review Cycle Time (days)', 'Schedule Impact of Late Review'],
   },
     example_questions: ['How much rework is caused by coordination failures?', 'Which trades have the most coordination issues?', 'What is the cost of rework from design conflicts?', 'Are there recurring coordination patterns across projects?'],
+    calc_function: 'design_and_rework.coordination_rework_total',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Rework Cost'->>'value' as rework_cost, fields->'Rework Cause'->>'value' as rework_cause, fields->'Rework Labor Hours'->>'value' as rework_labor_hours, fields->'Disruption Cause Categories'->>'value' as disruption_cause_categories FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+      rfi_data: `SELECT source_file, fields->'Root Cause (Level 1)'->>'value' as root_cause_level_1, fields->'CSI Division (Primary)'->>'value' as csi_division FROM extracted_records WHERE skill_id = 'rfi' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'schedule_delay_cost_attribution',
@@ -537,6 +646,12 @@ Key metric: Delay Cost = SUM(Disruption Cost + OT premium + productivity loss) b
     submittal: ['Dates (Submitted/Required/Returned)', 'Procurement Critical?', 'Review Cycle Time (days)', 'Schedule Impact of Late Review'],
   },
     example_questions: ['What is the cost of schedule delays on this project?', 'Who is responsible for the delays?', 'Do we have documentation to support a delay claim?', 'What is causing the most schedule disruption?'],
+    calc_function: 'schedule.delay_cost_attribution',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Disruption Cost'->>'value' as disruption_cost, fields->'Total Disruption Hours'->>'value' as total_disruption_hours, fields->'Disruption Cause Categories'->>'value' as disruption_cause_categories, fields->'Responsible Party'->>'value' as responsible_party FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+      daily_data: `SELECT source_file, fields->'Delay Cause Category'->>'value' as delay_cause_category, fields->'Issues / Delays Reported'->>'value' as issues_delays FROM extracted_records WHERE skill_id = 'daily_report' AND project_id = {{project_id}}`,
+      rfi_data: `SELECT source_file, fields->'Schedule Impact (Estimated Range)'->>'value' as schedule_impact, fields->'Response Time (calendar days)'->>'value' as response_time FROM extracted_records WHERE skill_id = 'rfi' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'value_engineering_tracking',
@@ -561,6 +676,11 @@ Key metric: VE Net Value = Intended savings - (rework cost + additional RFIs + C
     rfi: ['Recurring Pattern', 'Root Cause (Level 1)', 'Root Cause (Level 2)'],
   },
     example_questions: ['Have our VE decisions actually saved money?', 'Which VE decisions caused rework or problems?', 'Track the downstream impact of value engineering choices'],
+    calc_function: 'design_and_rework.ve_net_value',
+    sql_templates: {
+      dc_data: `SELECT source_file, fields->'ASI Type'->>'value' as asi_type, fields->'Cost Impact (ASI)'->>'value' as cost_impact, fields->'Rework Required?'->>'value' as rework_required FROM extracted_records WHERE skill_id = 'design_change' AND project_id = {{project_id}}`,
+      prod_data: `SELECT source_file, fields->'Rework Cost'->>'value' as rework_cost, fields->'Rework Cause'->>'value' as rework_cause FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'cash_flow_bottleneck',
@@ -586,6 +706,12 @@ Key metric: Cash Stuck = (Pending CO $ + Disputed Items $ + Unbilled Retention +
     submittal: ['Dates (Submitted/Required/Returned)', 'Procurement Critical?', 'Review Cycle Time (days)'],
   },
     example_questions: ['Where is our cash stuck?', 'What are the biggest cash flow bottlenecks?', 'How much money is tied up in pending COs and disputes?', 'Which projects have the worst cash flow?'],
+    calc_function: 'cash_flow.cash_flow_bottleneck',
+    sql_templates: {
+      admin_data: `SELECT source_file, project_id, fields->'Retainage Held'->>'value' as retainage_held, fields->'Disputed / Held Items'->>'value' as disputed_held_items, fields->'Days to Payment'->>'value' as days_to_payment, fields->'Billed This Period'->>'value' as billed_this_period FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+      co_data: `SELECT source_file, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Disputed (Y/N) + Outcome'->>'value' as disputed FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+      dc_data: `SELECT source_file, fields->'Approval Status'->>'value' as approval_status, fields->'Proposed Amount (PR)'->>'value' as proposed_amount, fields->'Cost Impact (ASI)'->>'value' as cost_impact FROM extracted_records WHERE skill_id = 'design_change' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'project_true_profitability',
@@ -613,6 +739,13 @@ Key metric: True Profit = Revenue - (JTD Cost + CO shrinkage + rework + disrupti
     project_admin: ['Back-Charges Issued?', 'Billed This Period', 'Current Contract Value', 'Days to Complete Punch List', 'Days to Payment', 'Disputed / Held Items', 'Items by Trade (Punch)', 'Payment Received Date', 'Retainage Held', 'Scheduled Value (original SOV)', 'Total Punch Items', 'Warranty Items (post-closeout)'],
   },
     example_questions: ['What is the true profitability of this project?', 'What are all the hidden costs eating our margin?', 'Compare estimated margin to actual margin including all costs', 'Which cost categories are hurting profitability the most?', 'How does our true profit compare across projects?'],
+    calc_function: 'financial.project_profitability',
+    sql_templates: {
+      jcr_data: `SELECT source_file, fields->'Total Revised Budget'->>'value' as total_revised_budget, fields->'Total Job-to-Date Cost'->>'value' as total_jtd_cost, fields->'Total Over/Under Budget'->>'value' as total_over_under_budget, fields->'Estimated Margin at Completion'->>'value' as estimated_margin_at_completion, fields->'Total Change Orders'->>'value' as total_change_orders FROM extracted_records WHERE skill_id = 'job_cost_report' AND project_id = {{project_id}}`,
+      co_data: `SELECT source_file, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Owner Approved Amount'->>'value' as owner_approved_amount FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
+      prod_data: `SELECT source_file, fields->'Rework Cost'->>'value' as rework_cost, fields->'Disruption Cost'->>'value' as disruption_cost FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+      estimate_data: `SELECT source_file, fields->'Total Bid Amount'->>'value' as total_bid_amount, fields->'Contract Amount (if won)'->>'value' as contract_amount FROM extracted_records WHERE skill_id = 'estimate' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'invoice_rejection_pattern',
@@ -631,6 +764,10 @@ Key metric: Rejection Rate = Rejected invoices / Total invoices by GC and reject
     project_admin: ['Billed This Period', 'Current Contract Value', 'Days to Payment', 'Disputed / Held Items', 'Payment Received Date', 'Scheduled Value (original SOV)'],
   },
     example_questions: ['Why are our invoices being rejected?', 'Which GCs reject the most pay applications?', 'What is the pattern in our billing disputes?', 'How much revenue is delayed by invoice rejections?'],
+    calc_function: 'cash_flow.invoice_rejection_rate',
+    sql_templates: {
+      admin_data: `SELECT source_file, project_id, fields->'Billed This Period'->>'value' as billed_this_period, fields->'Disputed / Held Items'->>'value' as disputed_held_items, fields->'Days to Payment'->>'value' as days_to_payment FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'project_type_profitability',
@@ -658,6 +795,11 @@ Key metric: True Margin by Project Type = (Revenue - All-In Cost) / Revenue rank
     rfi: ['CSI Division (Primary)'],
   },
     example_questions: ['Which project types are most profitable for us?', 'Should we pursue more of a certain project type?', 'Compare margins across project types and sizes', 'What is our cost per SF by project type?'],
+    calc_function: 'financial.project_type_margin',
+    sql_templates: {
+      estimate_data: `SELECT source_file, project_id, fields->'Project Type'->>'value' as project_type, fields->'Building Type'->>'value' as building_type, fields->'Total Bid Amount'->>'value' as total_bid_amount, fields->'Contract Amount (if won)'->>'value' as contract_amount, fields->'Total Cost per SF (Bid)'->>'value' as cost_per_sf FROM extracted_records WHERE skill_id = 'estimate'`,
+      jcr_data: `SELECT source_file, project_id, fields->'Estimated Margin at Completion'->>'value' as estimated_margin_at_completion, fields->'Total Revised Budget'->>'value' as total_revised_budget, fields->'Project Type'->>'value' as project_type FROM extracted_records WHERE skill_id = 'job_cost_report'`,
+    },
   },
   {
     card_name: 'subcontractor_benchmarking',
@@ -684,6 +826,10 @@ Key metric: Sub Tier Score = weighted(bid competitiveness, CO rate, budget perfo
     submittal: ['Resubmittal Count'],
   },
     example_questions: ['Who are our best subcontractors?', 'Rank subs by overall performance', 'Do low-bid subs end up costing more in COs?', 'Which subs have the most rework and coordination issues?', 'Compare subcontractor performance across projects'],
+    calc_function: 'risk_and_scoring.sub_benchmark_score',
+    sql_templates: {
+      prod_data: `SELECT source_file, fields->'Production Rate (calculated)'->>'value' as production_rate, fields->'Rework Cost'->>'value' as rework_cost, fields->'CSI Division'->>'value' as csi_division, fields->'Cumulative Production Efficiency'->>'value' as cumulative_production_efficiency FROM extracted_records WHERE skill_id = 'production_activity' AND project_id = {{project_id}}`,
+    },
   },
   {
     card_name: 'project_document_completeness',
@@ -701,6 +847,8 @@ Key metric: Sub Tier Score = weighted(bid competitiveness, CO rate, budget perfo
 7. Flag types with 0 records and recommend which use cases are unlocked vs blocked.`,
     key_fields: {},
     example_questions: ['What data do we have for this project?', 'Are we missing any document types?', 'How complete is our project documentation?', 'Which analyses can we run with the data we have?'],
+    calc_function: null,
+    sql_templates: {},
   },
 ];
 
@@ -785,6 +933,8 @@ export async function POST(request: NextRequest) {
       business_logic: card.business_logic,
       key_fields: card.key_fields,
       example_questions: card.example_questions,
+      sql_templates: (card as Record<string, unknown>).sql_templates || {},
+      calc_function: (card as Record<string, unknown>).calc_function || null,
     };
     if (embeddingStr) {
       updatePayload.embedding = embeddingStr;
