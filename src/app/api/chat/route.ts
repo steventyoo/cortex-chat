@@ -13,8 +13,9 @@ import {
   executeChatTool,
   ChatTool,
 } from '@/lib/chat-tools';
+import { SandboxSession } from '@/lib/sandbox';
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 async function fetchProjectMeta(projectId: string): Promise<{
   name: string;
@@ -217,10 +218,18 @@ export async function POST(request: NextRequest) {
     systemPrompt += `\n\n${templateInstructions}`;
   }
 
+  // Lazily created sandbox — persists across all tool rounds in this request
+  const sandboxSession = new SandboxSession();
+
   const toolUseHandler = async (name: string, input: Record<string, unknown>) => {
     const tool = toolMap.get(name);
     if (!tool) return { error: `Unknown tool: ${name}` };
-    const result = await executeChatTool(tool, input, { orgId, projectId: projectId || undefined, includePending });
+    const result = await executeChatTool(tool, input, {
+      orgId,
+      projectId: projectId || undefined,
+      includePending,
+      sandboxSession,
+    });
     if (result.error) return { error: result.error };
     if (result.htmlArtifact) {
       return { __result: result.result, __htmlArtifact: result.htmlArtifact };
@@ -301,6 +310,7 @@ export async function POST(request: NextRequest) {
         );
       } finally {
         controller.close();
+        sandboxSession.destroy().catch(() => {});
         langfuse.flushAsync().catch(() => {});
       }
     },
