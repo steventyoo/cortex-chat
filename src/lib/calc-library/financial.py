@@ -27,13 +27,28 @@ def project_profitability(jcr_df, co_df=None, prod_df=None, admin_df=None, estim
     total_over_under = safe_numeric(jcr_df.iloc[0].get("total_over_under_budget"))
     estimated_margin = safe_numeric(jcr_df.iloc[0].get("estimated_margin_at_completion"))
     total_cos = safe_numeric(jcr_df.iloc[0].get("total_change_orders"))
+    net_job_profit = safe_numeric(jcr_df.iloc[0].get("net_job_profit") or jcr_df.iloc[0].get("net_job_profit_raw"))
+    ar_total = safe_numeric(jcr_df.iloc[0].get("ar_total") or jcr_df.iloc[0].get("ar_total_raw"))
+    ap_total = safe_numeric(jcr_df.iloc[0].get("ap_total") or jcr_df.iloc[0].get("ap_total_raw"))
+
+    if not total_jtd_cost and ap_total:
+        total_jtd_cost = ap_total
+        warnings.append("Used ap_total as proxy for total_jtd_cost")
+
+    if not total_revised_budget and ar_total:
+        total_revised_budget = ar_total
+        warnings.append("Used ar_total as proxy for total_revised_budget (contract revenue)")
 
     contract_value = 0
     if estimate_df is not None and not estimate_df.empty:
         contract_value = safe_numeric(estimate_df.iloc[0].get("contract_amount") or estimate_df.iloc[0].get("total_bid_amount"))
         all_sources.extend(extract_sources(estimate_df))
 
-    headline_margin = delta(total_revised_budget, total_jtd_cost) if total_revised_budget else 0
+    if net_job_profit and not total_revised_budget:
+        total_revised_budget = total_jtd_cost + net_job_profit
+        warnings.append("Derived total_revised_budget from total_jtd_cost + net_job_profit")
+
+    headline_margin = net_job_profit if net_job_profit else (delta(total_revised_budget, total_jtd_cost) if total_revised_budget else 0)
     headline_margin_pct = pct(headline_margin, total_revised_budget) if total_revised_budget else 0
 
     co_shrinkage = 0

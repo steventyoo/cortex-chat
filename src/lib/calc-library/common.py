@@ -6,7 +6,7 @@ import pandas as pd
 
 
 def safe_numeric(value, default=0.0):
-    """Parse any monetary/numeric string to float. Handles $, commas, %, None, N/A."""
+    """Parse any monetary/numeric string to float. Handles $, commas, %, None, N/A, and JSON-wrapped values like {"value": 123}."""
     if value is None:
         return default
     if isinstance(value, (int, float)):
@@ -14,6 +14,13 @@ def safe_numeric(value, default=0.0):
     s = str(value).strip()
     if not s or s.lower() in ("n/a", "none", "null", "-", "—", ""):
         return default
+    if s.startswith("{"):
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, dict) and "value" in parsed:
+                return safe_numeric(parsed["value"], default)
+        except (json.JSONDecodeError, TypeError):
+            pass
     s = re.sub(r"[,$%]", "", s)
     s = s.replace("(", "-").replace(")", "")
     try:
