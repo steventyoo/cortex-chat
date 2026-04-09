@@ -24,7 +24,7 @@ JSONB access patterns:
 - Numeric value: (fields->'field_name'->>'value')::numeric
 - Check existence: fields ? 'field_name'
 - org_id is auto-injected by the SQL function — do NOT add WHERE org_id = ... yourself.
-- Use {{project_id}} placeholder for project filtering (auto-replaced).
+- Use {{project_id}} for project filtering — write project_id = {{project_id}} (no quotes around the placeholder; they are added automatically).
 
 ## FIELD DISCOVERY — How to Pick the Right Fields
 
