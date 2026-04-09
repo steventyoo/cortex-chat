@@ -11,6 +11,74 @@ function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
   return -1;
 }
 
+function processSSELine(
+  data: Record<string, unknown>,
+  state: {
+    accumulated: string;
+    toolCalls: ToolCallEntry[];
+    parts: MessagePart[];
+  }
+) {
+  if (data.type === 'tool_call') {
+    const tc: ToolCallEntry = {
+      name: data.name as string,
+      displayName: (data.displayName as string) || undefined,
+      input: (data.input as Record<string, unknown>) || {},
+      status: 'calling',
+    };
+    state.toolCalls = [...state.toolCalls, tc];
+    state.parts = [...state.parts, { type: 'tool_call', toolCall: tc }];
+  }
+
+  if (data.type === 'tool_result') {
+    let resultCount = 0;
+    const res = data.result;
+    if (Array.isArray(res)) {
+      resultCount = res.length;
+    } else if (res && typeof res === 'object' && Array.isArray((res as Record<string, unknown>).records)) {
+      resultCount = ((res as Record<string, unknown>).records as unknown[]).length;
+    } else if (res && typeof res === 'object' && Array.isArray((res as Record<string, unknown>).rows)) {
+      resultCount = ((res as Record<string, unknown>).rows as unknown[]).length;
+    }
+    const idx = findLastIndex(
+      state.toolCalls,
+      (tc) => tc.name === data.name && tc.status === 'calling'
+    );
+    if (idx !== -1) {
+      const resultObj = data.result as Record<string, unknown> | undefined;
+      const updated: ToolCallEntry = {
+        ...state.toolCalls[idx],
+        result: data.result,
+        resultCount,
+        htmlArtifact: (data.htmlArtifact as string) || undefined,
+        status: resultObj?.error ? 'error' : 'done',
+      };
+      state.toolCalls = [...state.toolCalls];
+      state.toolCalls[idx] = updated;
+
+      const partIdx = findLastIndex(
+        state.parts,
+        (p) => p.type === 'tool_call' && p.toolCall.name === data.name && p.toolCall.status === 'calling'
+      );
+      if (partIdx !== -1) {
+        state.parts = [...state.parts];
+        state.parts[partIdx] = { type: 'tool_call', toolCall: updated };
+      }
+    }
+  }
+
+  if (data.text) {
+    state.accumulated += data.text as string;
+    const lastPart = state.parts[state.parts.length - 1];
+    if (lastPart && lastPart.type === 'text') {
+      state.parts = [...state.parts];
+      state.parts[state.parts.length - 1] = { type: 'text', content: lastPart.content + (data.text as string) };
+    } else {
+      state.parts = [...state.parts, { type: 'text', content: data.text as string }];
+    }
+  }
+}
+
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -78,101 +146,48 @@ export function useChat() {
         if (!reader) throw new Error('No response stream');
 
         const decoder = new TextDecoder();
-        let accumulated = '';
-        let toolCalls: ToolCallEntry[] = [];
-        let parts: MessagePart[] = [];
+        const state = {
+          accumulated: '',
+          toolCalls: [] as ToolCallEntry[],
+          parts: [] as MessagePart[],
+        };
+        let lineBuffer = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+          lineBuffer += chunk;
 
-          for (const line of lines) {
+          const rawLines = lineBuffer.split('\n');
+          lineBuffer = rawLines.pop() || '';
+
+          for (const line of rawLines) {
             if (!line.startsWith('data: ')) continue;
 
+            let data: Record<string, unknown>;
             try {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.projectId) {
-                setCurrentProjectId(data.projectId);
-              }
-
-              if (data.sources) {
-                setSourcesMap((prev) => ({
-                  ...prev,
-                  [assistantId]: data.sources as SourceRef[],
-                }));
-              }
-
-              if (data.type === 'tool_call') {
-                const tc: ToolCallEntry = {
-                  name: data.name,
-                  displayName: data.displayName,
-                  input: data.input || {},
-                  status: 'calling',
-                };
-                toolCalls = [...toolCalls, tc];
-                parts = [...parts, { type: 'tool_call', toolCall: tc }];
-              }
-
-              if (data.type === 'tool_result') {
-                let resultCount = 0;
-                const res = data.result;
-                if (Array.isArray(res)) {
-                  resultCount = res.length;
-                } else if (res && typeof res === 'object' && Array.isArray((res as Record<string, unknown>).records)) {
-                  resultCount = ((res as Record<string, unknown>).records as unknown[]).length;
-                } else if (res && typeof res === 'object' && Array.isArray((res as Record<string, unknown>).rows)) {
-                  resultCount = ((res as Record<string, unknown>).rows as unknown[]).length;
-                }
-                const idx = findLastIndex(
-                  toolCalls,
-                  (tc) => tc.name === data.name && tc.status === 'calling'
-                );
-                if (idx !== -1) {
-                  const updated: ToolCallEntry = {
-                    ...toolCalls[idx],
-                    result: data.result,
-                    resultCount,
-                    htmlArtifact: data.htmlArtifact || undefined,
-                    status: data.result?.error ? 'error' : 'done',
-                  };
-                  toolCalls = [...toolCalls];
-                  toolCalls[idx] = updated;
-                  // Also update the matching part
-                  const partIdx = findLastIndex(
-                    parts,
-                    (p) => p.type === 'tool_call' && p.toolCall.name === data.name && p.toolCall.status === 'calling'
-                  );
-                  if (partIdx !== -1) {
-                    parts = [...parts];
-                    parts[partIdx] = { type: 'tool_call', toolCall: updated };
-                  }
-                }
-              }
-
-              if (data.text) {
-                accumulated += data.text;
-                const lastPart = parts[parts.length - 1];
-                if (lastPart && lastPart.type === 'text') {
-                  parts = [...parts];
-                  parts[parts.length - 1] = { type: 'text', content: lastPart.content + data.text };
-                } else {
-                  parts = [...parts, { type: 'text', content: data.text }];
-                }
-              }
-
-              if (data.error) {
-                setError(data.error);
-              }
-
-              if (data.done) {
-                // Streaming complete
-              }
+              data = JSON.parse(line.slice(6));
             } catch {
-              // Ignore parse errors for partial chunks
+              continue;
+            }
+
+            if (data.projectId) {
+              setCurrentProjectId(data.projectId as string);
+            }
+
+            if (data.sources) {
+              setSourcesMap((prev) => ({
+                ...prev,
+                [assistantId]: data.sources as SourceRef[],
+              }));
+            }
+
+            processSSELine(data, state);
+
+            if (data.error) {
+              setError(data.error as string);
             }
           }
 
@@ -182,13 +197,35 @@ export function useChat() {
             if (last && last.role === 'assistant') {
               updated[updated.length - 1] = {
                 ...last,
-                content: accumulated,
-                toolCalls: toolCalls.length > 0 ? toolCalls : last.toolCalls,
-                parts: parts.length > 0 ? parts : last.parts,
+                content: state.accumulated,
+                toolCalls: state.toolCalls.length > 0 ? state.toolCalls : last.toolCalls,
+                parts: state.parts.length > 0 ? state.parts : last.parts,
               };
             }
             return updated;
           });
+        }
+
+        if (lineBuffer.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(lineBuffer.slice(6));
+            processSSELine(data, state);
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last && last.role === 'assistant') {
+                updated[updated.length - 1] = {
+                  ...last,
+                  content: state.accumulated,
+                  toolCalls: state.toolCalls.length > 0 ? state.toolCalls : last.toolCalls,
+                  parts: state.parts.length > 0 ? state.parts : last.parts,
+                };
+              }
+              return updated;
+            });
+          } catch {
+            // Final partial line — safe to ignore
+          }
         }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
