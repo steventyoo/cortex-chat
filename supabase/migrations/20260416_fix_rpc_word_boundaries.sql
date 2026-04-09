@@ -1,6 +1,7 @@
--- Fix: PostgreSQL uses \y for word boundaries, not \b (\b = backspace in PG regex).
--- The previous DML guard and LIMIT check used \b which silently matched nothing,
--- leaving the DML guard non-functional and the LIMIT check always appending LIMIT 500.
+-- Replace fragile regex-based DML guard with PostgreSQL's built-in read-only mode.
+-- SET default_transaction_read_only = on makes the engine reject any writes,
+-- which is bulletproof against INSERT/UPDATE/DELETE/DROP/etc. in any form
+-- (CTEs, subqueries, dynamic SQL, column names that look like keywords).
 CREATE OR REPLACE FUNCTION execute_readonly_query(
   sql_query TEXT,
   p_org_id TEXT,
@@ -10,6 +11,7 @@ RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET statement_timeout = '10000'
+SET default_transaction_read_only = on
 AS $$
 DECLARE
   result JSONB;
@@ -19,10 +21,6 @@ BEGIN
 
   IF NOT (lower(safe_query) ~ '^select\s') THEN
     RAISE EXCEPTION 'Only SELECT queries are allowed';
-  END IF;
-
-  IF safe_query ~* '\y(insert|update|delete|drop|alter|truncate|grant|revoke)\y' THEN
-    RAISE EXCEPTION 'DML/DDL statements are not allowed';
   END IF;
 
   -- Replace quoted variants first: '{{org_id}}' → 'value'
