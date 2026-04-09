@@ -1,6 +1,7 @@
 import { getSupabase } from './supabase';
 import { searchByEmbedding, generateEmbedding } from './embeddings';
 import { SandboxSession } from './sandbox';
+import { validateToolInput, CalcResultSchema } from './tool-schemas';
 
 export interface ChatTool {
   id: string;
@@ -19,7 +20,8 @@ export interface ChatTool {
     | 'sql_analytics'
     | 'sandbox'
     | 'context_retrieval'
-    | 'field_catalog';
+    | 'field_catalog'
+    | 'calc_function';
   implementation_config: Record<string, unknown>;
   sample_prompts: string[];
   is_active: boolean;
@@ -345,6 +347,40 @@ async function executeProjectOverview(
   };
 }
 
+/* ── Row normalization: unwrap {value, confidence} JSONB wrappers ── */
+
+const MAX_PREVIEW_ROWS = 50;
+
+function normalizeRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return rows.map((row) => {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(row)) {
+      if (
+        val !== null &&
+        typeof val === 'object' &&
+        !Array.isArray(val) &&
+        'value' in (val as Record<string, unknown>)
+      ) {
+        out[key] = (val as Record<string, unknown>).value;
+      } else if (typeof val === 'string') {
+        try {
+          const parsed = JSON.parse(val);
+          if (parsed !== null && typeof parsed === 'object' && 'value' in parsed) {
+            out[key] = parsed.value;
+          } else {
+            out[key] = val;
+          }
+        } catch {
+          out[key] = val;
+        }
+      } else {
+        out[key] = val;
+      }
+    }
+    return out;
+  });
+}
+
 /* ── NEW: SQL Analytics executor ─────────────────────────────── */
 
 async function executeSqlAnalytics(
@@ -364,9 +400,9 @@ async function executeSqlAnalytics(
 
   if (error) return { result: null, error: error.message };
 
-  const rows = (data || []) as Record<string, unknown>[];
+  const rawRows = (data || []) as Record<string, unknown>[];
+  const rows = normalizeRows(rawRows);
 
-  // Side effect: make SQL results available in the sandbox at /tmp/data.json
   if (ctx.sandboxSession && rows.length > 0) {
     try {
       await ctx.sandboxSession.writeData({ rows });
@@ -375,10 +411,15 @@ async function executeSqlAnalytics(
     }
   }
 
+  const preview = rows.slice(0, MAX_PREVIEW_ROWS);
+  const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+
   return {
     result: {
-      _summary: `${rows.length} row${rows.length !== 1 ? 's' : ''} returned`,
-      rows,
+      _summary: `${rows.length} row${rows.length !== 1 ? 's' : ''} returned${rows.length > MAX_PREVIEW_ROWS ? ` (showing first ${MAX_PREVIEW_ROWS})` : ''}`,
+      _total_rows: rows.length,
+      _columns: columns,
+      rows: preview,
     },
   };
 }
@@ -395,6 +436,10 @@ async function executeSandboxCode(
 
   if (!ctx.sandboxSession) {
     return { result: null, error: 'Sandbox session not available' };
+  }
+
+  if (!ctx.sandboxSession.hasData) {
+    console.warn('[chat-tools] execute_analysis called before any SQL query — /tmp/data.json may be stale or missing');
   }
 
   const runResult = await ctx.sandboxSession.run(code);
@@ -418,6 +463,101 @@ async function executeSandboxCode(
       stdout: runResult.stdout,
     },
     htmlArtifact: runResult.htmlArtifact || undefined,
+  };
+}
+
+/* ── NEW: Calc Function executor ──────────────────────────────── */
+
+async function executeCalcFunction(
+  _config: Record<string, unknown>,
+  input: Record<string, unknown>,
+  ctx: ToolExecContext
+): Promise<ToolExecResult> {
+  const calcFn = input.calc_function as string;
+  const mapping = input.dataframe_mapping as Record<string, string>;
+  const dataFile = (input.data_file as string) || '/tmp/data.json';
+
+  if (!calcFn || !mapping) {
+    return { result: null, error: 'calc_function and dataframe_mapping are required' };
+  }
+
+  if (!ctx.sandboxSession) {
+    return { result: null, error: 'Sandbox session not available' };
+  }
+
+  if (!ctx.sandboxSession.hasData) {
+    return {
+      result: null,
+      error: 'No data in sandbox. Run execute_sql_analytics first to load data before calling execute_calc_function.',
+    };
+  }
+
+  const [moduleName, funcName] = calcFn.split('.');
+  if (!moduleName || !funcName) {
+    return { result: null, error: `Invalid calc_function format: "${calcFn}". Expected "module.function".` };
+  }
+
+  const dfSplits = Object.entries(mapping)
+    .map(([param, skillId]) => `${param} = df[df['skill_id'] == '${skillId}']`)
+    .join('\n');
+
+  const kwargs = Object.keys(mapping)
+    .map((param) => `${param}=${param}`)
+    .join(', ');
+
+  const code = `import sys, json, pandas as pd
+sys.path.insert(0, '/tmp/cortex_calcs')
+from ${moduleName} import ${funcName}
+
+data = json.load(open('${dataFile}'))
+df = pd.DataFrame(data['rows'])
+
+${dfSplits}
+
+result = ${funcName}(${kwargs})
+print(json.dumps(result, indent=2, default=str))`;
+
+  const runResult = await ctx.sandboxSession.run(code);
+
+  if (runResult.exitCode !== 0) {
+    return {
+      result: {
+        _summary: `Calc function error (exit ${runResult.exitCode})`,
+        stdout: runResult.stdout,
+        error: runResult.stderr,
+      },
+    };
+  }
+
+  let parsedResult: unknown;
+  try {
+    parsedResult = JSON.parse(runResult.stdout.trim());
+  } catch {
+    return {
+      result: {
+        _summary: 'Calc function completed (raw output)',
+        stdout: runResult.stdout,
+      },
+    };
+  }
+
+  const validation = CalcResultSchema.safeParse(parsedResult);
+  if (!validation.success) {
+    console.warn('[chat-tools] Calc result failed schema validation:', validation.error.issues);
+    return {
+      result: {
+        _summary: 'Calc function completed',
+        ...(parsedResult as Record<string, unknown>),
+      },
+    };
+  }
+
+  const validated = validation.data;
+  return {
+    result: {
+      _summary: `Calc complete (confidence: ${validated.confidence})`,
+      ...validated,
+    },
   };
 }
 
@@ -618,6 +758,7 @@ async function executeTool(
     case 'sandbox': return executeSandboxCode(config, input, ctx);
     case 'field_catalog': return executeFieldCatalog(config, input, ctx);
     case 'context_retrieval': return executeContextRetrieval(config, input, ctx);
+    case 'calc_function': return executeCalcFunction(config, input, ctx);
     case 'api_call': return executeApiCall(config, input, ctx);
     case 'composite': return executeComposite(config, input, ctx);
     default: return { result: null, error: `Unknown implementation type: ${type}` };
@@ -629,8 +770,13 @@ export async function executeChatTool(
   input: Record<string, unknown>,
   ctx: ToolExecContext
 ): Promise<ToolExecResult> {
+  const validation = validateToolInput(tool.tool_name, input);
+  if (!validation.success) {
+    return { result: null, error: validation.error };
+  }
+
   try {
-    return await executeTool(tool.implementation_type, tool.implementation_config, input, ctx);
+    return await executeTool(tool.implementation_type, tool.implementation_config, validation.data, ctx);
   } catch (err) {
     console.error(`[chat-tools] Tool "${tool.tool_name}" failed:`, err);
     return { result: null, error: String(err) };

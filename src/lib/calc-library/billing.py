@@ -4,6 +4,93 @@ from common import safe_numeric, pct, extract_sources, df_coverage, make_result,
 import pandas as pd
 
 
+def billing_summary(admin_df, jcr_df=None, co_df=None, **kwargs):
+    """Deduplicated billing summary from project_admin pay applications.
+
+    Filters admin records to pay-application-type documents (avoiding double-counting
+    from SOVs, lien releases, and meeting minutes that also contain billing fields).
+    Falls back to all admin records if no document type column is available.
+    """
+    warnings = []
+    cov = {}
+    cov.update(df_coverage("project_admin", admin_df))
+    cov.update(df_coverage("jcr", jcr_df))
+    cov.update(df_coverage("change_orders", co_df))
+
+    if admin_df is None or admin_df.empty:
+        return make_result({"error": "No admin data"}, "N/A", warnings=["No admin data"], data_coverage=cov, confidence="low")
+
+    admin = admin_df.copy()
+
+    type_col = None
+    for c in ["document_type", "Type", "doc_type", "meeting_type", "Meeting Type"]:
+        if c in admin.columns:
+            type_col = c
+            break
+
+    if type_col:
+        pay_app_mask = admin[type_col].astype(str).str.lower().str.contains(
+            "pay.*app|application.*payment|billing|invoice|requisition|pencil draw"
+        )
+        pay_apps = admin[pay_app_mask]
+        if pay_apps.empty:
+            pay_apps = admin
+            warnings.append(f"No pay application records found in {type_col}; using all admin records")
+        else:
+            excluded = len(admin) - len(pay_apps)
+            if excluded > 0:
+                warnings.append(f"Filtered {excluded} non-pay-app records (SOVs, lien releases, etc.)")
+    else:
+        pay_apps = admin
+        warnings.append("No document type column; using all admin records (risk of double-counting)")
+
+    pay_apps = pay_apps.copy()
+    pay_apps["billed"] = numeric_col(pay_apps, "billed_this_period")
+    pay_apps["scheduled"] = numeric_col(pay_apps, "scheduled_value")
+    pay_apps["contract_val"] = numeric_col(pay_apps, "current_contract_value")
+    pay_apps["retainage"] = numeric_col(pay_apps, "retainage_held")
+    pay_apps["days_to_pay"] = numeric_col(pay_apps, "days_to_payment")
+
+    total_billed = float(pay_apps["billed"].sum())
+    total_scheduled = float(pay_apps["scheduled"].sum())
+    total_retainage = float(pay_apps["retainage"].sum())
+    avg_days_to_pay = float(pay_apps["days_to_pay"].mean()) if pay_apps["days_to_pay"].sum() > 0 else 0
+    contract_value = float(pay_apps["contract_val"].max()) if pay_apps["contract_val"].max() > 0 else 0
+
+    billing_pct = pct(total_billed, contract_value) if contract_value else 0
+
+    jcr_cost = 0
+    if jcr_df is not None and not jcr_df.empty:
+        jcr = jcr_df.copy()
+        for col_name in ["total_jtd_cost", "ap_total", "ap_total_raw"]:
+            val = safe_numeric(jcr.iloc[0].get(col_name))
+            if val:
+                jcr_cost = val
+                break
+
+    overbilling = total_billed - jcr_cost if jcr_cost > 0 and total_billed > jcr_cost else 0
+    underbilling = jcr_cost - total_billed if jcr_cost > 0 and jcr_cost > total_billed else 0
+
+    return make_result(
+        {
+            "pay_app_count": len(pay_apps),
+            "total_billed": total_billed,
+            "contract_value": contract_value,
+            "billing_progress_pct": round(billing_pct, 1),
+            "total_retainage_held": total_retainage,
+            "avg_days_to_payment": round(avg_days_to_pay, 0),
+            "overbilling": round(overbilling, 0),
+            "underbilling": round(underbilling, 0),
+            "jcr_cost_reference": jcr_cost,
+        },
+        "Billing Progress = Total Billed / Contract Value; Over/Under = Billed - JTD Cost",
+        warnings=warnings,
+        sources=extract_sources(admin_df) + extract_sources(jcr_df),
+        data_coverage=cov,
+        confidence=confidence_level(cov),
+    )
+
+
 def tm_underbilling(co_df, prod_df=None, jcr_df=None, **kwargs):
     """Detect T&M work where billed amounts are less than actual costs."""
     warnings = []
