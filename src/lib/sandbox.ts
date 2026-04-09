@@ -1,6 +1,7 @@
 import { Sandbox } from '@vercel/sandbox';
 
 const EXEC_TIMEOUT = 30_000;
+const SANDBOX_LIFETIME = 5 * 60_000;
 const MAX_HTML_SIZE = 100_000;
 const MAX_STDOUT_SIZE = 50_000;
 const REQUIRED_PACKAGES = ['pandas', 'plotly', 'numpy'];
@@ -34,6 +35,7 @@ export interface RunResult {
 export class SandboxSession {
   private sandbox: (Sandbox & AsyncDisposable) | null = null;
   private creating: Promise<Sandbox & AsyncDisposable> | null = null;
+  private lastData: unknown = null;
 
   private async ensureSandbox(): Promise<Sandbox & AsyncDisposable> {
     if (this.sandbox) return this.sandbox;
@@ -53,7 +55,7 @@ export class SandboxSession {
       return Sandbox.create({
         ...creds,
         source: { type: 'snapshot', snapshotId },
-        timeout: EXEC_TIMEOUT + 30_000,
+        timeout: SANDBOX_LIFETIME,
         networkPolicy: 'deny-all',
         env: { MPLBACKEND: 'Agg' },
       });
@@ -62,7 +64,7 @@ export class SandboxSession {
     const sb = await Sandbox.create({
       ...creds,
       runtime: 'python3.13',
-      timeout: EXEC_TIMEOUT + 90_000,
+      timeout: SANDBOX_LIFETIME,
       env: { MPLBACKEND: 'Agg' },
     });
 
@@ -80,15 +82,49 @@ export class SandboxSession {
   }
 
   /**
+   * Detect a 410 "sandbox_stopped" and transparently create a fresh sandbox.
+   * Re-writes /tmp/data.json from the last cached data so the new VM has context.
+   */
+  private async handleGone(): Promise<void> {
+    console.warn('[sandbox] Sandbox expired (410 Gone). Recreating...');
+    this.sandbox = null;
+    this.creating = null;
+    const sb = await this.ensureSandbox();
+    if (this.lastData) {
+      await sb.writeFiles([
+        { path: '/tmp/data.json', content: Buffer.from(JSON.stringify(this.lastData)) },
+      ]);
+    }
+  }
+
+  private isGoneError(err: unknown): boolean {
+    if (err && typeof err === 'object' && 'response' in err) {
+      const resp = (err as { response?: { status?: number } }).response;
+      if (resp?.status === 410) return true;
+    }
+    if (err instanceof Error && err.message.includes('410')) return true;
+    return false;
+  }
+
+  /**
    * Write JSON data to /tmp/data.json inside the sandbox.
    * Called as a side effect of execute_sql_analytics so Claude
    * doesn't need a dedicated "upload data" tool call.
    */
   async writeData(data: unknown): Promise<void> {
-    const sb = await this.ensureSandbox();
-    await sb.writeFiles([
-      { path: '/tmp/data.json', content: Buffer.from(JSON.stringify(data)) },
-    ]);
+    this.lastData = data;
+    try {
+      const sb = await this.ensureSandbox();
+      await sb.writeFiles([
+        { path: '/tmp/data.json', content: Buffer.from(JSON.stringify(data)) },
+      ]);
+    } catch (err) {
+      if (this.isGoneError(err)) {
+        await this.handleGone();
+      } else {
+        throw err;
+      }
+    }
   }
 
   /**
@@ -96,11 +132,23 @@ export class SandboxSession {
    * Automatically reads /tmp/output.html if the code produces one.
    */
   async run(code: string): Promise<RunResult> {
-    const sb = await this.ensureSandbox();
+    return this.runWithRetry(code, false);
+  }
 
-    await sb.writeFiles([
-      { path: '/tmp/analysis.py', content: Buffer.from(code) },
-    ]);
+  private async runWithRetry(code: string, isRetry: boolean): Promise<RunResult> {
+    let sb: Sandbox & AsyncDisposable;
+    try {
+      sb = await this.ensureSandbox();
+      await sb.writeFiles([
+        { path: '/tmp/analysis.py', content: Buffer.from(code) },
+      ]);
+    } catch (err) {
+      if (!isRetry && this.isGoneError(err)) {
+        await this.handleGone();
+        return this.runWithRetry(code, true);
+      }
+      throw err;
+    }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), EXEC_TIMEOUT);
@@ -110,6 +158,13 @@ export class SandboxSession {
       result = await sb.runCommand('python3', ['/tmp/analysis.py'], {
         signal: controller.signal,
       });
+    } catch (err) {
+      clearTimeout(timer);
+      if (!isRetry && this.isGoneError(err)) {
+        await this.handleGone();
+        return this.runWithRetry(code, true);
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }
