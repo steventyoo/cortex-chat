@@ -10,27 +10,53 @@ import LoadingDots from './LoadingDots';
 function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
   const [expanded, setExpanded] = useState(false);
   const label = tc.displayName || tc.name.replace(/_/g, ' ');
-  const query = typeof tc.input?.query === 'string' ? tc.input.query : null;
+
+  const inputQuery = typeof tc.input?.query === 'string' ? tc.input.query : null;
+  const inputQuestion = typeof tc.input?.question === 'string' ? tc.input.question : null;
+  const displayInput = inputQuery || inputQuestion;
 
   let resultArr: Record<string, unknown>[] = [];
+  let resultRows: Record<string, unknown>[] = [];
   let summary: string | null = null;
+  let stdout: string | null = null;
+  let hasError = false;
+  let errorMsg: string | null = null;
 
   if (tc.result && typeof tc.result === 'object') {
     const res = tc.result as Record<string, unknown>;
+    summary = typeof res._summary === 'string' ? res._summary : null;
+
     if (Array.isArray(res.records)) {
       resultArr = res.records as Record<string, unknown>[];
-      summary = typeof res._summary === 'string' ? res._summary : null;
+    } else if (Array.isArray(res.rows)) {
+      resultRows = res.rows as Record<string, unknown>[];
     } else if (Array.isArray(tc.result)) {
       resultArr = tc.result as Record<string, unknown>[];
     }
+
+    if (typeof res.stdout === 'string' && res.stdout.length > 0) {
+      stdout = res.stdout;
+    }
+    if (typeof res.error === 'string') {
+      hasError = true;
+      errorMsg = res.error;
+    }
+
+    if (Array.isArray(res.catalog)) {
+      resultArr = res.catalog as Record<string, unknown>[];
+    }
+    if (Array.isArray(res.cards)) {
+      resultArr = res.cards as Record<string, unknown>[];
+    }
   }
 
-  const count = tc.resultCount ?? resultArr.length;
+  const count = tc.resultCount ?? (resultArr.length || resultRows.length);
+  const hasExpandableContent = resultArr.length > 0 || resultRows.length > 0 || stdout || tc.htmlArtifact;
 
   return (
     <div className="my-2 rounded-lg border border-[#2a2a2a] bg-[#111111] text-[13px] overflow-hidden">
       <button
-        onClick={() => tc.status === 'done' && setExpanded(!expanded)}
+        onClick={() => tc.status === 'done' && hasExpandableContent && setExpanded(!expanded)}
         className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[#1a1a1a] transition-colors"
       >
         {tc.status === 'calling' ? (
@@ -47,24 +73,27 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
 
         {tc.status === 'done' && (
           <span className="text-[#666] ml-auto flex items-center gap-1.5">
-            {summary || (count !== undefined ? `${count} record${count !== 1 ? 's' : ''}` : '')}
-            <svg className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
+            {summary || (count > 0 ? `${count} record${count !== 1 ? 's' : ''}` : '')}
+            {tc.htmlArtifact && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#1a3a5c] text-[#60a5fa]">chart</span>}
+            {hasExpandableContent && (
+              <svg className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg>
+            )}
           </span>
         )}
 
         {tc.status === 'calling' && (
-          <span className="text-[#666] ml-auto">Searching...</span>
+          <span className="text-[#666] ml-auto">Working...</span>
         )}
       </button>
 
-      {query && (
+      {displayInput && (
         <div className="px-3 pb-2 text-[12px] text-[#777] border-t border-[#222]">
-          <span className="text-[#555]">Query:</span> {query}
+          <span className="text-[#555]">Input:</span> {displayInput}
         </div>
       )}
 
       <AnimatePresence>
-        {expanded && resultArr.length > 0 && (
+        {expanded && hasExpandableContent && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: 'auto', opacity: 1 }}
@@ -72,25 +101,97 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
             transition={{ duration: 0.2 }}
             className="border-t border-[#222]"
           >
-            <div className="max-h-[300px] overflow-y-auto p-3 space-y-2">
-              {resultArr.map((record: Record<string, unknown>, i: number) => (
-                <div key={i} className="rounded bg-[#0a0a0a] border border-[#1f1f1f] p-2 text-[12px]">
-                  {record.source_file ? (
-                    <div className="text-[#555] mb-1 truncate">{String(record.source_file)}</div>
-                  ) : null}
-                  <pre className="whitespace-pre-wrap break-words text-[#aaa] leading-relaxed">
-                    {JSON.stringify(record.fields || record, null, 2)}
-                  </pre>
-                  {record.similarity !== undefined && (
-                    <div className="mt-1 text-[11px] text-[#555]">
-                      Similarity: {Number(record.similarity).toFixed(3)}
-                      {record.overall_confidence !== undefined ? ` | Confidence: ${Number(record.overall_confidence).toFixed(2)}` : null}
-                      {record.status ? ` | ${String(record.status)}` : null}
-                    </div>
-                  )}
+            {/* HTML Artifact (chart/visualization) */}
+            {tc.htmlArtifact && (
+              <div className="p-3">
+                <iframe
+                  srcDoc={tc.htmlArtifact}
+                  sandbox="allow-scripts"
+                  className="w-full rounded-lg border border-[#2a2a2a] bg-white"
+                  style={{ minHeight: 400, maxHeight: 600 }}
+                  title={`${label} visualization`}
+                />
+              </div>
+            )}
+
+            {/* Stdout from sandbox execution */}
+            {stdout && (
+              <div className="px-3 py-2 text-[12px]">
+                <div className="text-[#555] text-[11px] mb-1 uppercase tracking-wide">Output</div>
+                <pre className="whitespace-pre-wrap break-words text-[#aaa] leading-relaxed bg-[#0a0a0a] rounded p-2 border border-[#1f1f1f]">
+                  {stdout}
+                </pre>
+              </div>
+            )}
+
+            {/* Error message */}
+            {Boolean(hasError) && errorMsg ? (
+              <div className="px-3 py-2 text-[12px] text-red-400">
+                <div className="text-[11px] mb-1 uppercase tracking-wide">Error</div>
+                <pre className="whitespace-pre-wrap break-words bg-[#1a0a0a] rounded p-2 border border-[#2a1f1f]">
+                  {errorMsg}
+                </pre>
+              </div>
+            ) : null}
+
+            {/* SQL result rows */}
+            {resultRows.length > 0 && (
+              <div className="max-h-[300px] overflow-y-auto p-3">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px] text-left">
+                    <thead>
+                      <tr className="text-[#555] border-b border-[#222]">
+                        {Object.keys(resultRows[0]).map(col => (
+                          <th key={col} className="px-2 py-1.5 font-medium whitespace-nowrap">{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {resultRows.map((row, i) => (
+                        <tr key={i} className="border-b border-[#1a1a1a] hover:bg-[#0a0a0a]">
+                          {Object.values(row).map((val, j) => (
+                            <td key={j} className="px-2 py-1.5 text-[#aaa] whitespace-nowrap">
+                              {val === null ? <span className="text-[#444]">null</span> : String(val)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
+
+            {/* Record results (RAG, scan, catalog, context cards) */}
+            {resultArr.length > 0 && (
+              <div className="max-h-[300px] overflow-y-auto p-3 space-y-2">
+                {resultArr.map((record: Record<string, unknown>, i: number) => (
+                  <div key={i} className="rounded bg-[#0a0a0a] border border-[#1f1f1f] p-2 text-[12px]">
+                    {record.source_file ? (
+                      <div className="text-[#555] mb-1 truncate">{String(record.source_file)}</div>
+                    ) : record.display_name ? (
+                      <div className="text-[#7cb3ff] mb-1 font-medium">{String(record.display_name)}</div>
+                    ) : record.skill_id ? (
+                      <div className="text-[#555] mb-1 font-mono">{String(record.skill_id)}</div>
+                    ) : null}
+                    <pre className="whitespace-pre-wrap break-words text-[#aaa] leading-relaxed">
+                      {record.business_logic
+                        ? String(record.business_logic)
+                        : record.fields
+                          ? JSON.stringify(record.fields, null, 2)
+                          : JSON.stringify(record, null, 2)}
+                    </pre>
+                    {record.similarity !== undefined && (
+                      <div className="mt-1 text-[11px] text-[#555]">
+                        Similarity: {Number(record.similarity).toFixed(3)}
+                        {record.overall_confidence !== undefined ? ` | Confidence: ${Number(record.overall_confidence).toFixed(2)}` : null}
+                        {record.status ? ` | ${String(record.status)}` : null}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

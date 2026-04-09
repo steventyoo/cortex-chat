@@ -221,7 +221,11 @@ export async function POST(request: NextRequest) {
     const tool = toolMap.get(name);
     if (!tool) return { error: `Unknown tool: ${name}` };
     const result = await executeChatTool(tool, input, { orgId, projectId: projectId || undefined, includePending });
-    return result.error ? { error: result.error } : result.result;
+    if (result.error) return { error: result.error };
+    if (result.htmlArtifact) {
+      return { __result: result.result, __htmlArtifact: result.htmlArtifact };
+    }
+    return result.result;
   };
 
   const generation = trace.generation({

@@ -4,6 +4,7 @@ export interface ToolCallEntry {
   input: Record<string, unknown>;
   result?: unknown;
   resultCount?: number;
+  htmlArtifact?: string;
   status: 'calling' | 'done' | 'error';
 }
 

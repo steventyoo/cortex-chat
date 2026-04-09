@@ -124,6 +124,8 @@ export function useChat() {
                   resultCount = res.length;
                 } else if (res && typeof res === 'object' && Array.isArray((res as Record<string, unknown>).records)) {
                   resultCount = ((res as Record<string, unknown>).records as unknown[]).length;
+                } else if (res && typeof res === 'object' && Array.isArray((res as Record<string, unknown>).rows)) {
+                  resultCount = ((res as Record<string, unknown>).rows as unknown[]).length;
                 }
                 setMessages((prev) => {
                   const updated = [...prev];
@@ -138,6 +140,7 @@ export function useChat() {
                         ...calls[idx],
                         result: data.result,
                         resultCount,
+                        htmlArtifact: data.htmlArtifact || undefined,
                         status: data.error ? 'error' : 'done',
                       };
                     }

@@ -1,5 +1,6 @@
 import { getSupabase } from './supabase';
-import { searchByEmbedding } from './embeddings';
+import { searchByEmbedding, generateEmbedding } from './embeddings';
+import { runAnalysis } from './sandbox';
 
 export interface ChatTool {
   id: string;
@@ -8,7 +9,17 @@ export interface ChatTool {
   display_name: string;
   description: string;
   input_schema: Record<string, unknown>;
-  implementation_type: 'sql_query' | 'rag_search' | 'api_call' | 'composite' | 'skill_scan' | 'project_overview';
+  implementation_type:
+    | 'sql_query'
+    | 'rag_search'
+    | 'api_call'
+    | 'composite'
+    | 'skill_scan'
+    | 'project_overview'
+    | 'sql_analytics'
+    | 'sandbox'
+    | 'context_retrieval'
+    | 'field_catalog';
   implementation_config: Record<string, unknown>;
   sample_prompts: string[];
   is_active: boolean;
@@ -36,6 +47,7 @@ export interface ToolExecContext {
 export interface ToolExecResult {
   result: unknown;
   error?: string;
+  htmlArtifact?: string;
 }
 
 export async function fetchActiveTools(orgId: string): Promise<ChatTool[]> {
@@ -75,6 +87,8 @@ export function toolToAnthropicDef(tool: ChatTool) {
     },
   };
 }
+
+/* ── Legacy executors (kept for backward compat) ─────────────── */
 
 async function executeSqlQuery(
   config: Record<string, unknown>,
@@ -321,6 +335,168 @@ async function executeProjectOverview(
   };
 }
 
+/* ── NEW: SQL Analytics executor ─────────────────────────────── */
+
+async function executeSqlAnalytics(
+  _config: Record<string, unknown>,
+  input: Record<string, unknown>,
+  ctx: ToolExecContext
+): Promise<ToolExecResult> {
+  const query = (input.query || input.sql) as string;
+  if (!query) return { result: null, error: 'No query provided' };
+
+  const sb = getSupabase();
+  const { data, error } = await sb.rpc('execute_readonly_query', {
+    sql_query: query,
+    p_org_id: ctx.orgId,
+    p_project_id: ctx.projectId || null,
+  });
+
+  if (error) return { result: null, error: error.message };
+
+  const rows = (data || []) as Record<string, unknown>[];
+  return {
+    result: {
+      _summary: `${rows.length} row${rows.length !== 1 ? 's' : ''} returned`,
+      rows,
+    },
+  };
+}
+
+/* ── NEW: Sandbox code executor ──────────────────────────────── */
+
+async function executeSandboxCode(
+  _config: Record<string, unknown>,
+  input: Record<string, unknown>,
+): Promise<ToolExecResult> {
+  const code = input.code as string;
+  if (!code) return { result: null, error: 'No code provided' };
+
+  let dataContext: unknown = null;
+  const rawData = input.data_context;
+  if (typeof rawData === 'string') {
+    try {
+      dataContext = JSON.parse(rawData);
+    } catch {
+      dataContext = rawData;
+    }
+  } else if (rawData) {
+    dataContext = rawData;
+  }
+
+  const result = await runAnalysis(code, dataContext);
+
+  const retryNote = result.retries ? ` (took ${result.retries + 1} attempts)` : '';
+  return {
+    result: {
+      _summary: result.error
+        ? `Error: ${result.error.slice(0, 200)}${retryNote}`
+        : `Analysis complete${result.htmlArtifact ? ' (with visualization)' : ''}${retryNote}`,
+      stdout: result.analysis,
+      error: result.error || undefined,
+    },
+    htmlArtifact: result.htmlArtifact || undefined,
+  };
+}
+
+/* ── NEW: Field Catalog executor ─────────────────────────────── */
+
+interface FieldDef {
+  name: string;
+  type: string;
+  description?: string;
+  required?: boolean;
+}
+
+async function executeFieldCatalog(
+  _config: Record<string, unknown>,
+  input: Record<string, unknown>,
+): Promise<ToolExecResult> {
+  const skillIds = (input.skill_ids || []) as string[];
+  const sb = getSupabase();
+
+  let query = sb
+    .from('document_skills')
+    .select('skill_id, display_name, field_definitions, classifier_hints')
+    .eq('status', 'active');
+
+  if (skillIds.length > 0) {
+    query = query.in('skill_id', skillIds);
+  }
+
+  const { data, error } = await query;
+  if (error) return { result: null, error: error.message };
+
+  const catalog = (data || []).map((s: Record<string, unknown>) => ({
+    skill_id: s.skill_id,
+    display_name: s.display_name,
+    description: (s.classifier_hints as Record<string, unknown>)?.description || '',
+    fields: ((s.field_definitions || []) as FieldDef[]).map((f: FieldDef) => ({
+      name: f.name,
+      type: f.type,
+      description: f.description || '',
+      required: f.required || false,
+    })),
+  }));
+
+  return {
+    result: {
+      _summary: `${catalog.length} skill schema${catalog.length !== 1 ? 's' : ''}`,
+      catalog,
+    },
+  };
+}
+
+/* ── NEW: Context Retrieval executor ─────────────────────────── */
+
+async function executeContextRetrieval(
+  _config: Record<string, unknown>,
+  input: Record<string, unknown>,
+  ctx: ToolExecContext
+): Promise<ToolExecResult> {
+  const question = (input.question || input.query) as string;
+  if (!question) return { result: null, error: 'No question provided' };
+
+  if (!process.env.OPENAI_API_KEY) {
+    return { result: null, error: 'OPENAI_API_KEY not configured for context search' };
+  }
+
+  try {
+    const queryEmbedding = await generateEmbedding(question);
+    const sb = getSupabase();
+
+    const { data, error } = await sb.rpc('match_context_cards', {
+      query_embedding: `[${queryEmbedding.join(',')}]`,
+      filter_org_id: ctx.orgId,
+      match_count: 3,
+      match_threshold: 0.3,
+    });
+
+    if (error) return { result: null, error: error.message };
+
+    const cards = (data || []).map((c: Record<string, unknown>) => ({
+      card_name: c.card_name,
+      display_name: c.display_name,
+      description: c.description,
+      skills_involved: c.skills_involved,
+      business_logic: c.business_logic,
+      key_fields: c.key_fields,
+      similarity: c.similarity,
+    }));
+
+    return {
+      result: {
+        _summary: `${cards.length} context card${cards.length !== 1 ? 's' : ''} matched`,
+        cards,
+      },
+    };
+  } catch (err) {
+    return { result: null, error: String(err) };
+  }
+}
+
+/* ── Legacy executors ────────────────────────────────────────── */
+
 async function executeApiCall(
   config: Record<string, unknown>,
   input: Record<string, unknown>,
@@ -375,6 +551,8 @@ async function executeComposite(
   return { result: currentInput };
 }
 
+/* ── Main dispatcher ─────────────────────────────────────────── */
+
 async function executeTool(
   type: string,
   config: Record<string, unknown>,
@@ -386,6 +564,10 @@ async function executeTool(
     case 'rag_search': return executeRagSearch(config, input, ctx);
     case 'skill_scan': return executeSkillScan(config, input, ctx);
     case 'project_overview': return executeProjectOverview(config, input, ctx);
+    case 'sql_analytics': return executeSqlAnalytics(config, input, ctx);
+    case 'sandbox': return executeSandboxCode(config, input);
+    case 'field_catalog': return executeFieldCatalog(config, input);
+    case 'context_retrieval': return executeContextRetrieval(config, input, ctx);
     case 'api_call': return executeApiCall(config, input, ctx);
     case 'composite': return executeComposite(config, input, ctx);
     default: return { result: null, error: `Unknown implementation type: ${type}` };

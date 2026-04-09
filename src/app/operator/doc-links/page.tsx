@@ -93,6 +93,7 @@ function OperatorNav() {
     { label: 'Skills', href: '/operator/skills' },
     { label: 'Doc Links', href: '/operator/doc-links' },
     { label: 'Chat Tools', href: '/operator/chat-tools' },
+    { label: 'Context Cards', href: '/operator/context-cards' },
   ];
 
   return (

@@ -21,6 +21,7 @@ export interface ToolResultEvent {
   type: 'tool_result';
   name: string;
   result: unknown;
+  htmlArtifact?: string;
 }
 
 export type ChatEvent = ToolCallEvent | ToolResultEvent;
@@ -34,7 +35,7 @@ export interface StreamResultWithTools {
   finalUsage: Promise<StreamUsage>;
 }
 
-const MAX_TOOL_ROUNDS = 5;
+const MAX_TOOL_ROUNDS = 7;
 
 export function streamChatResponse(
   systemPrompt: string,
@@ -143,12 +144,29 @@ export function streamChatWithTools(
             ? resultStr.slice(0, 20000) + '\n...[truncated]'
             : resultStr;
 
-          yield { type: 'tool_result' as const, name: block.name, result };
+          let toolResult = result;
+          let htmlArtifact: string | undefined;
+
+          if (result && typeof result === 'object' && '__htmlArtifact' in (result as Record<string, unknown>)) {
+            const wrapped = result as Record<string, unknown>;
+            htmlArtifact = wrapped.__htmlArtifact as string;
+            toolResult = wrapped.__result;
+          }
+
+          yield { type: 'tool_result' as const, name: block.name, result: toolResult, htmlArtifact };
+
+          const contentForClaude = htmlArtifact
+            ? JSON.stringify(toolResult, null, 2)
+            : truncated;
+
+          const truncatedContent = contentForClaude.length > 20000
+            ? contentForClaude.slice(0, 20000) + '\n...[truncated]'
+            : contentForClaude;
 
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: truncated,
+            content: truncatedContent,
           });
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
