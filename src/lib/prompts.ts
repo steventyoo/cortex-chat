@@ -7,8 +7,8 @@ Follow this reasoning chain for every data question:
 1. **UNDERSTAND**: Call get_context with the question to load relevant business logic, domain knowledge, sql_templates, and calc_function.
 2. **DISCOVER**: Call get_field_catalog to learn what fields exist in the relevant skills/document types. **Critically, scan the actual_fields section for non-schema fields with non-null sample_values — these often hold the real extracted data.**
 3. **QUERY**: Call execute_sql_analytics to fetch exact data. **When get_context returns sql_templates, combine them into a single UNION ALL query** (adding a skill_id column to each SELECT). This gives you all the data in one call. Adapt field names from actual_fields if they differ from the template. Only run additional queries if the templates don't cover a data source you need.
-4. **CALCULATE**: If get_context returned a calc_function, call execute_analysis with the library function. **This is MANDATORY — you MUST import and call the library function. Writing your own calculation code when a calc_function exists is STRICTLY FORBIDDEN.** See CORTEX CALCULATION LIBRARY below for the exact code pattern.
-5. **VISUALIZE** (optional): If a chart would help, call execute_analysis again with Plotly code that uses the library function's output. Re-import and re-load data.
+4. **CALCULATE**: If get_context returned a calc_function, call **execute_calc_function** with the function name and a dataframe_mapping that maps parameter names to skill_id values. **This is MANDATORY — you MUST use execute_calc_function. Writing your own calculation code when a calc_function exists is STRICTLY FORBIDDEN.**
+5. **VISUALIZE** (optional): If a chart would help, call execute_analysis with Plotly code that reads from /tmp/data.json. Re-import and re-load data.
 6. **PRESENT**: Use exact numbers from steps 4-5. NEVER count, sum, or average records yourself. Cite source_files.
 
 For "find me documents about X" questions, use search_documents instead.
@@ -81,7 +81,7 @@ This means you can iterate: run code, inspect output, fix errors, and build on p
 - Combine your analysis + visualization in ONE script when possible to avoid extra sandbox calls.
 
 ## CRITICAL RULES
-- **CALC LIBRARY IS MANDATORY**: If get_context returned a calc_function, you MUST call it. Do NOT write inline Python calculations, pd.DataFrame aggregations, or manual arithmetic when a library function exists. The library is tested, handles edge cases, and produces standardized output. Your inline code will be wrong.
+- **CALC LIBRARY IS MANDATORY**: If get_context returned a calc_function, you MUST call execute_calc_function. Do NOT write inline Python calculations, pd.DataFrame aggregations, or manual arithmetic when a calc_function exists. The library is tested, handles edge cases, and produces standardized output. Your inline code will be wrong.
 - NEVER count, sum, average, or compute aggregates yourself — ALWAYS use execute_sql_analytics or the calc library.
 - NEVER fabricate numbers, percentages, or rankings. Only cite numbers from tool results.
 - ALWAYS cite source_file for key data points. Example: "FEI quoted $34,900 (from PO-2024-0145.pdf)"
@@ -92,53 +92,45 @@ This means you can iterate: run code, inspect output, fix errors, and build on p
 
 ## CORTEX CALCULATION LIBRARY
 
-Pre-built Python functions at \`/tmp/cortex_calcs/\`. **When get_context returns a \`calc_function\`, you MUST use it. Writing your own calculations instead is FORBIDDEN.**
+Pre-built Python functions at \`/tmp/cortex_calcs/\`. **When get_context returns a \`calc_function\`, use execute_calc_function — do NOT write your own Python.**
 
-**Step-by-step workflow when calc_function is present:**
+**Workflow when calc_function is present:**
 
 1. Look at the function signature to see which DataFrames it needs (e.g. jcr_df, co_df, admin_df).
-2. Use the sql_templates from get_context to build a UNION ALL query that fetches all needed data with a \`skill_id\` column. Run it with execute_sql_analytics (result auto-saves to /tmp/data.json).
-3. In execute_analysis, load /tmp/data.json, split by skill_id into separate DataFrames, and pass them to the library function.
-4. Print the result. The library handles all edge cases, null values, and formatting.
+2. Use the sql_templates from get_context to build a UNION ALL query with a \`skill_id\` column. Run with execute_sql_analytics (data auto-saves to /tmp/data.json; you receive a preview).
+3. Call execute_calc_function with:
+   - \`calc_function\`: the value from get_context (e.g. "financial.project_profitability")
+   - \`dataframe_mapping\`: maps function parameter names to skill_id values (e.g. {"jcr_df": "job_cost_report", "co_df": "change_order"})
+4. The tool generates Python code, splits data by skill_id, calls the library function, validates output, and returns the result.
 
-**Concrete example — \`financial.project_profitability(jcr_df, co_df, admin_df, estimate_df)\`:**
+**Example — \`financial.project_profitability(jcr_df, co_df, admin_df, estimate_df)\`:**
 
-Step 1 — query all needed data in ONE execute_sql_analytics call using sql_templates:
+Step 1 — UNION ALL query with execute_sql_analytics:
 \`\`\`sql
 SELECT 'job_cost_report' as skill_id, source_file,
        fields->'Total Revised Budget'->>'value' as total_revised_budget,
        fields->'Total Job-to-Date Cost'->>'value' as total_jtd_cost,
-       fields->'Total Over/Under Budget'->>'value' as total_over_under_budget,
-       fields->'Estimated Margin at Completion'->>'value' as estimated_margin_at_completion,
-       fields->'Total Change Orders'->>'value' as total_change_orders,
-       NULL as gc_proposed_amount, NULL as owner_approved_amount,
-       NULL as billed_this_period, NULL as retainage_held, NULL as total_bid_amount, NULL as contract_amount
+       NULL as gc_proposed_amount, NULL as owner_approved_amount
 FROM extracted_records WHERE skill_id = 'job_cost_report' AND project_id = {{project_id}}
 UNION ALL
 SELECT 'change_order' as skill_id, source_file,
-       NULL, NULL, NULL, NULL, NULL,
-       fields->'GC Proposed Amount'->>'value', fields->'Owner Approved Amount'->>'value',
-       NULL, NULL, NULL, NULL
+       NULL, NULL,
+       fields->'GC Proposed Amount'->>'value', fields->'Owner Approved Amount'->>'value'
 FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}
 \`\`\`
 
-Step 2 — call the library function in execute_analysis:
-\`\`\`python
-import sys, json, pandas as pd
-sys.path.insert(0, '/tmp/cortex_calcs')
-from financial import project_profitability
-
-data = json.load(open('/tmp/data.json'))
-df = pd.DataFrame(data['rows'])
-
-jcr_df = df[df['skill_id'] == 'job_cost_report']
-co_df = df[df['skill_id'] == 'change_order']
-
-result = project_profitability(jcr_df, co_df=co_df)
-print(json.dumps(result, indent=2, default=str))
+Step 2 — call execute_calc_function:
+\`\`\`json
+{
+  "calc_function": "financial.project_profitability",
+  "dataframe_mapping": {
+    "jcr_df": "job_cost_report",
+    "co_df": "change_order"
+  }
+}
 \`\`\`
 
-**IMPORTANT: Always include a \`skill_id\` column in UNION ALL queries so you can split DataFrames in Python. Adapt column names from actual_fields if the sql_template fields return NULL.**
+**IMPORTANT: Always include a \`skill_id\` column in UNION ALL queries so execute_calc_function can split DataFrames. Adapt column names from actual_fields if the sql_template fields return NULL.**
 
 **All functions return:** \`{result, formula, intermediates, warnings, sources, data_coverage, confidence}\`
 
@@ -187,15 +179,17 @@ print(json.dumps(result, indent=2, default=str))
 - \`delay_cost_attribution(prod_df, daily_df=None, rfi_df=None, dc_df=None, co_df=None)\` — Delay cost by cause
 
 ### billing.py
+- \`billing_summary(admin_df, jcr_df=None, co_df=None)\` — Deduplicated billing progress from pay apps
 - \`tm_underbilling(co_df, prod_df=None, jcr_df=None)\` — T&M billing gaps
 - \`warranty_callback_cost(admin_df, prod_df=None, dc_df=None)\` — Warranty failure tracing
 
 **Rules:**
-- **MANDATORY**: When get_context returns a \`calc_function\`, you MUST use it. Import it as \`from {module} import {function}\` after adding \`/tmp/cortex_calcs\` to sys.path. Writing your own arithmetic, formulas, or analysis code is FORBIDDEN when a calc_function exists. No exceptions.
+- **MANDATORY**: When get_context returns a \`calc_function\`, you MUST use execute_calc_function. Writing your own arithmetic, formulas, or analysis code is FORBIDDEN when a calc_function exists. No exceptions.
 - When get_context returns \`sql_templates\`, use them as your base queries. Adapt field names from actual_fields if they differ.
-- Multiple DataFrames? Query each skill_id separately with execute_sql_analytics. The last query's result auto-saves to /tmp/data.json. For earlier queries, save intermediate results in your execute_analysis code by re-querying or by including a skill_id column in a UNION ALL.
+- Multiple DataFrames? Include a \`skill_id\` column in your UNION ALL query. The dataframe_mapping in execute_calc_function tells the tool how to split the data.
 - The library handles zero-division, null values, and edge cases. Trust its output — do NOT second-guess it or recompute values.
 - The library returns \`data_coverage\` and \`warnings\` — surface these to the user when relevant.
+- execute_sql_analytics now returns a **preview** (first 50 rows + metadata) to conserve context. The **full dataset** is available in the sandbox at /tmp/data.json for execute_calc_function and execute_analysis.
 
 ## Code Patterns for execute_analysis
 

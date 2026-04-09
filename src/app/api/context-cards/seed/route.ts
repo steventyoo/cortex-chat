@@ -708,7 +708,7 @@ Key metric: Cash Stuck = (Pending CO $ + Disputed Items $ + Unbilled Retention +
     example_questions: ['Where is our cash stuck?', 'What are the biggest cash flow bottlenecks?', 'How much money is tied up in pending COs and disputes?', 'Which projects have the worst cash flow?'],
     calc_function: 'cash_flow.cash_flow_bottleneck',
     sql_templates: {
-      admin_data: `SELECT source_file, project_id, fields->'Retainage Held'->>'value' as retainage_held, fields->'Disputed / Held Items'->>'value' as disputed_held_items, fields->'Days to Payment'->>'value' as days_to_payment, fields->'Billed This Period'->>'value' as billed_this_period FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+      admin_data: `SELECT source_file, project_id, document_type, fields->'Retainage Held'->>'value' as retainage_held, fields->'Disputed / Held Items'->>'value' as disputed_held_items, fields->'Days to Payment'->>'value' as days_to_payment, fields->'Billed This Period'->>'value' as billed_this_period FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
       co_data: `SELECT source_file, fields->'GC Proposed Amount'->>'value' as gc_proposed_amount, fields->'Disputed (Y/N) + Outcome'->>'value' as disputed FROM extracted_records WHERE skill_id = 'change_order' AND project_id = {{project_id}}`,
       dc_data: `SELECT source_file, fields->'Approval Status'->>'value' as approval_status, fields->'Proposed Amount (PR)'->>'value' as proposed_amount, fields->'Cost Impact (ASI)'->>'value' as cost_impact FROM extracted_records WHERE skill_id = 'design_change' AND project_id = {{project_id}}`,
     },
@@ -766,7 +766,7 @@ Key metric: Rejection Rate = Rejected invoices / Total invoices by GC and reject
     example_questions: ['Why are our invoices being rejected?', 'Which GCs reject the most pay applications?', 'What is the pattern in our billing disputes?', 'How much revenue is delayed by invoice rejections?'],
     calc_function: 'cash_flow.invoice_rejection_rate',
     sql_templates: {
-      admin_data: `SELECT source_file, project_id, fields->'Billed This Period'->>'value' as billed_this_period, fields->'Disputed / Held Items'->>'value' as disputed_held_items, fields->'Days to Payment'->>'value' as days_to_payment FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+      admin_data: `SELECT source_file, project_id, document_type, fields->'Billed This Period'->>'value' as billed_this_period, fields->'Disputed / Held Items'->>'value' as disputed_held_items, fields->'Days to Payment'->>'value' as days_to_payment FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
     },
   },
   {
@@ -849,6 +849,33 @@ Key metric: Sub Tier Score = weighted(bid competitiveness, CO rate, budget perfo
     example_questions: ['What data do we have for this project?', 'Are we missing any document types?', 'How complete is our project documentation?', 'Which analyses can we run with the data we have?'],
     calc_function: null,
     sql_templates: {},
+  },
+  {
+    card_name: 'billing_progress_summary',
+    display_name: 'Billing Progress & Cash Collection',
+    description: 'Deduplicated billing summary from pay applications showing billing progress, retainage, days to payment, and over/under billing vs JTD cost.',
+    trigger_concepts: ['billing', 'billing progress', 'pay application', 'billed amount', 'total billed', 'cash collection', 'billing status', 'how much have we billed'],
+    skills_involved: ['project_admin', 'job_cost_report', 'change_order'],
+    business_logic: `To analyze billing progress:
+1. Query project_admin for pay application records (filter by document type to exclude SOVs, lien releases, meeting minutes).
+2. Sum Billed This Period across pay apps for total billed. Get Current Contract Value for the baseline.
+3. Calculate billing progress: Total Billed / Contract Value.
+4. Check retainage: sum Retainage Held across pay apps.
+5. Average Days to Payment for cash velocity.
+6. Compare billing to JCR Total Job-to-Date Cost: overbilling = billed > cost, underbilling = cost > billed.
+7. Factor COs: approved COs not yet billed = unbilled revenue.
+Key metric: Billing Progress % and Over/Under Billing vs JTD Cost.`,
+    key_fields: {
+      project_admin: ['Billed This Period', 'Current Contract Value', 'Days to Payment', 'Retainage Held', 'Scheduled Value (original SOV)'],
+      job_cost_report: ['Total Job-to-Date Cost'],
+      change_order: ['Owner Approved Amount'],
+    },
+    example_questions: ['How much have we billed on this project?', 'What is our billing progress?', 'Are we overbilling or underbilling?', 'What is our total billed vs contract value?'],
+    calc_function: 'billing.billing_summary',
+    sql_templates: {
+      admin_data: `SELECT source_file, document_type, fields->'Billed This Period'->>'value' as billed_this_period, fields->'Scheduled Value (original SOV)'->>'value' as scheduled_value, fields->'Current Contract Value'->>'value' as current_contract_value, fields->'Retainage Held'->>'value' as retainage_held, fields->'Days to Payment'->>'value' as days_to_payment FROM extracted_records WHERE skill_id = 'project_admin' AND project_id = {{project_id}}`,
+      jcr_data: `SELECT source_file, fields->'Total Job-to-Date Cost'->>'value' as total_jtd_cost, fields->>'ap_total' as ap_total_raw FROM extracted_records WHERE skill_id = 'job_cost_report' AND project_id = {{project_id}}`,
+    },
   },
 ];
 

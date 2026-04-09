@@ -37,6 +37,11 @@ export class SandboxSession {
   private sandbox: (Sandbox & AsyncDisposable) | null = null;
   private creating: Promise<Sandbox & AsyncDisposable> | null = null;
   private lastData: unknown = null;
+  private _hasData = false;
+
+  get hasData(): boolean {
+    return this._hasData;
+  }
 
   private async ensureSandbox(): Promise<Sandbox & AsyncDisposable> {
     if (this.sandbox) return this.sandbox;
@@ -134,6 +139,7 @@ export class SandboxSession {
    */
   async writeData(data: unknown): Promise<void> {
     this.lastData = data;
+    this._hasData = true;
     try {
       const sb = await this.ensureSandbox();
       await sb.writeFiles([
@@ -191,7 +197,19 @@ export class SandboxSession {
     }
 
     const stdoutRaw = await result.stdout();
-    const stdout = stdoutRaw.slice(0, MAX_STDOUT_SIZE);
+    const KEEP_HEAD = 20_000;
+    const KEEP_TAIL = 20_000;
+    let stdout: string;
+
+    if (stdoutRaw.length > MAX_STDOUT_SIZE) {
+      const head = stdoutRaw.slice(0, KEEP_HEAD);
+      const tail = stdoutRaw.slice(-KEEP_TAIL);
+      const skipped = stdoutRaw.length - KEEP_HEAD - KEEP_TAIL;
+      stdout = `${head}\n\n[... ${skipped.toLocaleString()} characters truncated. Use df.head() or print only summary results. ...]\n\n${tail}`;
+    } else {
+      stdout = stdoutRaw;
+    }
+
     const stderr = result.exitCode !== 0
       ? (await result.stderr()).slice(0, 5000)
       : '';

@@ -127,6 +127,35 @@ const CORE_TOOLS = [
       'Project overview',
     ],
   },
+  {
+    tool_name: 'execute_calc_function',
+    display_name: 'Run Calculation',
+    description: 'Run a deterministic calculation from the Cortex calc library. Use this when get_context returns a calc_function. First run execute_sql_analytics to load data, then call this with the function name and a mapping of DataFrame parameter names to skill_id values used in your UNION ALL query. The tool generates Python code, splits the data by skill_id, calls the library function, and validates the output.',
+    input_schema: {
+      properties: {
+        calc_function: {
+          type: 'string',
+          description: 'The calc function to call, in module.function format (e.g. "financial.project_profitability")',
+        },
+        dataframe_mapping: {
+          type: 'object',
+          description: 'Maps function parameter names to skill_id values used in the SQL query. Example: {"jcr_df": "job_cost_report", "co_df": "change_order"}',
+        },
+        data_file: {
+          type: 'string',
+          description: 'Path to the JSON data file. Default: /tmp/data.json',
+        },
+      },
+      required: ['calc_function', 'dataframe_mapping'],
+    },
+    implementation_type: 'calc_function',
+    implementation_config: {},
+    sample_prompts: [
+      'Calculate project profitability',
+      'Run bid accuracy analysis',
+      'Compute GC payment velocity scores',
+    ],
+  },
 ];
 
 const ALL_SEED_TOOLS = CORE_TOOLS;
