@@ -4,6 +4,13 @@ import { useState, useCallback, useRef } from 'react';
 import { ChatMessage, SourceRef, ToolCallEntry } from '@/lib/types';
 import { nanoid } from 'nanoid';
 
+function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (predicate(arr[i])) return i;
+  }
+  return -1;
+}
+
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -72,6 +79,7 @@ export function useChat() {
 
         const decoder = new TextDecoder();
         let accumulated = '';
+        let toolCalls: ToolCallEntry[] = [];
 
         while (true) {
           const { done, value } = await reader.read();
@@ -98,23 +106,12 @@ export function useChat() {
               }
 
               if (data.type === 'tool_call') {
-                const entry: ToolCallEntry = {
+                toolCalls = [...toolCalls, {
                   name: data.name,
                   displayName: data.displayName,
                   input: data.input || {},
                   status: 'calling',
-                };
-                setMessages((prev) => {
-                  const updated = [...prev];
-                  const last = updated[updated.length - 1];
-                  if (last && last.role === 'assistant') {
-                    updated[updated.length - 1] = {
-                      ...last,
-                      toolCalls: [...(last.toolCalls || []), entry],
-                    };
-                  }
-                  return updated;
-                });
+                }];
               }
 
               if (data.type === 'tool_result') {
@@ -127,42 +124,24 @@ export function useChat() {
                 } else if (res && typeof res === 'object' && Array.isArray((res as Record<string, unknown>).rows)) {
                   resultCount = ((res as Record<string, unknown>).rows as unknown[]).length;
                 }
-                setMessages((prev) => {
-                  const updated = [...prev];
-                  const last = updated[updated.length - 1];
-                  if (last && last.role === 'assistant' && last.toolCalls) {
-                    const calls = [...last.toolCalls];
-                    const idx = calls.findLastIndex(
-                      (tc) => tc.name === data.name && tc.status === 'calling'
-                    );
-                    if (idx !== -1) {
-                      calls[idx] = {
-                        ...calls[idx],
-                        result: data.result,
-                        resultCount,
-                        htmlArtifact: data.htmlArtifact || undefined,
-                        status: data.error ? 'error' : 'done',
-                      };
-                    }
-                    updated[updated.length - 1] = { ...last, toolCalls: calls };
-                  }
-                  return updated;
-                });
+                const idx = findLastIndex(
+                  toolCalls,
+                  (tc) => tc.name === data.name && tc.status === 'calling'
+                );
+                if (idx !== -1) {
+                  toolCalls = [...toolCalls];
+                  toolCalls[idx] = {
+                    ...toolCalls[idx],
+                    result: data.result,
+                    resultCount,
+                    htmlArtifact: data.htmlArtifact || undefined,
+                    status: data.result?.error ? 'error' : 'done',
+                  };
+                }
               }
 
               if (data.text) {
                 accumulated += data.text;
-                setMessages((prev) => {
-                  const updated = [...prev];
-                  const last = updated[updated.length - 1];
-                  if (last && last.role === 'assistant') {
-                    updated[updated.length - 1] = {
-                      ...last,
-                      content: accumulated,
-                    };
-                  }
-                  return updated;
-                });
               }
 
               if (data.error) {
@@ -176,6 +155,19 @@ export function useChat() {
               // Ignore parse errors for partial chunks
             }
           }
+
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last && last.role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...last,
+                content: accumulated,
+                toolCalls: toolCalls.length > 0 ? toolCalls : last.toolCalls,
+              };
+            }
+            return updated;
+          });
         }
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
