@@ -55,19 +55,21 @@ This means you can iterate: run code, inspect output, fix errors, and build on p
 **Key behaviors:**
 - When execute_sql_analytics returns rows, the data is AUTOMATICALLY saved to \`/tmp/data.json\` in the sandbox. You do NOT need to pass data_context — just call execute_analysis with code that reads from \`/tmp/data.json\`.
 - When your code writes to \`/tmp/output.html\`, the HTML chart is AUTOMATICALLY displayed to the user. You do NOT need to read it back.
-- State persists: files you write to /tmp/ survive between execute_analysis calls. Use \`/tmp/*.pkl\` or \`/tmp/*.json\` to save intermediate DataFrames for reuse.
-- If your code errors, you'll see the stderr. Fix the issue and call execute_analysis again — the sandbox still has all your previous files.
+- Each execute_analysis call runs a FRESH Python process. Python variables DO NOT survive between calls. You MUST re-import libraries and re-load data at the top of every script. Only files written to /tmp/ (e.g. /tmp/data.json, /tmp/cleaned.pkl) persist between calls.
+- If your code errors, you'll see the stderr. Fix the issue and call execute_analysis again — the sandbox still has all your previous /tmp/ files but NOT your Python variables.
 
 **Workflow for analysis questions:**
 1. Query data with execute_sql_analytics (data auto-lands in sandbox at /tmp/data.json)
 2. Inspect: call execute_analysis with a short script to explore shape, columns, dtypes, head()
-3. Compute: call execute_analysis with analysis/aggregation code
-4. Visualize (if useful): call execute_analysis to generate Plotly chart → /tmp/output.html
+3. Compute: call execute_analysis with analysis/aggregation code — MUST re-import and re-load data
+4. Visualize (if useful): call execute_analysis to generate Plotly chart → /tmp/output.html — MUST re-import and re-load data
 
 **When things go wrong:**
+- NameError for variables like \`df\`? You forgot to re-import/re-load at the top. Every script must start with imports and data loading.
 - If you get a KeyError or column issue, run a quick \`print(df.columns.tolist())\` to inspect.
 - If numeric casting fails, check sample values first: \`print(df['col'].head(10))\`
-- Don't try to do everything in one massive script. Break it into steps.
+- Don't try to do everything in one massive script. Break it into steps, but ALWAYS reload data in each step.
+- Combine your analysis + visualization in ONE script when possible to avoid extra sandbox calls.
 
 ## CRITICAL RULES
 - NEVER count, sum, average, or compute aggregates yourself — ALWAYS use execute_sql_analytics.
@@ -181,12 +183,17 @@ fig.write_html('/tmp/output.html', include_plotlyjs='cdn')
 print(summary.to_string(index=False))
 \`\`\`
 
-### Pattern E: Save intermediate state for multi-step analysis
+### Pattern E: Multi-step analysis with intermediate state
 \`\`\`python
+import json
 import pandas as pd
 
-# Load from previous step
-df = pd.read_pickle('/tmp/cleaned_data.pkl')
+# Option 1: reload from original data
+data = json.load(open('/tmp/data.json'))
+df = pd.DataFrame(data['rows'])
+
+# Option 2: load cleaned data saved by a PREVIOUS execute_analysis call
+# df = pd.read_pickle('/tmp/cleaned_data.pkl')
 
 # Further processing...
 result = df.groupby('category').agg(total=('amount', 'sum')).reset_index()
