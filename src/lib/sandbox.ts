@@ -1,23 +1,11 @@
 import { Sandbox } from '@vercel/sandbox';
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { CALC_LIBRARY_FILES } from './calc-library-bundle.generated';
 
 const EXEC_TIMEOUT = 30_000;
 const SANDBOX_LIFETIME = 5 * 60_000;
 const MAX_HTML_SIZE = 100_000;
 const MAX_STDOUT_SIZE = 50_000;
 const REQUIRED_PACKAGES = ['pandas', 'plotly', 'numpy'];
-
-// Embed calc library at build time so files survive deployment
-const CALC_LIB_DIR = join(__dirname, 'calc-library');
-const CALC_LIB_FILES: Record<string, string> = {};
-try {
-  for (const f of readdirSync(CALC_LIB_DIR).filter(f => f.endsWith('.py'))) {
-    CALC_LIB_FILES[f] = readFileSync(join(CALC_LIB_DIR, f), 'utf-8');
-  }
-} catch {
-  // calc-library dir may not exist in some build environments
-}
 
 function getCredentials() {
   const token = process.env.VERCEL_TOKEN;
@@ -101,12 +89,15 @@ export class SandboxSession {
    * Write the embedded calc library Python files into the sandbox at /tmp/cortex_calcs/.
    */
   private async injectCalcLibrary(sb: Sandbox): Promise<void> {
-    const files = Object.entries(CALC_LIB_FILES).map(([name, content]) => ({
+    const files = Object.entries(CALC_LIBRARY_FILES).map(([name, content]) => ({
       path: `/tmp/cortex_calcs/${name}`,
       content: Buffer.from(content),
     }));
     if (files.length > 0) {
       await sb.writeFiles(files);
+      console.log(`[sandbox] Injected ${files.length} calc library files`);
+    } else {
+      console.warn('[sandbox] No calc library files found — CALC_LIBRARY_FILES is empty');
     }
   }
 
