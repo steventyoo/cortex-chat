@@ -5,6 +5,18 @@ const MAX_HTML_SIZE = 100_000;
 const MAX_STDOUT_SIZE = 50_000;
 const REQUIRED_PACKAGES = ['pandas', 'plotly', 'numpy'];
 
+function getCredentials() {
+  const token = process.env.VERCEL_TOKEN;
+  const teamId = process.env.VERCEL_TEAM_ID;
+  const projectId = process.env.VERCEL_PROJECT_ID;
+  if (!token || !teamId || !projectId) {
+    throw new Error(
+      'Missing sandbox credentials. Set VERCEL_TOKEN, VERCEL_TEAM_ID, and VERCEL_PROJECT_ID in .env'
+    );
+  }
+  return { token, teamId, projectId };
+}
+
 export interface RunResult {
   stdout: string;
   stderr: string;
@@ -34,10 +46,12 @@ export class SandboxSession {
   }
 
   private async boot(): Promise<Sandbox & AsyncDisposable> {
+    const creds = getCredentials();
     const snapshotId = process.env.SANDBOX_SNAPSHOT_ID;
 
     if (snapshotId) {
       return Sandbox.create({
+        ...creds,
         source: { type: 'snapshot', snapshotId },
         timeout: EXEC_TIMEOUT + 30_000,
         networkPolicy: 'deny-all',
@@ -46,6 +60,7 @@ export class SandboxSession {
     }
 
     const sb = await Sandbox.create({
+      ...creds,
       runtime: 'python3.13',
       timeout: EXEC_TIMEOUT + 90_000,
       env: { MPLBACKEND: 'Agg' },
@@ -146,7 +161,9 @@ export class SandboxSession {
  * Snapshots expire after 30 days by default.
  */
 export async function createAnalysisSnapshot(): Promise<string> {
+  const creds = getCredentials();
   const sandbox = await Sandbox.create({
+    ...creds,
     runtime: 'python3.13',
     timeout: 120_000,
     env: { MPLBACKEND: 'Agg' },
