@@ -386,11 +386,12 @@ async function executeSandboxCode(
 
   const result = await runAnalysis(code, dataContext);
 
+  const retryNote = result.retries ? ` (took ${result.retries + 1} attempts)` : '';
   return {
     result: {
       _summary: result.error
-        ? `Error: ${result.error.slice(0, 200)}`
-        : `Analysis complete${result.htmlArtifact ? ' (with visualization)' : ''}`,
+        ? `Error: ${result.error.slice(0, 200)}${retryNote}`
+        : `Analysis complete${result.htmlArtifact ? ' (with visualization)' : ''}${retryNote}`,
       stdout: result.analysis,
       error: result.error || undefined,
     },

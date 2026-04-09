@@ -34,6 +34,84 @@ JSONB access patterns:
 - When results include pending records, note: "Note: includes records pending admin review."
 - If a tool returns zero results, say so clearly. Do not fabricate data.
 - For execute_analysis: write to /tmp/output.html for charts. Data is at /tmp/data.json. Use pandas, plotly, numpy.
+- ALWAYS follow the code patterns below when writing execute_analysis code.
+
+## Code Patterns for execute_analysis
+
+### Pattern A: Summary statistics (stdout only, no chart)
+\`\`\`python
+import json
+import pandas as pd
+
+data = json.load(open('/tmp/data.json'))
+df = pd.DataFrame(data['rows'])
+
+# Cast numeric columns extracted from JSONB
+df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+
+summary = df.groupby('skill_id')['amount'].agg(['count', 'sum', 'mean']).round(2)
+summary.columns = ['Count', 'Total', 'Average']
+print(summary.to_string())
+print(f"\\nGrand total: \${summary['Total'].sum():,.2f} across {len(df)} records")
+\`\`\`
+
+### Pattern B: Plotly bar chart (HTML artifact)
+\`\`\`python
+import json
+import pandas as pd
+import plotly.express as px
+
+data = json.load(open('/tmp/data.json'))
+df = pd.DataFrame(data['rows'])
+df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+
+grouped = df.groupby('vendor')['amount'].sum().sort_values(ascending=False).head(15).reset_index()
+grouped.columns = ['Vendor', 'Total']
+
+fig = px.bar(grouped, x='Vendor', y='Total', title='Top 15 Vendors by Total Amount',
+             text_auto='$.2s')
+fig.update_layout(xaxis_tickangle=-45, height=500, margin=dict(b=120))
+fig.write_html('/tmp/output.html', include_plotlyjs='cdn')
+
+print(grouped.to_string(index=False))
+print(f"\\nTop vendor: {grouped.iloc[0]['Vendor']} at \${grouped.iloc[0]['Total']:,.2f}")
+\`\`\`
+
+### Pattern C: Table + chart combo (HTML artifact)
+\`\`\`python
+import json
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+data = json.load(open('/tmp/data.json'))
+df = pd.DataFrame(data['rows'])
+df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+
+summary = df.groupby('trade').agg(
+    count=('amount', 'size'),
+    total=('amount', 'sum'),
+    avg=('amount', 'mean')
+).round(2).sort_values('total', ascending=False).reset_index()
+
+fig = make_subplots(
+    rows=2, cols=1,
+    specs=[[{"type": "table"}], [{"type": "bar"}]],
+    row_heights=[0.4, 0.6],
+    vertical_spacing=0.08
+)
+fig.add_trace(go.Table(
+    header=dict(values=['Trade', 'Count', 'Total ($)', 'Avg ($)']),
+    cells=dict(values=[summary['trade'], summary['count'],
+                       summary['total'].map('\${:,.0f}'.format),
+                       summary['avg'].map('\${:,.0f}'.format)])
+), row=1, col=1)
+fig.add_trace(go.Bar(x=summary['trade'], y=summary['total'], name='Total'), row=2, col=1)
+fig.update_layout(height=700, title_text='Analysis by Trade', showlegend=False)
+fig.write_html('/tmp/output.html', include_plotlyjs='cdn')
+
+print(summary.to_string(index=False))
+\`\`\`
 
 ## How You Respond
 - Be data-forward. Lead with tables and numbers, not prose.
