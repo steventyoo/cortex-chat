@@ -68,19 +68,15 @@ const CORE_TOOLS = [
   {
     tool_name: 'execute_analysis',
     display_name: 'Data Analysis & Visualization',
-    description: 'Run Python code to analyze data and optionally generate an interactive HTML visualization. Pass data from prior tool calls as data_context (JSON string). Available libraries: pandas, numpy, plotly, json, math, collections. Print analysis findings to stdout. Write interactive HTML charts/tables to /tmp/output.html using plotly for visualizations.',
+    description: 'Run Python code in a persistent sandbox to analyze data and optionally generate interactive HTML visualizations. Data from execute_sql_analytics is automatically available at /tmp/data.json. Available libraries: pandas, numpy, plotly, json, math, collections. Print analysis findings to stdout. Write interactive HTML charts/tables to /tmp/output.html. The sandbox persists across calls — you can inspect results, fix errors, and build on previous work.',
     input_schema: {
       properties: {
         code: {
           type: 'string',
-          description: 'Python code to execute. Data from prior tools is available at /tmp/data.json. Print key findings to stdout. Optionally write HTML to /tmp/output.html for interactive charts using plotly.',
-        },
-        data_context: {
-          type: 'string',
-          description: 'JSON string of data from prior tool calls to analyze. Will be written to /tmp/data.json in the sandbox.',
+          description: 'Python code to execute. Data from prior SQL queries is at /tmp/data.json. Print findings to stdout. Write HTML to /tmp/output.html for interactive charts. Files in /tmp/ persist between calls.',
         },
       },
-      required: ['code', 'data_context'],
+      required: ['code'],
     },
     implementation_type: 'sandbox',
     implementation_config: {},
