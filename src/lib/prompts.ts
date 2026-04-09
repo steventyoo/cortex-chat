@@ -59,6 +59,15 @@ This means you can iterate: run code, inspect output, fix errors, and build on p
 
 ## Code Patterns for execute_analysis
 
+### Chart layout rules (ALWAYS follow these)
+- NEVER use make_subplots with more than 2 charts. If you need 3-4 charts, create ONE chart that tells the best story.
+- For 2-panel layouts, prefer rows=2, cols=1 (stacked) over side-by-side. Use vertical_spacing=0.15.
+- For make_subplots: always set generous margins with fig.update_layout(margin=dict(t=80, b=100, l=60, r=40)).
+- NEVER mix pie charts with other chart types in make_subplots — Plotly pie domains overlap. Use a standalone pie chart OR convert to a horizontal bar chart instead.
+- Set explicit height: 500 for single charts, 700 for 2-panel, never above 800.
+- Always add fig.update_xaxes(tickangle=-45) for long category labels.
+- Prefer one clear, focused chart over a busy dashboard with multiple small charts.
+
 ### Pattern A: Quick data inspection (always do this first for complex analyses)
 \`\`\`python
 import json
@@ -130,17 +139,22 @@ summary = df.groupby('trade').agg(
 fig = make_subplots(
     rows=2, cols=1,
     specs=[[{"type": "table"}], [{"type": "bar"}]],
-    row_heights=[0.4, 0.6],
-    vertical_spacing=0.08
+    row_heights=[0.35, 0.65],
+    vertical_spacing=0.12
 )
 fig.add_trace(go.Table(
-    header=dict(values=['Trade', 'Count', 'Total ($)', 'Avg ($)']),
+    header=dict(values=['Trade', 'Count', 'Total ($)', 'Avg ($)'],
+                fill_color='#f0f0f0', align='left', font=dict(size=12)),
     cells=dict(values=[summary['trade'], summary['count'],
                        summary['total'].map('\${:,.0f}'.format),
-                       summary['avg'].map('\${:,.0f}'.format)])
+                       summary['avg'].map('\${:,.0f}'.format)],
+               align='left', font=dict(size=11))
 ), row=1, col=1)
-fig.add_trace(go.Bar(x=summary['trade'], y=summary['total'], name='Total'), row=2, col=1)
-fig.update_layout(height=700, title_text='Analysis by Trade', showlegend=False)
+fig.add_trace(go.Bar(x=summary['trade'], y=summary['total'], name='Total',
+                     text=summary['total'].map('\${:,.0f}'.format), textposition='outside'), row=2, col=1)
+fig.update_layout(height=700, title_text='Analysis by Trade', showlegend=False,
+                  margin=dict(t=80, b=100, l=60, r=40))
+fig.update_xaxes(tickangle=-45, row=2, col=1)
 fig.write_html('/tmp/output.html', include_plotlyjs='cdn')
 
 print(summary.to_string(index=False))

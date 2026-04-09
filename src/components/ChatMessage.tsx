@@ -7,7 +7,7 @@ import MarkdownRenderer from './MarkdownRenderer';
 import { StreamingProvider } from './DataTable';
 import LoadingDots from './LoadingDots';
 
-function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
+function ToolCallCard({ tc, suppressArtifact }: { tc: ToolCallEntry; suppressArtifact?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const label = tc.displayName || tc.name.replace(/_/g, ' ');
 
@@ -51,7 +51,9 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
   }
 
   const count = tc.resultCount ?? (resultArr.length || resultRows.length);
-  const hasExpandableContent = resultArr.length > 0 || resultRows.length > 0 || stdout || tc.htmlArtifact;
+  const hasExpandableContent = resultArr.length > 0 || resultRows.length > 0
+    || (!suppressArtifact && (stdout || tc.htmlArtifact))
+    || (suppressArtifact && (hasError || resultArr.length > 0 || resultRows.length > 0));
 
   return (
     <div className="my-2 rounded-lg border border-[#2a2a2a] bg-[#111111] text-[13px] overflow-hidden">
@@ -101,8 +103,8 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
             transition={{ duration: 0.2 }}
             className="border-t border-[#222]"
           >
-            {/* HTML Artifact (chart/visualization) */}
-            {tc.htmlArtifact && (
+            {/* HTML Artifact (chart/visualization) — hidden when rendered inline */}
+            {!suppressArtifact && tc.htmlArtifact && (
               <div className="p-3">
                 <iframe
                   srcDoc={tc.htmlArtifact}
@@ -114,8 +116,8 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
               </div>
             )}
 
-            {/* Stdout from sandbox execution */}
-            {stdout && (
+            {/* Stdout from sandbox execution — hidden when rendered inline */}
+            {!suppressArtifact && stdout && (
               <div className="px-3 py-2 text-[12px]">
                 <div className="text-[#555] text-[11px] mb-1 uppercase tracking-wide">Output</div>
                 <pre className="whitespace-pre-wrap break-words text-[#aaa] leading-relaxed bg-[#0a0a0a] rounded p-2 border border-[#1f1f1f]">
@@ -199,6 +201,53 @@ function ToolCallCard({ tc }: { tc: ToolCallEntry }) {
   );
 }
 
+function InlineArtifact({ toolCalls }: { toolCalls: ToolCallEntry[] }) {
+  const artifact = [...toolCalls]
+    .reverse()
+    .find((tc) => tc.name === 'execute_analysis' && tc.status === 'done' && (tc.htmlArtifact || getStdout(tc)));
+
+  if (!artifact) return null;
+
+  const html = artifact.htmlArtifact;
+  const stdout = getStdout(artifact);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+      className="my-4 space-y-3"
+    >
+      {html && (
+        <iframe
+          srcDoc={html}
+          sandbox="allow-scripts"
+          className="w-full rounded-xl bg-white border border-[#e5e5e5] shadow-sm"
+          style={{ minHeight: 420, maxHeight: 700 }}
+          title="Analysis visualization"
+        />
+      )}
+
+      {stdout && (
+        <div className="rounded-xl bg-[#f7f6f3] border border-[#e8e8e8] p-4">
+          <div className="text-[11px] uppercase tracking-wide text-[#999] mb-2 font-medium">Output</div>
+          <pre className="whitespace-pre-wrap break-words text-[13px] font-mono text-[#37352f] leading-relaxed">
+            {stdout}
+          </pre>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+function getStdout(tc: ToolCallEntry): string | null {
+  if (tc.result && typeof tc.result === 'object' && !Array.isArray(tc.result)) {
+    const res = tc.result as Record<string, unknown>;
+    if (typeof res.stdout === 'string' && res.stdout.length > 0) return res.stdout;
+  }
+  return null;
+}
+
 interface ChatMessageProps {
   message: ChatMessageType;
   sources?: SourceRef[];
@@ -221,6 +270,10 @@ export default function ChatMessage({
   }, [message.content]);
 
   const toolCalls = message.toolCalls || [];
+
+  const hasInlineArtifact = toolCalls.some(
+    (tc) => tc.name === 'execute_analysis' && tc.status === 'done' && (tc.htmlArtifact || getStdout(tc))
+  );
 
   return (
     <motion.div
@@ -250,20 +303,26 @@ export default function ChatMessage({
           <p className="text-[15px] leading-[1.5]">{message.content}</p>
         ) : (
           <>
+            {toolCalls.length > 0 && (
+              <div className="my-1">
+                {toolCalls.map((tc, i) => (
+                  <ToolCallCard
+                    key={`${tc.name}-${i}`}
+                    tc={tc}
+                    suppressArtifact={hasInlineArtifact && tc.name === 'execute_analysis'}
+                  />
+                ))}
+              </div>
+            )}
+
+            {hasInlineArtifact && <InlineArtifact toolCalls={toolCalls} />}
+
+            {!message.content && isStreaming && toolCalls.length === 0 && <LoadingDots />}
+
             {message.content && (
               <StreamingProvider isStreaming={isStreaming}>
                 <MarkdownRenderer content={message.content} sources={sources} />
               </StreamingProvider>
-            )}
-
-            {!message.content && isStreaming && toolCalls.length === 0 && <LoadingDots />}
-
-            {toolCalls.length > 0 && (
-              <div className="my-1">
-                {toolCalls.map((tc, i) => (
-                  <ToolCallCard key={`${tc.name}-${i}`} tc={tc} />
-                ))}
-              </div>
             )}
           </>
         )}
