@@ -981,6 +981,59 @@ export async function pushToExtractedRecords(opts: {
   return data?.id ? String(data.id) : null;
 }
 
+const ESTIMATE_METADATA_FIELDS: Record<string, string> = {
+  'Project Type': 'project_type',
+  'Project Subtype': 'project_subtype',
+  'Building Type': 'building_type',
+  'Delivery Method': 'delivery_method',
+  'Gross SF': 'gross_sf',
+  'Stories': 'stories',
+  'Geographic Market': 'geographic_market',
+  'Owner Type': 'owner_name',
+};
+
+const CONTRACT_METADATA_FIELDS: Record<string, string> = {
+  'Parties': 'gc_name',
+};
+
+export async function syncProjectMetadata(
+  projectId: string,
+  skillId: string,
+  fields: Record<string, { value: string | number | null; confidence: number }>,
+): Promise<void> {
+  if (skillId !== 'estimate' && skillId !== 'contract') return;
+
+  const fieldMap = skillId === 'estimate' ? ESTIMATE_METADATA_FIELDS : CONTRACT_METADATA_FIELDS;
+  const updates: Record<string, unknown> = {};
+
+  for (const [fieldName, column] of Object.entries(fieldMap)) {
+    const val = fields[fieldName]?.value;
+    if (val != null && val !== '') {
+      if (column === 'gross_sf') {
+        const num = typeof val === 'number' ? val : parseFloat(String(val).replace(/[^0-9.]/g, ''));
+        if (!isNaN(num)) updates[column] = num;
+      } else if (column === 'stories') {
+        const num = typeof val === 'number' ? val : parseInt(String(val).replace(/[^0-9]/g, ''), 10);
+        if (!isNaN(num)) updates[column] = num;
+      } else {
+        updates[column] = String(val);
+      }
+    }
+  }
+
+  if (Object.keys(updates).length === 0) return;
+
+  const sb = getSupabase();
+  const { error } = await sb
+    .from('projects')
+    .update(updates)
+    .eq('project_id', projectId);
+
+  if (error) {
+    console.error(`Failed to sync project metadata for ${projectId}:`, error.message);
+  }
+}
+
 export async function pushRecordsToTable(
   tableName: string,
   projectId: string,

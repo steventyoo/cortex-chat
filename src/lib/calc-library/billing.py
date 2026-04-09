@@ -1,0 +1,146 @@
+"""T&M billing and warranty callback calculations."""
+
+from common import safe_numeric, pct, extract_sources, df_coverage, make_result, numeric_col, confidence_level
+import pandas as pd
+
+
+def tm_underbilling(co_df, prod_df=None, jcr_df=None, **kwargs):
+    """Detect T&M work where billed amounts are less than actual costs."""
+    warnings = []
+    cov = {}
+    cov.update(df_coverage("change_orders", co_df))
+    cov.update(df_coverage("production", prod_df))
+    cov.update(df_coverage("jcr", jcr_df))
+
+    if co_df is None or co_df.empty:
+        return make_result({"error": "No CO data"}, "N/A", warnings=["No CO data"], data_coverage=cov, confidence="low")
+
+    co = co_df.copy()
+    co["proposed"] = numeric_col(co, "gc_proposed_amount")
+    co["markup"] = numeric_col(co, "markup_applied")
+
+    type_col = None
+    for c in ["co_type", "CO Type", "change_reason", "Change Reason (Root Cause)"]:
+        if c in co.columns:
+            type_col = c
+            break
+
+    if type_col:
+        tm_cos = co[co[type_col].astype(str).str.lower().str.contains("t&m|t & m|time.*material")]
+        if tm_cos.empty:
+            tm_cos = co
+            warnings.append(f"No T&M COs found in {type_col}; using all COs")
+    else:
+        tm_cos = co
+        warnings.append("No CO type column; analyzing all COs")
+
+    tm_billed = float(tm_cos["proposed"].sum())
+
+    actual_cost = 0
+    if prod_df is not None and not prod_df.empty:
+        prod = prod_df.copy()
+        prod["hours"] = numeric_col(prod, "total_labor_hours")
+        blended_rate = safe_numeric(kwargs.get("blended_rate", 65))
+        actual_cost = float(prod["hours"].sum()) * blended_rate
+
+    underbilling = actual_cost - tm_billed if actual_cost > 0 else 0
+
+    markup_consistency = None
+    if len(tm_cos) > 1 and tm_cos["markup"].std() > 0:
+        markup_consistency = {
+            "avg_markup_pct": round(float(tm_cos["markup"].mean()), 1),
+            "std_markup_pct": round(float(tm_cos["markup"].std()), 1),
+            "min_markup_pct": round(float(tm_cos["markup"].min()), 1),
+            "max_markup_pct": round(float(tm_cos["markup"].max()), 1),
+            "inconsistent": float(tm_cos["markup"].std()) > 5,
+        }
+
+    return make_result(
+        {
+            "tm_co_count": len(tm_cos),
+            "tm_billed_total": tm_billed,
+            "estimated_actual_cost": actual_cost,
+            "estimated_underbilling": max(0, underbilling),
+            "markup_analysis": markup_consistency,
+        },
+        "Underbilling = (Actual Hours * Rate + Materials + Markup) - Billed Amount",
+        warnings=warnings,
+        sources=extract_sources(co_df) + extract_sources(prod_df),
+        data_coverage=cov,
+        confidence=confidence_level(cov),
+    )
+
+
+def warranty_callback_cost(admin_df, prod_df=None, dc_df=None, **kwargs):
+    """Trace warranty failures to crews and design changes."""
+    warnings = []
+    cov = {}
+    cov.update(df_coverage("project_admin", admin_df))
+    cov.update(df_coverage("production", prod_df))
+    cov.update(df_coverage("design_changes", dc_df))
+
+    if admin_df is None or admin_df.empty:
+        return make_result({"error": "No admin data"}, "N/A", warnings=["No admin data"], data_coverage=cov, confidence="low")
+
+    admin = admin_df.copy()
+    warranty_count = float(numeric_col(admin, "warranty_items").sum())
+    punch_items = float(numeric_col(admin, "total_punch_items").sum())
+    punch_days = float(numeric_col(admin, "days_to_complete_punch_list").mean())
+
+    trade_col = None
+    for c in ["items_by_trade", "Items by Trade (Punch)", "warranty_item_trade", "Warranty Item Trade"]:
+        if c in admin.columns:
+            trade_col = c
+            break
+
+    rework_total = 0
+    rework_by_cause = None
+    if prod_df is not None and not prod_df.empty:
+        prod = prod_df.copy()
+        prod["rework_cost"] = numeric_col(prod, "rework_cost")
+        prod["rework_hours"] = numeric_col(prod, "rework_labor_hours")
+        rework_total = float(prod["rework_cost"].sum())
+
+        cause_col = None
+        for c in ["rework_cause", "Rework Cause"]:
+            if c in prod.columns:
+                cause_col = c
+                break
+        if cause_col:
+            rework_by_cause = prod.groupby(cause_col).agg(
+                cost=("rework_cost", "sum"),
+                hours=("rework_hours", "sum"),
+                count=(cause_col, "size"),
+            ).round(0).reset_index()
+            rework_by_cause = rework_by_cause.sort_values("cost", ascending=False).to_dict("records")
+
+    design_rework_flag = 0
+    if dc_df is not None and not dc_df.empty:
+        rw_col = None
+        for c in ["rework_required", "Rework Required?"]:
+            if c in dc_df.columns:
+                rw_col = c
+                break
+        if rw_col:
+            design_rework_flag = len(dc_df[dc_df[rw_col].astype(str).str.lower().str.contains("yes|true|1")])
+
+    estimated_callback_cost = rework_total * 0.3 if rework_total else 0
+    if warranty_count > 0:
+        estimated_callback_cost = max(estimated_callback_cost, warranty_count * safe_numeric(kwargs.get("avg_warranty_cost", 500)))
+
+    return make_result(
+        {
+            "warranty_item_count": warranty_count,
+            "punch_item_count": punch_items,
+            "avg_punch_days": round(punch_days, 1),
+            "total_rework_cost": rework_total,
+            "design_changes_requiring_rework": design_rework_flag,
+            "estimated_warranty_callback_cost": round(estimated_callback_cost, 0),
+            "rework_by_cause": rework_by_cause,
+        },
+        "Warranty Cost = warranty_count * avg_cost OR 30% of rework (whichever is higher)",
+        warnings=warnings,
+        sources=extract_sources(admin_df) + extract_sources(prod_df),
+        data_coverage=cov,
+        confidence=confidence_level(cov),
+    )
