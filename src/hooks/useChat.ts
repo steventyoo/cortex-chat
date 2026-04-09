@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { ChatMessage, SourceRef, ToolCallEntry } from '@/lib/types';
+import { ChatMessage, SourceRef, ToolCallEntry, MessagePart } from '@/lib/types';
 import { nanoid } from 'nanoid';
 
 function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
@@ -80,6 +80,7 @@ export function useChat() {
         const decoder = new TextDecoder();
         let accumulated = '';
         let toolCalls: ToolCallEntry[] = [];
+        let parts: MessagePart[] = [];
 
         while (true) {
           const { done, value } = await reader.read();
@@ -106,12 +107,14 @@ export function useChat() {
               }
 
               if (data.type === 'tool_call') {
-                toolCalls = [...toolCalls, {
+                const tc: ToolCallEntry = {
                   name: data.name,
                   displayName: data.displayName,
                   input: data.input || {},
                   status: 'calling',
-                }];
+                };
+                toolCalls = [...toolCalls, tc];
+                parts = [...parts, { type: 'tool_call', toolCall: tc }];
               }
 
               if (data.type === 'tool_result') {
@@ -129,19 +132,36 @@ export function useChat() {
                   (tc) => tc.name === data.name && tc.status === 'calling'
                 );
                 if (idx !== -1) {
-                  toolCalls = [...toolCalls];
-                  toolCalls[idx] = {
+                  const updated: ToolCallEntry = {
                     ...toolCalls[idx],
                     result: data.result,
                     resultCount,
                     htmlArtifact: data.htmlArtifact || undefined,
                     status: data.result?.error ? 'error' : 'done',
                   };
+                  toolCalls = [...toolCalls];
+                  toolCalls[idx] = updated;
+                  // Also update the matching part
+                  const partIdx = findLastIndex(
+                    parts,
+                    (p) => p.type === 'tool_call' && p.toolCall.name === data.name && p.toolCall.status === 'calling'
+                  );
+                  if (partIdx !== -1) {
+                    parts = [...parts];
+                    parts[partIdx] = { type: 'tool_call', toolCall: updated };
+                  }
                 }
               }
 
               if (data.text) {
                 accumulated += data.text;
+                const lastPart = parts[parts.length - 1];
+                if (lastPart && lastPart.type === 'text') {
+                  parts = [...parts];
+                  parts[parts.length - 1] = { type: 'text', content: lastPart.content + data.text };
+                } else {
+                  parts = [...parts, { type: 'text', content: data.text }];
+                }
               }
 
               if (data.error) {
@@ -164,6 +184,7 @@ export function useChat() {
                 ...last,
                 content: accumulated,
                 toolCalls: toolCalls.length > 0 ? toolCalls : last.toolCalls,
+                parts: parts.length > 0 ? parts : last.parts,
               };
             }
             return updated;

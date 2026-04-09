@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChatMessage as ChatMessageType, SourceRef, ToolCallEntry } from '@/lib/types';
+import { ChatMessage as ChatMessageType, SourceRef, ToolCallEntry, MessagePart } from '@/lib/types';
 import MarkdownRenderer from './MarkdownRenderer';
 import { StreamingProvider } from './DataTable';
 import LoadingDots from './LoadingDots';
@@ -342,10 +342,78 @@ export default function ChatMessage({
   }, [message.content]);
 
   const toolCalls = message.toolCalls || [];
+  const parts = message.parts || [];
 
   const hasInlineArtifact = toolCalls.some(
     (tc) => tc.name === 'execute_analysis' && tc.status === 'done' && (tc.htmlArtifact || getStdout(tc))
   );
+
+  const renderParts = () => {
+    if (parts.length === 0) {
+      // Fallback for messages without parts (e.g. from history)
+      return (
+        <>
+          {toolCalls.length > 0 && (
+            <div className="my-1">
+              {toolCalls.map((tc, i) => (
+                <ToolCallCard
+                  key={`${tc.name}-${i}`}
+                  tc={tc}
+                  suppressArtifact={hasInlineArtifact && tc.name === 'execute_analysis'}
+                />
+              ))}
+            </div>
+          )}
+
+          {hasInlineArtifact && <InlineArtifact toolCalls={toolCalls} />}
+
+          {!message.content && isStreaming && toolCalls.length === 0 && <LoadingDots />}
+
+          {message.content && (
+            <StreamingProvider isStreaming={isStreaming}>
+              <MarkdownRenderer content={message.content} sources={sources} />
+            </StreamingProvider>
+          )}
+        </>
+      );
+    }
+
+    // Render parts in natural order
+    const isLastPartText = parts.length > 0 && parts[parts.length - 1].type === 'text';
+    return (
+      <>
+        {parts.map((part, i) => {
+          if (part.type === 'tool_call') {
+            return (
+              <ToolCallCard
+                key={`tc-${part.toolCall.name}-${i}`}
+                tc={part.toolCall}
+                suppressArtifact={hasInlineArtifact && part.toolCall.name === 'execute_analysis'}
+              />
+            );
+          }
+          // Text part
+          const isLast = i === parts.length - 1;
+          return (
+            <div key={`text-${i}`}>
+              {hasInlineArtifact && isLast && <InlineArtifact toolCalls={toolCalls} />}
+              <StreamingProvider isStreaming={isStreaming && isLast}>
+                <MarkdownRenderer content={part.content} sources={sources} />
+              </StreamingProvider>
+            </div>
+          );
+        })}
+
+        {!message.content && isStreaming && parts.length === 0 && <LoadingDots />}
+
+        {isStreaming && !isLastPartText && parts.length > 0 && (() => {
+          const lastPart = parts[parts.length - 1];
+          if (lastPart.type === 'tool_call' && lastPart.toolCall.status === 'calling') return null;
+          return <LoadingDots />;
+        })()}
+      </>
+    );
+  };
 
   return (
     <motion.div
@@ -375,27 +443,7 @@ export default function ChatMessage({
           <p className="text-[15px] leading-[1.5]">{message.content}</p>
         ) : (
           <>
-            {toolCalls.length > 0 && (
-              <div className="my-1">
-                {toolCalls.map((tc, i) => (
-                  <ToolCallCard
-                    key={`${tc.name}-${i}`}
-                    tc={tc}
-                    suppressArtifact={hasInlineArtifact && tc.name === 'execute_analysis'}
-                  />
-                ))}
-              </div>
-            )}
-
-            {hasInlineArtifact && <InlineArtifact toolCalls={toolCalls} />}
-
-            {!message.content && isStreaming && toolCalls.length === 0 && <LoadingDots />}
-
-            {message.content && (
-              <StreamingProvider isStreaming={isStreaming}>
-                <MarkdownRenderer content={message.content} sources={sources} />
-              </StreamingProvider>
-            )}
+            {renderParts()}
 
             {!isStreaming && <MessageSourcesFooter toolCalls={toolCalls} />}
           </>
