@@ -24,7 +24,20 @@ export interface ToolResultEvent {
   htmlArtifact?: string;
 }
 
-export type ChatEvent = ToolCallEvent | ToolResultEvent;
+export interface RoundStartEvent {
+  type: 'round_start';
+  round: number;
+}
+
+export interface RoundEndEvent {
+  type: 'round_end';
+  round: number;
+  inputTokens: number;
+  outputTokens: number;
+  stopReason: string | null;
+}
+
+export type ChatEvent = ToolCallEvent | ToolResultEvent | RoundStartEvent | RoundEndEvent;
 
 export interface ToolUseHandler {
   (name: string, input: Record<string, unknown>): Promise<unknown>;
@@ -85,6 +98,8 @@ export function streamChatWithTools(
     let totalOutput = 0;
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      yield { type: 'round_start' as const, round };
+
       const streamParams: Anthropic.Messages.MessageStreamParams = {
         model: 'claude-sonnet-4-20250514',
         max_tokens: 4096,
@@ -121,6 +136,14 @@ export function streamChatWithTools(
           hasToolUse = true;
         }
       }
+
+      yield {
+        type: 'round_end' as const,
+        round,
+        inputTokens: finalMessage.usage.input_tokens,
+        outputTokens: finalMessage.usage.output_tokens,
+        stopReason: finalMessage.stop_reason,
+      };
 
       if (!hasToolUse || !hasTools) {
         resolveUsage!({ inputTokens: totalInput, outputTokens: totalOutput });

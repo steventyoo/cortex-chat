@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { fetchProjectList, resolveProjectId, verifyProjectAccess, getSupabase } from '@/lib/supabase';
 import { CORTEX_SYSTEM_PROMPT } from '@/lib/prompts';
-import { streamChatWithTools, ChatEvent } from '@/lib/claude';
+import { streamChatWithTools, ChatEvent, RoundStartEvent, RoundEndEvent } from '@/lib/claude';
 import { ChatMessage } from '@/lib/types';
 import { getLangfuse } from '@/lib/langfuse';
 import {
@@ -224,35 +224,52 @@ export async function POST(request: NextRequest) {
   const toolUseHandler = async (name: string, input: Record<string, unknown>) => {
     const tool = toolMap.get(name);
     if (!tool) return { error: `Unknown tool: ${name}` };
-    const result = await executeChatTool(tool, input, {
-      orgId,
-      projectId: projectId || undefined,
-      includePending,
-      sandboxSession,
-    });
-    if (result.error) return { error: result.error };
-    if (result.htmlArtifact) {
-      return { __result: result.result, __htmlArtifact: result.htmlArtifact };
-    }
-    return result.result;
-  };
 
-  const generation = trace.generation({
-    name: 'claude-response',
-    model: 'claude-sonnet-4-20250514',
-    modelParameters: { max_tokens: 4096 },
-    input: {
-      messageCount: messages.length,
-      contextLength: projectContext.length,
-      toolCount: anthropicTools.length,
-      matchedTemplates: matchedTemplates.map(t => t.template_name),
-    },
-  });
+    const toolExecSpan = trace.span({ name: `tool:${name}`, input });
+    const startMs = Date.now();
+    try {
+      const result = await executeChatTool(tool, input, {
+        orgId,
+        projectId: projectId || undefined,
+        includePending,
+        sandboxSession,
+      });
+
+      const summary = result.result &&
+        typeof result.result === 'object' &&
+        result.result !== null &&
+        '_summary' in (result.result as Record<string, unknown>)
+          ? (result.result as Record<string, unknown>)._summary
+          : undefined;
+
+      toolExecSpan.end({
+        output: summary || (result.error ? { error: result.error } : { ok: true }),
+        level: result.error ? 'WARNING' : 'DEFAULT',
+        metadata: { durationMs: Date.now() - startMs },
+      });
+
+      if (result.error) return { error: result.error };
+      if (result.htmlArtifact) {
+        return { __result: result.result, __htmlArtifact: result.htmlArtifact };
+      }
+      return result.result;
+    } catch (err) {
+      toolExecSpan.end({
+        output: { error: err instanceof Error ? err.message : String(err) },
+        level: 'ERROR',
+        metadata: { durationMs: Date.now() - startMs },
+      });
+      throw err;
+    }
+  };
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       let accumulated = '';
+      let currentGeneration: ReturnType<typeof trace.generation> | null = null;
+      let roundText = '';
+
       try {
         if (projectId) {
           controller.enqueue(
@@ -272,11 +289,40 @@ export async function POST(request: NextRequest) {
         for await (const chunk of textStream) {
           if (typeof chunk === 'string') {
             accumulated += chunk;
+            roundText += chunk;
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`)
             );
           } else {
             const event = chunk as ChatEvent;
+
+            if (event.type === 'round_start') {
+              const rse = event as RoundStartEvent;
+              roundText = '';
+              currentGeneration = trace.generation({
+                name: `llm-round-${rse.round}`,
+                model: 'claude-sonnet-4-20250514',
+                modelParameters: { max_tokens: 4096 },
+                input: rse.round === 0
+                  ? { messageCount: messages.length, toolCount: anthropicTools.length }
+                  : { continued: true },
+              });
+              continue;
+            }
+
+            if (event.type === 'round_end') {
+              const ree = event as RoundEndEvent;
+              if (currentGeneration) {
+                currentGeneration.end({
+                  output: roundText || '(tool calls only)',
+                  usage: { input: ree.inputTokens, output: ree.outputTokens },
+                  metadata: { stopReason: ree.stopReason },
+                });
+                currentGeneration = null;
+              }
+              continue;
+            }
+
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
             );
@@ -288,20 +334,22 @@ export async function POST(request: NextRequest) {
         );
 
         const usage = await finalUsage;
-        generation.end({
+        trace.update({
           output: accumulated,
-          usage: {
-            input: usage.inputTokens,
-            output: usage.outputTokens,
-          },
+          metadata: { orgId, projectId, totalTokens: usage.inputTokens + usage.outputTokens },
         });
-        trace.update({ output: accumulated });
       } catch (err) {
         console.error('Streaming error:', err);
-        generation.end({
+        if (currentGeneration) {
+          currentGeneration.end({
+            output: roundText || 'ERROR',
+            level: 'ERROR',
+            statusMessage: err instanceof Error ? err.message : 'Unknown error',
+          });
+        }
+        trace.update({
           output: accumulated || 'ERROR',
-          level: 'ERROR',
-          statusMessage: err instanceof Error ? err.message : 'Unknown error',
+          metadata: { orgId, projectId, error: err instanceof Error ? err.message : 'Unknown error' },
         });
         controller.enqueue(
           encoder.encode(
