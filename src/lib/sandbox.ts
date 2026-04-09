@@ -8,6 +8,8 @@ const MAX_CODE_RETRIES = 2;
 const FIX_MODEL = 'claude-sonnet-4-20250514';
 const FIX_MAX_TOKENS = 4096;
 
+const REQUIRED_PACKAGES = ['pandas', 'plotly', 'numpy'];
+
 export interface AnalysisResult {
   analysis: string;
   htmlArtifact: string | null;
@@ -102,11 +104,6 @@ export async function runAnalysis(
   dataContext: unknown,
   maxRetries: number = MAX_CODE_RETRIES,
 ): Promise<AnalysisResult> {
-  const token = process.env.VERCEL_TOKEN;
-  if (!token) {
-    return { analysis: '', htmlArtifact: null, error: 'VERCEL_TOKEN not configured' };
-  }
-
   let sandbox: (Sandbox & AsyncDisposable) | null = null;
 
   try {
@@ -116,6 +113,7 @@ export async function runAnalysis(
       sandbox = await Sandbox.create({
         source: { type: 'snapshot', snapshotId },
         timeout: EXEC_TIMEOUT + 10_000,
+        networkPolicy: 'deny-all',
         env: { MPLBACKEND: 'Agg' },
       });
     } else {
@@ -125,7 +123,9 @@ export async function runAnalysis(
         env: { MPLBACKEND: 'Agg' },
       });
 
-      const pipResult = await sandbox.runCommand('pip', ['install', '-q', 'pandas', 'plotly', 'numpy']);
+      const pipResult = await sandbox.runCommand('pip', [
+        'install', '-q', ...REQUIRED_PACKAGES,
+      ]);
       if (pipResult.exitCode !== 0) {
         const pipStderr = await pipResult.stderr();
         return {
@@ -134,14 +134,16 @@ export async function runAnalysis(
           error: `Failed to install packages: ${pipStderr.slice(0, 2000)}`,
         };
       }
+
+      await sandbox.updateNetworkPolicy('deny-all');
     }
 
     let currentCode = code;
     let retries = 0;
 
     await sandbox.writeFiles([
-      { path: '/tmp/data.json', content: JSON.stringify(dataContext) },
-      { path: '/tmp/analysis.py', content: currentCode },
+      { path: '/tmp/data.json', content: Buffer.from(JSON.stringify(dataContext)) },
+      { path: '/tmp/analysis.py', content: Buffer.from(currentCode) },
     ]);
 
     // Syntax pre-check before first execution
@@ -151,7 +153,7 @@ export async function runAnalysis(
       if (fixed) {
         currentCode = fixed;
         retries++;
-        await sandbox.writeFiles([{ path: '/tmp/analysis.py', content: currentCode }]);
+        await sandbox.writeFiles([{ path: '/tmp/analysis.py', content: Buffer.from(currentCode) }]);
         const recheck = await syntaxCheck(sandbox, '/tmp/analysis.py');
         if (recheck) {
           return { analysis: '', htmlArtifact: null, error: `Syntax error (unfixable): ${recheck}`, retries };
@@ -171,7 +173,7 @@ export async function runAnalysis(
 
       currentCode = fixed;
       retries++;
-      await sandbox.writeFiles([{ path: '/tmp/analysis.py', content: currentCode }]);
+      await sandbox.writeFiles([{ path: '/tmp/analysis.py', content: Buffer.from(currentCode) }]);
 
       const syntaxErr2 = await syntaxCheck(sandbox, '/tmp/analysis.py');
       if (syntaxErr2) {
@@ -205,10 +207,37 @@ export async function runAnalysis(
   } finally {
     if (sandbox) {
       try {
-        await sandbox.stop();
+        await sandbox.stop({ blocking: true });
       } catch {
         // Best effort cleanup
       }
     }
   }
+}
+
+/**
+ * Creates a sandbox snapshot with pre-installed packages (pandas, plotly, numpy).
+ * Run once, then set SANDBOX_SNAPSHOT_ID env var to skip pip install on every run.
+ * Snapshots expire after 30 days by default.
+ */
+export async function createAnalysisSnapshot(): Promise<string> {
+  const sandbox = await Sandbox.create({
+    runtime: 'python3.13',
+    timeout: 120_000,
+    env: { MPLBACKEND: 'Agg' },
+  });
+
+  const pipResult = await sandbox.runCommand('pip', [
+    'install', '-q', ...REQUIRED_PACKAGES,
+  ]);
+
+  if (pipResult.exitCode !== 0) {
+    const stderr = await pipResult.stderr();
+    await sandbox.stop({ blocking: true });
+    throw new Error(`Failed to install packages: ${stderr.slice(0, 2000)}`);
+  }
+
+  const snapshot = await sandbox.snapshot();
+  console.log(`[sandbox] Snapshot created: ${snapshot.snapshotId}`);
+  return snapshot.snapshotId;
 }
