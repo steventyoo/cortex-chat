@@ -22,6 +22,8 @@ export default function PdfViewer({ url, fileName }: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
 
+  const [pageInputValue, setPageInputValue] = useState('1');
+
   /* Measure container for responsive fit */
   useEffect(() => {
     const container = containerRef.current;
@@ -47,8 +49,20 @@ export default function PdfViewer({ url, fileName }: PdfViewerProps) {
     setLoading(false);
   }, []);
 
-  const goToPrev = () => setPageNumber((p) => Math.max(1, p - 1));
-  const goToNext = () => setPageNumber((p) => Math.min(numPages, p + 1));
+  const goToFirst = () => { setPageNumber(1); setPageInputValue('1'); };
+  const goToPrev = () => setPageNumber((p) => { const n = Math.max(1, p - 1); setPageInputValue(String(n)); return n; });
+  const goToNext = () => setPageNumber((p) => { const n = Math.min(numPages, p + 1); setPageInputValue(String(n)); return n; });
+  const goToLast = () => { setPageNumber(numPages); setPageInputValue(String(numPages)); };
+
+  const commitPageInput = () => {
+    const parsed = parseInt(pageInputValue, 10);
+    if (!isNaN(parsed) && parsed >= 1 && parsed <= numPages) {
+      setPageNumber(parsed);
+      setPageInputValue(String(parsed));
+    } else {
+      setPageInputValue(String(pageNumber));
+    }
+  };
 
   const zoomIn = () => setScale((s) => Math.min(2.5, +(s + 0.25).toFixed(2)));
   const zoomOut = () => setScale((s) => Math.max(0.5, +(s - 0.25).toFixed(2)));
@@ -73,7 +87,19 @@ export default function PdfViewer({ url, fileName }: PdfViewerProps) {
         </div>
 
         {/* Center: page navigation */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={goToFirst}
+            disabled={pageNumber <= 1}
+            className="w-[28px] h-[28px] rounded-md flex items-center justify-center text-[#666] hover:bg-[#f0f0f0] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+            title="First page"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 18l-6-6 6-6" />
+              <path d="M6 6v12" />
+            </svg>
+          </button>
+
           <button
             onClick={goToPrev}
             disabled={pageNumber <= 1}
@@ -85,9 +111,22 @@ export default function PdfViewer({ url, fileName }: PdfViewerProps) {
             </svg>
           </button>
 
-          <span className="text-[12px] text-[#37352f] font-medium tabular-nums min-w-[60px] text-center">
-            {pageNumber} / {numPages || '—'}
-          </span>
+          <div className="flex items-center gap-1 text-[12px] text-[#37352f] font-medium tabular-nums">
+            <input
+              type="text"
+              inputMode="numeric"
+              value={pageInputValue}
+              onChange={(e) => setPageInputValue(e.target.value)}
+              onBlur={commitPageInput}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { commitPageInput(); (e.target as HTMLInputElement).blur(); }
+                if (e.key === 'Home') { e.preventDefault(); goToFirst(); }
+                if (e.key === 'End') { e.preventDefault(); goToLast(); }
+              }}
+              className="w-[44px] h-[26px] text-center rounded border border-[#e0e0e0] bg-white text-[12px] font-medium tabular-nums focus:outline-none focus:ring-2 focus:ring-[#007aff]/30 focus:border-[#007aff]"
+            />
+            <span className="text-[#999]">/ {numPages || '—'}</span>
+          </div>
 
           <button
             onClick={goToNext}
@@ -97,6 +136,18 @@ export default function PdfViewer({ url, fileName }: PdfViewerProps) {
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 18l6-6-6-6" />
+            </svg>
+          </button>
+
+          <button
+            onClick={goToLast}
+            disabled={pageNumber >= numPages}
+            className="w-[28px] h-[28px] rounded-md flex items-center justify-center text-[#666] hover:bg-[#f0f0f0] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+            title="Last page"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 18l6-6-6-6" />
+              <path d="M18 6v12" />
             </svg>
           </button>
         </div>
