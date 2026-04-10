@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -9,6 +9,7 @@ import {
   getConfidenceIndicator,
   getConfidenceColor,
 } from '@/lib/pipeline';
+import { parseJobCostReport, ParsedLineItem } from '@/lib/job-cost-parser';
 
 const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false });
 
@@ -80,6 +81,104 @@ function formatFieldValue(fieldName: string, value: string | number | null): str
 function formatCellValue(fieldName: string, value: string | number | null): string {
   if (value == null) return '—';
   return formatFieldValue(fieldName, value) || String(value);
+}
+
+// AI field name -> parser field name mapping for JCR variance comparison
+const JCR_FIELD_MAP: Record<string, keyof ParsedLineItem> = {
+  'cost_code': 'costCode',
+  'costCode': 'costCode',
+  'Cost Code': 'costCode',
+  'revised_budget': 'revisedBudget',
+  'revisedBudget': 'revisedBudget',
+  'Revised Budget': 'revisedBudget',
+  'Revised Budget (line)': 'revisedBudget',
+  'original_budget': 'originalBudget',
+  'originalBudget': 'originalBudget',
+  'Original Budget': 'originalBudget',
+  'job_to_date': 'jobToDate',
+  'jobToDate': 'jobToDate',
+  'Job to Date': 'jobToDate',
+  'JTD Cost': 'jobToDate',
+  'jtd_cost': 'jobToDate',
+  'over_under': 'overUnder',
+  'overUnder': 'overUnder',
+  'Over/Under': 'overUnder',
+  'over_under_budget': 'overUnder',
+  'change_orders': 'changeOrders',
+  'changeOrders': 'changeOrders',
+  'Change Orders': 'changeOrders',
+  'description': 'description',
+  'Description': 'description',
+  'Line Item Description': 'description',
+  'line_item_description': 'description',
+  'category': 'category',
+  'Category': 'category',
+  'cost_category': 'category',
+  'Change Orders (line)': 'changeOrders',
+  'Work Category': 'category',
+};
+
+interface VarianceInfo {
+  parserValue: number;
+  aiValue: number;
+  delta: number;
+  pctDelta: number;
+}
+
+function computeVarianceMap(
+  aiRecords: Array<Record<string, { value: string | number | null; confidence: number }>>,
+  parsedItems: ParsedLineItem[],
+): Map<string, VarianceInfo> {
+  const varianceMap = new Map<string, VarianceInfo>();
+  if (!parsedItems.length || !aiRecords.length) return varianceMap;
+
+  const parsedByCostCode = new Map<string, ParsedLineItem>();
+  for (const item of parsedItems) {
+    parsedByCostCode.set(item.costCode.trim(), item);
+  }
+
+  for (let rowIdx = 0; rowIdx < aiRecords.length; rowIdx++) {
+    const rec = aiRecords[rowIdx];
+    const costCodeField = Object.entries(rec).find(([key]) => {
+      const mapped = JCR_FIELD_MAP[key];
+      return mapped === 'costCode';
+    });
+    if (!costCodeField) continue;
+
+    const costCode = String(costCodeField[1].value ?? '').trim();
+    const parsedItem = parsedByCostCode.get(costCode);
+    if (!parsedItem) continue;
+
+    for (const [fieldName, fieldData] of Object.entries(rec)) {
+      const parserField = JCR_FIELD_MAP[fieldName];
+      if (!parserField || parserField === 'costCode' || parserField === 'description' || parserField === 'category') continue;
+
+      const parserValue = parsedItem[parserField];
+      if (typeof parserValue !== 'number') continue;
+
+      const aiValue = typeof fieldData.value === 'number'
+        ? fieldData.value
+        : typeof fieldData.value === 'string'
+        ? parseFloat(String(fieldData.value).replace(/[,$\s]/g, ''))
+        : NaN;
+
+      if (isNaN(aiValue)) continue;
+
+      const delta = Math.abs(aiValue - parserValue);
+      const pctDelta = parserValue !== 0 ? (delta / Math.abs(parserValue)) * 100 : delta > 0 ? 100 : 0;
+
+      if (delta > 1 || pctDelta > 0.5) {
+        varianceMap.set(`${rowIdx}:${fieldName}`, {
+          parserValue,
+          aiValue,
+          delta,
+          pctDelta,
+        });
+      }
+    }
+  }
+
+  return varianceMap;
 }
 
 function inferFieldType(value: string | number | null): SkillFieldDef['type'] {
@@ -160,6 +259,35 @@ export default function PipelineReview() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [editedFields, setEditedFields] = useState<Record<string, string>>({});
   const [submittingReview, setSubmittingReview] = useState(false);
+
+  // Panel layout state (draggable splitter + collapse)
+  const [panelSplit, setPanelSplit] = useState(0.6); // 60% left, 40% right
+  const [collapsedPanel, setCollapsedPanel] = useState<'left' | 'right' | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const container = splitContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const ratio = Math.max(0.2, Math.min(0.8, x / rect.width));
+      setPanelSplit(ratio);
+    };
+
+    const onMouseUp = () => {
+      setIsDragging(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }, []);
 
   // Test mode — approvals won't push to real Airtable tables
   const [testMode, setTestMode] = useState(false);
@@ -936,6 +1064,25 @@ export default function PipelineReview() {
     });
   }, []);
 
+  // JCR variance: structurally parse source text and compare to AI-extracted records
+  const jcrVarianceMap = useMemo(() => {
+    if (!selectedItem) return new Map<string, VarianceInfo>();
+    const extraction = selectedItem.extractedData;
+    if (!extraction?.records?.length || !selectedItem.sourceText) return new Map<string, VarianceInfo>();
+    const isJcr = extraction.skillId?.includes('job_cost') ||
+      extraction.documentType?.toLowerCase().includes('job cost') ||
+      extraction.documentType?.toLowerCase().includes('job detail');
+    if (!isJcr) return new Map<string, VarianceInfo>();
+
+    try {
+      const parsed = parseJobCostReport(selectedItem.sourceText);
+      if (parsed.lineItems.length === 0) return new Map<string, VarianceInfo>();
+      return computeVarianceMap(extraction.records, parsed.lineItems);
+    } catch {
+      return new Map<string, VarianceInfo>();
+    }
+  }, [selectedItem]);
+
   // ─── REVIEW VIEW ───────────────────────────────────────────
   if (viewMode === 'review' && selectedItem) {
     const extraction = selectedItem.extractedData;
@@ -1018,38 +1165,92 @@ export default function PipelineReview() {
           <StatusBadge status={selectedItem.status} />
         </div>
 
-        {/* Review content — two panels */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Left: Source document (wider) */}
-          <div className="flex-[3] min-w-0 border-r border-[#e8e8e8] flex flex-col">
-            <div className="px-4 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8]">
-              <h3 className="text-[13px] font-semibold text-[#37352f]">Source Document</h3>
+        {/* Review content — two resizable panels */}
+        <div ref={splitContainerRef} className={`flex-1 flex overflow-hidden ${isDragging ? 'select-none' : ''}`}>
+          {/* Left: Source document */}
+          <div
+            className="min-w-0 flex flex-col border-r border-[#e8e8e8] overflow-hidden"
+            style={{
+              width: collapsedPanel === 'left' ? 40 : collapsedPanel === 'right' ? '100%' : `calc(${panelSplit * 100}% - 3px)`,
+              transition: isDragging ? 'none' : 'width 0.2s ease',
+            }}
+          >
+            <div className="px-4 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={() => setCollapsedPanel(collapsedPanel === 'left' ? null : 'left')}
+                className="p-0.5 rounded hover:bg-[#e8e8e8] text-[#999] hover:text-[#555] transition-colors"
+                title={collapsedPanel === 'left' ? 'Expand source document' : 'Collapse source document'}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  {collapsedPanel === 'left'
+                    ? <path d="M9 18l6-6-6-6" />
+                    : <path d="M15 18l-6-6 6-6" />}
+                </svg>
+              </button>
+              {collapsedPanel !== 'left' && (
+                <h3 className="text-[13px] font-semibold text-[#37352f]">Source Document</h3>
+              )}
             </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              <SourceDocumentView
-                text={selectedItem.sourceText || ''}
-                fileName={selectedItem.fileName}
-                fileUrl={selectedItem.fileUrl}
-              />
-            </div>
+            {collapsedPanel !== 'left' && (
+              <div className="flex-1 overflow-y-auto p-4">
+                <SourceDocumentView
+                  text={selectedItem.sourceText || ''}
+                  fileName={selectedItem.fileName}
+                  fileUrl={selectedItem.fileUrl}
+                  storagePath={selectedItem.storagePath}
+                />
+              </div>
+            )}
           </div>
 
-          {/* Right: Extracted data + review actions (narrower) */}
-          <div className="flex-[2] min-w-[320px] max-w-[420px] flex flex-col">
-            <div className="px-4 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-2">
-              <h3 className="text-[13px] font-semibold text-[#37352f]">Extracted Data</h3>
-              {selectedItem.overallConfidence != null && (
-                <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${getConfidenceColor(selectedItem.overallConfidence)}`}>
-                  {Math.round(selectedItem.overallConfidence * 100)}% confidence
-                </span>
+          {/* Draggable splitter */}
+          {!collapsedPanel && (
+            <div
+              onMouseDown={handleSplitterMouseDown}
+              className={`w-[6px] flex-shrink-0 cursor-col-resize flex items-center justify-center group hover:bg-[#007aff]/10 transition-colors ${isDragging ? 'bg-[#007aff]/20' : ''}`}
+            >
+              <div className={`w-[2px] h-8 rounded-full transition-colors ${isDragging ? 'bg-[#007aff]' : 'bg-[#d0d0d0] group-hover:bg-[#007aff]'}`} />
+            </div>
+          )}
+
+          {/* Right: Extracted data + review actions */}
+          <div
+            className="min-w-0 flex flex-col overflow-hidden"
+            style={{
+              width: collapsedPanel === 'right' ? 40 : collapsedPanel === 'left' ? '100%' : `calc(${(1 - panelSplit) * 100}% - 3px)`,
+              transition: isDragging ? 'none' : 'width 0.2s ease',
+            }}
+          >
+            <div className="px-4 py-3 bg-[#f7f7f5] border-b border-[#e8e8e8] flex items-center gap-2 flex-shrink-0">
+              {collapsedPanel !== 'right' && (
+                <>
+                  <h3 className="text-[13px] font-semibold text-[#37352f]">Extracted Data</h3>
+                  {selectedItem.overallConfidence != null && (
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${getConfidenceColor(selectedItem.overallConfidence)}`}>
+                      {Math.round(selectedItem.overallConfidence * 100)}% confidence
+                    </span>
+                  )}
+                  <div className="ml-auto flex items-center gap-2 text-[10px] text-[#999]">
+                    <span className="flex items-center gap-0.5">🟢 ≥90%</span>
+                    <span className="flex items-center gap-0.5">🟡 70-89%</span>
+                    <span className="flex items-center gap-0.5">🔴 &lt;70%</span>
+                  </div>
+                </>
               )}
-              <div className="ml-auto flex items-center gap-2 text-[10px] text-[#999]">
-                <span className="flex items-center gap-0.5">🟢 ≥90%</span>
-                <span className="flex items-center gap-0.5">🟡 70-89%</span>
-                <span className="flex items-center gap-0.5">🔴 &lt;70%</span>
-              </div>
+              <button
+                onClick={() => setCollapsedPanel(collapsedPanel === 'right' ? null : 'right')}
+                className={`p-0.5 rounded hover:bg-[#e8e8e8] text-[#999] hover:text-[#555] transition-colors ${collapsedPanel === 'right' ? '' : 'ml-auto'}`}
+                title={collapsedPanel === 'right' ? 'Expand extracted data' : 'Collapse extracted data'}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  {collapsedPanel === 'right'
+                    ? <path d="M15 18l-6-6 6-6" />
+                    : <path d="M9 18l6-6-6-6" />}
+                </svg>
+              </button>
             </div>
 
+            {collapsedPanel !== 'right' && (
             <div className="flex-1 overflow-y-auto p-4">
               {/* Flags */}
               {flags.length > 0 && (
@@ -1332,9 +1533,16 @@ export default function PipelineReview() {
               {/* Multi-record line items */}
               {extraction?.records && extraction.records.length > 0 && (
                 <div className="mb-4">
-                  <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider mb-2">
-                    Line Items ({extraction.records.length} records → {extraction.documentType === 'Change Order' ? 'CHANGE_ORDERS' : 'JOB_COSTS'})
-                  </p>
+                  <div className="flex items-center gap-2 mb-2">
+                    <p className="text-[11px] font-semibold text-[#999] uppercase tracking-wider">
+                      Line Items ({extraction.records.length} records → {extraction.documentType === 'Change Order' ? 'CHANGE_ORDERS' : 'JOB_COSTS'})
+                    </p>
+                    {jcrVarianceMap.size > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 font-medium">
+                        {jcrVarianceMap.size} variance{jcrVarianceMap.size !== 1 ? 's' : ''} detected
+                      </span>
+                    )}
+                  </div>
                   <div className="overflow-x-auto rounded-lg border border-[#e0e0e0]">
                     <table className="w-full text-[11px]">
                       <thead>
@@ -1349,13 +1557,25 @@ export default function PipelineReview() {
                         {extraction.records.map((rec, idx) => (
                           <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-[#fafafa]'}>
                             <td className="px-2 py-1 text-[#999] border-b border-[#f0f0f0]">{idx + 1}</td>
-                            {Object.entries(rec).map(([key, val]) => (
-                              <td key={key} className="px-2 py-1 border-b border-[#f0f0f0] whitespace-nowrap">
-                                <span className={val.confidence < 0.7 ? 'text-red-600' : val.confidence < 0.9 ? 'text-amber-600' : 'text-[#1a1a1a]'}>
-                                  {formatCellValue(key, val.value)}
-                                </span>
-                              </td>
-                            ))}
+                            {Object.entries(rec).map(([key, val]) => {
+                              const variance = jcrVarianceMap.get(`${idx}:${key}`);
+                              return (
+                                <td
+                                  key={key}
+                                  className={`px-2 py-1 border-b border-[#f0f0f0] whitespace-nowrap ${variance ? 'bg-purple-50' : ''}`}
+                                  title={variance ? `Parser: $${variance.parserValue.toLocaleString('en-US', { minimumFractionDigits: 2 })} | AI: $${variance.aiValue.toLocaleString('en-US', { minimumFractionDigits: 2 })} (delta: $${variance.delta.toFixed(2)})` : undefined}
+                                >
+                                  <span className={val.confidence < 0.7 ? 'text-red-600' : val.confidence < 0.9 ? 'text-amber-600' : 'text-[#1a1a1a]'}>
+                                    {formatCellValue(key, val.value)}
+                                  </span>
+                                  {variance && (
+                                    <span className="ml-1 text-[9px] text-purple-600 font-medium">
+                                      ({variance.delta > 0 ? (variance.aiValue > variance.parserValue ? '+' : '-') : ''}${variance.delta.toFixed(0)})
+                                    </span>
+                                  )}
+                                </td>
+                              );
+                            })}
                           </tr>
                         ))}
                       </tbody>
@@ -1477,6 +1697,7 @@ export default function PipelineReview() {
                 </button>
               </div>
             </div>
+            )}
           </div>
         </div>
       </div>
@@ -3697,13 +3918,20 @@ function DrivePathFolderView({
  * Detects CSV/spreadsheet data and renders it as a proper table.
  * Falls back to plain text for non-tabular content.
  */
-function SourceDocumentView({ text, fileName, fileUrl }: { text: string; fileName: string; fileUrl?: string | null }) {
+function SourceDocumentView({ text, fileName, fileUrl, storagePath }: { text: string; fileName: string; fileUrl?: string | null; storagePath?: string | null }) {
   const [viewMode, setViewMode] = useState<'pdf' | 'text'>('pdf');
 
-  // Check if this is a PDF from Google Drive
   const isPdf = fileName.match(/\.pdf$/i);
   const driveFileId = fileUrl?.startsWith('gdrive://') ? fileUrl.replace('gdrive://', '') : null;
-  const canShowPdf = isPdf && driveFileId;
+  const canShowDrivePdf = isPdf && driveFileId;
+  const canShowStoragePdf = isPdf && !driveFileId && storagePath;
+  const canShowPdf = canShowDrivePdf || canShowStoragePdf;
+
+  const pdfUrl = canShowDrivePdf
+    ? `/api/pipeline/pdf?fileId=${driveFileId}`
+    : canShowStoragePdf
+    ? `/api/pipeline/pdf-storage?path=${encodeURIComponent(storagePath)}`
+    : null;
 
   if (!text && !canShowPdf) {
     if (fileUrl) {
@@ -3748,7 +3976,7 @@ function SourceDocumentView({ text, fileName, fileUrl }: { text: string; fileNam
         {viewMode === 'pdf' ? (
           <div className="flex-1 w-full">
             <PdfViewer
-              url={`/api/pipeline/pdf?fileId=${driveFileId}`}
+              url={pdfUrl!}
               fileName={fileName}
             />
           </div>

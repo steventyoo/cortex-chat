@@ -68,10 +68,15 @@ export interface ParseResult {
  * Parse a file buffer into text, routing to the appropriate parser based on MIME type.
  * For PDFs and images, uses Claude's document/vision API for OCR.
  */
+export interface ParseOptions {
+  forceClaudeOcr?: boolean;
+}
+
 export async function parseFileBuffer(
   buffer: Buffer,
   mimeType: string,
-  _fileName?: string
+  _fileName?: string,
+  options?: ParseOptions
 ): Promise<ParseResult> {
   // Text files
   if (TEXT_TYPES.some((t) => mimeType.startsWith(t))) {
@@ -80,6 +85,12 @@ export async function parseFileBuffer(
 
   // PDF -> try unpdf first (local, fast), fall back to Claude for scanned docs
   if (PDF_TYPES.includes(mimeType)) {
+    if (options?.forceClaudeOcr) {
+      console.log(`[parseFileBuffer] forceClaudeOcr=true — skipping unpdf for better table fidelity`);
+      const base64 = buffer.toString('base64');
+      const text = await extractTextWithClaude(base64, 'application/pdf', 'pdf');
+      return { text, method: 'pdf-ocr' };
+    }
     const t0 = Date.now();
     try {
       const { text } = await pdfExtractText(new Uint8Array(buffer), { mergePages: true });

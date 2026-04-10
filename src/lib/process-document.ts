@@ -22,6 +22,11 @@ function shouldAlwaysProcess(fileName: string, folderPath?: string): boolean {
   return ALWAYS_PROCESS_PATTERNS.some(p => p.test(haystack));
 }
 
+function isJobCostReport(fileName: string, folderPath?: string): boolean {
+  const haystack = `${fileName} ${folderPath || ''}`;
+  return ALWAYS_PROCESS_PATTERNS.some(p => p.test(haystack));
+}
+
 function isPdf(mimeType: string, fileName: string): boolean {
   return mimeType === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf');
 }
@@ -148,20 +153,26 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         sourceText = content.text;
         console.log(`[process] Text extracted directly: ${sourceText.length} chars`);
       } else if (content.base64 && content.method === 'pdf') {
-        const pdfBuffer = rawBuffer || Buffer.from(content.base64, 'base64');
-        try {
-          const { text: localText } = await pdfExtractText(new Uint8Array(pdfBuffer), { mergePages: true });
-          const trimmed = (localText as string).trim();
-          if (trimmed.length > 100) {
-            sourceText = trimmed;
-            console.log(`[process] PDF text via unpdf: ${sourceText.length} chars`);
-          } else {
-            console.log(`[process] unpdf returned sparse text (${trimmed.length} chars), falling back to Claude OCR`);
+        const forceClaudeOcr = isJobCostReport(fileName, driveFolderPath);
+        if (forceClaudeOcr) {
+          console.log(`[process] JCR-pattern detected — using Claude OCR for better table fidelity`);
+          sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+        } else {
+          const pdfBuffer = rawBuffer || Buffer.from(content.base64, 'base64');
+          try {
+            const { text: localText } = await pdfExtractText(new Uint8Array(pdfBuffer), { mergePages: true });
+            const trimmed = (localText as string).trim();
+            if (trimmed.length > 100) {
+              sourceText = trimmed;
+              console.log(`[process] PDF text via unpdf: ${sourceText.length} chars`);
+            } else {
+              console.log(`[process] unpdf returned sparse text (${trimmed.length} chars), falling back to Claude OCR`);
+              sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+            }
+          } catch {
+            console.log(`[process] unpdf failed, falling back to Claude OCR`);
             sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
           }
-        } catch {
-          console.log(`[process] unpdf failed, falling back to Claude OCR`);
-          sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
         }
       } else if (content.base64 && content.method === 'image') {
         console.log(`[process] Image OCR via Claude`);
@@ -238,9 +249,10 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
 
     tStep = Date.now();
     try {
-      const result = await parseFileBuffer(fileBuffer, mimeType, fileName);
+      const forceOcr = isPdf(mimeType, fileName) && isJobCostReport(fileName);
+      const result = await parseFileBuffer(fileBuffer, mimeType, fileName, { forceClaudeOcr: forceOcr });
       sourceText = result.text;
-      console.log(`[process] File parsed: ${sourceText.length} chars`);
+      console.log(`[process] File parsed: ${sourceText.length} chars${forceOcr ? ' (Claude OCR forced for JCR)' : ''}`);
     } catch (err) {
       console.error(`[process] File parsing failed for ${recordId}:`, err);
       await markFailed(sb, recordId, 'text_extraction', err);
