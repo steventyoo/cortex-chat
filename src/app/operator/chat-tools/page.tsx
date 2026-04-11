@@ -31,6 +31,10 @@ interface Project {
   projectName: string;
 }
 
+const SYSTEM_TOOL_TYPES = new Set([
+  'sql_analytics', 'sandbox', 'calc_function', 'context_retrieval', 'field_catalog', 'project_overview',
+]);
+
 const TYPE_LABELS: Record<string, string> = {
   sql_query: 'SQL Query',
   rag_search: 'RAG Search',
@@ -321,7 +325,14 @@ export default function ChatToolsPage() {
                         />
                       </td>
                       <td className="px-3 py-2">
-                        <div className="font-medium text-[#1a1a1a]">{tool.display_name}</div>
+                        <div className="flex items-center">
+                          <span className="font-medium text-[#1a1a1a]">{tool.display_name}</span>
+                          {SYSTEM_TOOL_TYPES.has(tool.implementation_type) ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#f0f0f0] text-[#999] font-medium ml-2">System</span>
+                          ) : (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#eef6ff] text-[#5b8abf] font-medium ml-2">Custom</span>
+                          )}
+                        </div>
                         <div className="text-[10px] text-[#999] font-mono">{tool.tool_name}</div>
                       </td>
                       <td className="px-3 py-2">

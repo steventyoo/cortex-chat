@@ -80,8 +80,16 @@ function EditCardModal({
   const [skillsInvolved, setSkillsInvolved] = useState(card?.skills_involved?.join(', ') || '');
   const [businessLogic, setBusinessLogic] = useState(card?.business_logic || '');
   const [exampleQuestions, setExampleQuestions] = useState(card?.example_questions?.join('\n') || '');
+  const [availableSkills, setAvailableSkills] = useState<Array<{skill_id: string; display_name: string}>>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    fetch('/api/skills?status=active')
+      .then(r => r.json())
+      .then(data => setAvailableSkills((data.skills || []).map((s: Record<string, string>) => ({ skill_id: s.skill_id, display_name: s.display_name }))))
+      .catch(() => {});
+  }, []);
 
   const autoCardName = displayName
     .toLowerCase()
@@ -180,13 +188,44 @@ function EditCardModal({
           </div>
 
           <div>
-            <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Skills Involved (comma-separated skill_ids)</label>
-            <input
-              value={skillsInvolved}
-              onChange={e => setSkillsInvolved(e.target.value)}
-              className="mt-1 w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 focus:border-[#007aff]"
-              placeholder="change_order, job_cost_report"
-            />
+            <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Skills Involved</label>
+            <div className="mt-1 flex flex-wrap gap-1.5 min-h-[38px] p-2 rounded-lg border border-[#e0e0e0] focus-within:ring-2 focus-within:ring-[#007aff]/20 focus-within:border-[#007aff]">
+              {skillsInvolved.split(',').filter(s => s.trim()).map(sk => {
+                const id = sk.trim();
+                const skill = availableSkills.find(s => s.skill_id === id);
+                return (
+                  <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#eff6ff] text-[#1e40af] text-[12px] font-mono">
+                    {skill ? skill.display_name : id}
+                    <button
+                      type="button"
+                      onClick={() => setSkillsInvolved(skillsInvolved.split(',').map(s => s.trim()).filter(s => s && s !== id).join(', '))}
+                      className="text-[#1e40af]/50 hover:text-[#1e40af] ml-0.5"
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+              <select
+                value=""
+                onChange={e => {
+                  if (!e.target.value) return;
+                  const current = skillsInvolved.split(',').map(s => s.trim()).filter(Boolean);
+                  if (!current.includes(e.target.value)) {
+                    setSkillsInvolved([...current, e.target.value].join(', '));
+                  }
+                }}
+                className="text-[12px] text-[#999] bg-transparent border-none outline-none cursor-pointer min-w-[120px]"
+              >
+                <option value="">+ add skill...</option>
+                {availableSkills
+                  .filter(s => !skillsInvolved.split(',').map(x => x.trim()).includes(s.skill_id))
+                  .map(s => (
+                    <option key={s.skill_id} value={s.skill_id}>{s.display_name} ({s.skill_id})</option>
+                  ))
+                }
+              </select>
+            </div>
           </div>
 
           <div>
@@ -386,9 +425,9 @@ export default function OperatorContextCardsPage() {
                       {card.skills_involved.length > 0 && (
                         <div className="flex flex-wrap gap-1 mb-3">
                           {card.skills_involved.map((sk, i) => (
-                            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#eff6ff] text-[#1e40af] font-mono">
+                            <Link key={i} href={`/operator/skills/${sk}`} className="text-[10px] px-1.5 py-0.5 rounded-md bg-[#eff6ff] text-[#1e40af] font-mono hover:bg-[#dbeafe] transition-colors">
                               {sk}
-                            </span>
+                            </Link>
                           ))}
                         </div>
                       )}

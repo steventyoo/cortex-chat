@@ -4,6 +4,10 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useParams } from 'next/navigation';
 
+const SYSTEM_TOOL_TYPES = new Set([
+  'sql_analytics', 'sandbox', 'calc_function', 'context_retrieval', 'field_catalog', 'project_overview',
+]);
+
 interface SchemaField {
   name: string;
   type: string;
@@ -145,6 +149,8 @@ export default function ToolEditorPage() {
     setImplementationConfig({ ...implementationConfig, [key]: value });
   };
 
+  const isSystem = SYSTEM_TOOL_TYPES.has(implementationType);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-white">
@@ -159,6 +165,11 @@ export default function ToolEditorPage() {
       <OperatorNav />
 
       <div className="max-w-4xl mx-auto px-6 py-8">
+        {isSystem && (
+          <div className="mb-4 px-4 py-2 rounded-lg bg-[#f7f7f5] border border-[#e0e0e0] text-[13px] text-[#666]">
+            This is a system tool. Configuration is read-only — only activation status can be changed.
+          </div>
+        )}
         <div className="flex items-center gap-3 mb-6">
           <Link href="/operator/chat-tools" className="text-[13px] text-[#999] hover:text-[#666]">&larr; Back</Link>
           <div className="flex-1" />
@@ -168,7 +179,7 @@ export default function ToolEditorPage() {
           <button onClick={save} disabled={saving} className="px-4 py-1.5 rounded-lg text-[12px] font-medium bg-[#007aff] text-white hover:bg-[#0066dd] disabled:opacity-50">
             {saving ? 'Saving...' : 'Save'}
           </button>
-          <button onClick={deleteTool} className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-[#dc2626] hover:bg-[#fef2f2]">
+          <button onClick={deleteTool} className={`px-3 py-1.5 rounded-lg text-[12px] font-medium text-[#dc2626] hover:bg-[#fef2f2] ${isSystem ? 'hidden' : ''}`}>
             Delete
           </button>
         </div>
@@ -178,7 +189,7 @@ export default function ToolEditorPage() {
           <div className="border border-[#e8e8e8] rounded-lg p-4 space-y-3">
             <div>
               <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Display Name</label>
-              <input value={displayName} onChange={e => setDisplayName(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[14px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+              <input value={displayName} onChange={e => setDisplayName(e.target.value)} disabled={isSystem} className={`w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[14px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
             </div>
             <div>
               <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Tool Name (slug)</label>
@@ -186,7 +197,7 @@ export default function ToolEditorPage() {
             </div>
             <div>
               <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Description</label>
-              <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} className="w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 resize-none" />
+              <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} disabled={isSystem} className={`w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 resize-none ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
             </div>
           </div>
 
@@ -195,7 +206,7 @@ export default function ToolEditorPage() {
             <h3 className="text-[13px] font-semibold text-[#1a1a1a]">Implementation</h3>
             <div>
               <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Type</label>
-              <select value={implementationType} onChange={e => setImplementationType(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#007aff]/20">
+              <select value={implementationType} onChange={e => setImplementationType(e.target.value)} disabled={isSystem} className={`w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`}>
                 <option value="sql_query">SQL Query</option>
                 <option value="rag_search">RAG Search</option>
                 <option value="api_call">API Call</option>
@@ -207,19 +218,19 @@ export default function ToolEditorPage() {
               <div className="space-y-3">
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Table Name</label>
-                  <input value={String(implementationConfig.table || '')} onChange={e => updateConfig('table', e.target.value)} placeholder="e.g. job_costs" className="w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+                  <input value={String(implementationConfig.table || '')} onChange={e => updateConfig('table', e.target.value)} placeholder="e.g. job_costs" disabled={isSystem} className={`w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Select Columns</label>
-                  <input value={String(implementationConfig.select || '*')} onChange={e => updateConfig('select', e.target.value)} className="w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+                  <input value={String(implementationConfig.select || '*')} onChange={e => updateConfig('select', e.target.value)} disabled={isSystem} className={`w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Row Limit</label>
-                  <input type="number" value={Number(implementationConfig.limit || 50)} onChange={e => updateConfig('limit', Number(e.target.value))} className="w-32 mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+                  <input type="number" value={Number(implementationConfig.limit || 50)} onChange={e => updateConfig('limit', Number(e.target.value))} disabled={isSystem} className={`w-32 mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Query Template (for reference)</label>
-                  <input value={String(implementationConfig.query_template || '')} onChange={e => updateConfig('query_template', e.target.value)} placeholder="Optional SQL template" className="w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+                  <input value={String(implementationConfig.query_template || '')} onChange={e => updateConfig('query_template', e.target.value)} placeholder="Optional SQL template" disabled={isSystem} className={`w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
                 </div>
               </div>
             )}
@@ -228,15 +239,15 @@ export default function ToolEditorPage() {
               <div className="space-y-3">
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Skill ID Filter (optional)</label>
-                  <input value={String(implementationConfig.skill_id || '')} onChange={e => updateConfig('skill_id', e.target.value)} placeholder="e.g. change_order" className="w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+                  <input value={String(implementationConfig.skill_id || '')} onChange={e => updateConfig('skill_id', e.target.value)} placeholder="e.g. change_order" disabled={isSystem} className={`w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Similarity Threshold</label>
-                  <input type="number" step="0.05" min="0" max="1" value={Number(implementationConfig.similarity_threshold || 0.4)} onChange={e => updateConfig('similarity_threshold', Number(e.target.value))} className="w-32 mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+                  <input type="number" step="0.05" min="0" max="1" value={Number(implementationConfig.similarity_threshold || 0.4)} onChange={e => updateConfig('similarity_threshold', Number(e.target.value))} disabled={isSystem} className={`w-32 mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Max Results</label>
-                  <input type="number" value={Number(implementationConfig.match_count || 10)} onChange={e => updateConfig('match_count', Number(e.target.value))} className="w-32 mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+                  <input type="number" value={Number(implementationConfig.match_count || 10)} onChange={e => updateConfig('match_count', Number(e.target.value))} disabled={isSystem} className={`w-32 mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
                 </div>
               </div>
             )}
@@ -245,11 +256,11 @@ export default function ToolEditorPage() {
               <div className="space-y-3">
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Endpoint</label>
-                  <input value={String(implementationConfig.endpoint || '')} onChange={e => updateConfig('endpoint', e.target.value)} placeholder="/api/dashboard" className="w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
+                  <input value={String(implementationConfig.endpoint || '')} onChange={e => updateConfig('endpoint', e.target.value)} placeholder="/api/dashboard" disabled={isSystem} className={`w-full mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-[#999] uppercase tracking-wide">Method</label>
-                  <select value={String(implementationConfig.method || 'POST')} onChange={e => updateConfig('method', e.target.value)} className="mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#007aff]/20">
+                  <select value={String(implementationConfig.method || 'POST')} onChange={e => updateConfig('method', e.target.value)} disabled={isSystem} className={`mt-1 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] bg-white focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`}>
                     <option value="GET">GET</option>
                     <option value="POST">POST</option>
                   </select>
@@ -264,7 +275,8 @@ export default function ToolEditorPage() {
                   value={JSON.stringify(implementationConfig, null, 2)}
                   onChange={e => { try { setImplementationConfig(JSON.parse(e.target.value)); } catch { /* ignore parse errors while typing */ } }}
                   rows={8}
-                  className="w-full mt-2 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[12px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 resize-none"
+                  disabled={isSystem}
+                  className={`w-full mt-2 px-3 py-2 rounded-lg border border-[#e0e0e0] text-[12px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 resize-none ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`}
                 />
               </div>
             )}
@@ -274,7 +286,7 @@ export default function ToolEditorPage() {
           <div className="border border-[#e8e8e8] rounded-lg p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-[13px] font-semibold text-[#1a1a1a]">Input Schema</h3>
-              <button onClick={addField} className="text-[12px] text-[#007aff] hover:text-[#0066dd] font-medium">+ Add Field</button>
+              {!isSystem && <button onClick={addField} className="text-[12px] text-[#007aff] hover:text-[#0066dd] font-medium">+ Add Field</button>}
             </div>
             <p className="text-[11px] text-[#999]">Define the parameters Claude will pass when invoking this tool.</p>
 
@@ -284,18 +296,18 @@ export default function ToolEditorPage() {
               <div className="space-y-2">
                 {schemaFields.map((f, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <input value={f.name} onChange={e => updateField(i, { name: e.target.value })} placeholder="field_name" className="flex-1 px-2 py-1.5 rounded border border-[#e0e0e0] text-[12px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
-                    <select value={f.type} onChange={e => updateField(i, { type: e.target.value })} className="px-2 py-1.5 rounded border border-[#e0e0e0] text-[12px] bg-white focus:outline-none">
+                    <input value={f.name} onChange={e => updateField(i, { name: e.target.value })} placeholder="field_name" disabled={isSystem} className={`flex-1 px-2 py-1.5 rounded border border-[#e0e0e0] text-[12px] font-mono focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
+                    <select value={f.type} onChange={e => updateField(i, { type: e.target.value })} disabled={isSystem} className={`px-2 py-1.5 rounded border border-[#e0e0e0] text-[12px] bg-white focus:outline-none ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`}>
                       <option value="string">string</option>
                       <option value="number">number</option>
                       <option value="boolean">boolean</option>
                     </select>
                     <label className="flex items-center gap-1 text-[11px] text-[#666]">
-                      <input type="checkbox" checked={f.required} onChange={e => updateField(i, { required: e.target.checked })} className="rounded" />
+                      <input type="checkbox" checked={f.required} onChange={e => updateField(i, { required: e.target.checked })} disabled={isSystem} className="rounded" />
                       Req
                     </label>
-                    <input value={f.description} onChange={e => updateField(i, { description: e.target.value })} placeholder="Description..." className="flex-[2] px-2 py-1.5 rounded border border-[#e0e0e0] text-[12px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20" />
-                    <button onClick={() => removeField(i)} className="text-[#dc2626] text-[11px] hover:bg-[#fef2f2] px-1.5 py-1 rounded">x</button>
+                    <input value={f.description} onChange={e => updateField(i, { description: e.target.value })} placeholder="Description..." disabled={isSystem} className={`flex-[2] px-2 py-1.5 rounded border border-[#e0e0e0] text-[12px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 ${isSystem ? 'bg-[#fafafa] text-[#999] cursor-not-allowed' : ''}`} />
+                    {!isSystem && <button onClick={() => removeField(i)} className="text-[#dc2626] text-[11px] hover:bg-[#fef2f2] px-1.5 py-1 rounded">x</button>}
                   </div>
                 ))}
               </div>

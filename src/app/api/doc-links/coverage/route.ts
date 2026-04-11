@@ -10,24 +10,28 @@ const CHAIN_GROUPS: Record<string, string[]> = {
   'Estimating Feedback': [
     'estimate_vs_production', 'estimate_vs_co', 'subbid_vs_co',
     'subbid_vs_rfi', 'estimate_vs_jcr',
+    'estimate_to_subbid', 'rfi_to_estimate', 'jcr_to_estimate',
   ],
   'JCR Hub': [
     'co_absorption_jcr', 'production_vs_jcr', 'daily_report_vs_jcr',
-    'payapp_vs_jcr',
+    'payapp_vs_jcr', 'jcr_to_production',
   ],
   'Safety & Quality': [
     'inspection_to_daily', 'inspection_to_production',
     'inspection_to_punchlist',
+    'inspection_to_rfi', 'punchlist_to_retention', 'warranty_to_production',
   ],
   'Contract & Admin': [
     'contract_clause_to_co', 'contract_to_submittal',
     'submittal_generates_rfi', 'meeting_refs_rfi_co', 'meeting_refs_co',
+    'contract_to_payment_terms', 'contract_to_backcharge',
   ],
   'Design Changes': [
     'ccd_to_co', 'bulletin_to_asi',
   ],
   'Productivity': [
     'rfi_impacts_production', 'weather_impacts_production',
+    'daily_to_production', 'rfi_to_daily',
   ],
   'Sub Performance': [
     'subbid_vs_punchlist',
