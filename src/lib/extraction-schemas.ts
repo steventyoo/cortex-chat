@@ -88,11 +88,12 @@ export function buildClassificationTool(
 
 export function buildExtractionTool(
   skill: DocumentSkill,
+  fields: FieldDefinition[],
 ): Anthropic.Messages.Tool {
   const fieldProperties: Record<string, unknown> = {};
   const seen = new Set<string>();
 
-  for (const fd of skill.fieldDefinitions) {
+  for (const fd of fields) {
     if (seen.has(fd.name)) {
       console.warn(`[schema] Skipping duplicate field "${fd.name}" in skill ${skill.skillId}`);
       continue;
@@ -124,7 +125,7 @@ export function buildExtractionTool(
   if (skill.multiRecordConfig) {
     const recordFields: Record<string, unknown> = {};
     for (const fieldName of skill.multiRecordConfig.fields) {
-      const fd = skill.fieldDefinitions.find(f => f.name === fieldName);
+      const fd = fields.find(f => f.name === fieldName);
       recordFields[fieldName] = fd
         ? fieldTypeToJsonSchema(fd)
         : { ...EXTRACTED_FIELD_JSON_SCHEMA, description: fieldName };
