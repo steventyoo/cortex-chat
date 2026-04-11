@@ -1,7 +1,17 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import type { FieldDef } from '@/app/operator/skills/[skillId]/page';
+import { useState, useRef, useEffect, useCallback } from 'react';
+
+interface FieldDef {
+  name: string;
+  type: string;
+  tier: number;
+  required: boolean;
+  description: string;
+  options?: string[];
+  disambiguationRules?: string;
+  importance?: string;
+}
 
 const IMPORTANCE_COLORS: Record<string, string> = {
   P: 'bg-[#fecaca] text-[#991b1b]',
@@ -12,7 +22,6 @@ const IMPORTANCE_COLORS: Record<string, string> = {
 
 interface Props {
   skillId: string;
-  fields: FieldDef[];
   systemPrompt: string;
   extractionInstructions: string;
   sampleExtractions: Array<{ inputSnippet: string; expectedOutput: Record<string, unknown> }>;
@@ -34,8 +43,9 @@ interface TestResult {
 }
 
 export default function SkillTestTab({
-  skillId, fields, systemPrompt, extractionInstructions, sampleExtractions, referenceDocIds,
+  skillId, systemPrompt, extractionInstructions, sampleExtractions, referenceDocIds,
 }: Props) {
+  const [fields, setFields] = useState<FieldDef[]>([]);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
   const [error, setError] = useState('');
@@ -44,6 +54,31 @@ export default function SkillTestTab({
   const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'original' | 'text'>('original');
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const fetchCatalogFields = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/skills/${skillId}/fields`);
+      const data = await res.json();
+      const rows = data.fields || [];
+      setFields(rows.map((sf: Record<string, unknown>) => {
+        const catalog = sf.field_catalog as Record<string, unknown> | null;
+        const optionsRaw = sf.options as string[] | null;
+        const catalogOptions = catalog?.enum_options as string[] | null;
+        return {
+          name: (sf.display_override as string) || (catalog?.display_name as string) || '',
+          type: (catalog?.field_type as string) || 'string',
+          tier: (sf.tier as number) ?? 1,
+          required: (sf.required as boolean) ?? false,
+          description: (sf.description as string) || (catalog?.description as string) || '',
+          options: optionsRaw && optionsRaw.length > 0 ? optionsRaw : catalogOptions && catalogOptions.length > 0 ? catalogOptions : undefined,
+          disambiguationRules: (sf.extraction_hint as string) || (sf.disambiguation_rules as string) || undefined,
+          importance: sf.importance as string | undefined,
+        };
+      }));
+    } catch { /* ignore */ }
+  }, [skillId]);
+
+  useEffect(() => { fetchCatalogFields(); }, [fetchCatalogFields]);
 
   const runTest = async (file: File) => {
     setRunning(true);

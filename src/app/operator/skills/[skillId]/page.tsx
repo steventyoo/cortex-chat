@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import SkillFieldsTab from '@/components/operator/SkillFieldsTab';
 import SkillCatalogFieldsTab from '@/components/operator/SkillCatalogFieldsTab';
 import SkillPromptTab from '@/components/operator/SkillPromptTab';
 import SkillClassifierTab from '@/components/operator/SkillClassifierTab';
@@ -41,11 +40,10 @@ export interface SkillData {
   updated_at: string;
 }
 
-type TabId = 'fields' | 'catalog' | 'prompt' | 'classifier' | 'references' | 'test' | 'versions' | 'orgs';
+type TabId = 'fields' | 'prompt' | 'classifier' | 'references' | 'test' | 'versions' | 'orgs';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'fields', label: 'Fields' },
-  { id: 'catalog', label: 'Catalog' },
   { id: 'prompt', label: 'Prompt & Examples' },
   { id: 'classifier', label: 'Classifier' },
   { id: 'references', label: 'Reference Docs' },
@@ -66,7 +64,6 @@ export default function SkillDetailPage() {
   const [dirty, setDirty] = useState(false);
 
   // Local editable state
-  const [fields, setFields] = useState<FieldDef[]>([]);
   const [systemPrompt, setSystemPrompt] = useState('');
   const [extractionInstructions, setExtractionInstructions] = useState('');
   const [classifierHints, setClassifierHints] = useState<{ description: string; keywords: string[] }>({ description: '', keywords: [] });
@@ -81,7 +78,6 @@ export default function SkillDetailPage() {
       const data = await res.json();
       const s = data.skill as SkillData;
       setSkill(s);
-      setFields(s.field_definitions || []);
       setSystemPrompt(s.system_prompt || '');
       setExtractionInstructions(s.extraction_instructions || '');
       setClassifierHints(s.classifier_hints || { description: '', keywords: [] });
@@ -102,7 +98,6 @@ export default function SkillDetailPage() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fieldDefinitions: fields,
           systemPrompt,
           extractionInstructions,
           classifierHints,
@@ -194,9 +189,6 @@ export default function SkillDetailPage() {
       {/* Tab Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
         {activeTab === 'fields' && (
-          <SkillFieldsTab fields={fields} setFields={setFields} markDirty={markDirty} />
-        )}
-        {activeTab === 'catalog' && (
           <SkillCatalogFieldsTab skillId={skillId} />
         )}
         {activeTab === 'prompt' && (
@@ -227,7 +219,6 @@ export default function SkillDetailPage() {
         {activeTab === 'test' && (
           <SkillTestTab
             skillId={skillId}
-            fields={fields}
             systemPrompt={systemPrompt}
             extractionInstructions={extractionInstructions}
             sampleExtractions={sampleExtractions}

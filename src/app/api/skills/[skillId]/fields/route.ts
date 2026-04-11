@@ -25,6 +25,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       tier,
       required,
       importance,
+      description,
+      options,
+      example,
+      extraction_hint,
       disambiguation_rules,
       sort_order,
       field_catalog (
@@ -61,6 +65,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     tier?: number;
     required?: boolean;
     importance?: string;
+    description?: string;
+    options?: string[];
+    example?: string;
+    extractionHint?: string;
     disambiguationRules?: string;
   };
 
@@ -94,6 +102,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       tier: body.tier ?? 1,
       required: body.required ?? false,
       importance: body.importance || 'E',
+      description: body.description || '',
+      options: body.options || null,
+      example: body.example || '',
+      extraction_hint: body.extractionHint || null,
       disambiguation_rules: body.disambiguationRules || null,
       sort_order: nextOrder,
     })
@@ -105,6 +117,10 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       tier,
       required,
       importance,
+      description,
+      options,
+      example,
+      extraction_hint,
       disambiguation_rules,
       sort_order,
       field_catalog (
@@ -127,6 +143,93 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   }
 
   return Response.json({ field: data }, { status: 201 });
+}
+
+export async function PATCH(request: NextRequest, { params }: RouteParams) {
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token || !(await validateUserSession(token))) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { skillId } = await params;
+
+  let body: {
+    id: string;
+    displayOverride?: string | null;
+    tier?: number;
+    required?: boolean;
+    importance?: string | null;
+    description?: string;
+    options?: string[] | null;
+    example?: string;
+    extractionHint?: string | null;
+    disambiguationRules?: string | null;
+    sortOrder?: number;
+  };
+
+  try {
+    body = await request.json();
+    if (!body.id) {
+      return Response.json({ error: 'id is required' }, { status: 400 });
+    }
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 });
+  }
+
+  const sb = getSupabase();
+
+  const updateFields: Record<string, unknown> = {};
+  if (body.displayOverride !== undefined) updateFields.display_override = body.displayOverride;
+  if (body.tier !== undefined) updateFields.tier = body.tier;
+  if (body.required !== undefined) updateFields.required = body.required;
+  if (body.importance !== undefined) updateFields.importance = body.importance;
+  if (body.description !== undefined) updateFields.description = body.description;
+  if (body.options !== undefined) updateFields.options = body.options;
+  if (body.example !== undefined) updateFields.example = body.example;
+  if (body.extractionHint !== undefined) updateFields.extraction_hint = body.extractionHint;
+  if (body.disambiguationRules !== undefined) updateFields.disambiguation_rules = body.disambiguationRules;
+  if (body.sortOrder !== undefined) updateFields.sort_order = body.sortOrder;
+
+  if (Object.keys(updateFields).length === 0) {
+    return Response.json({ error: 'No fields to update' }, { status: 400 });
+  }
+
+  const { data, error } = await sb
+    .from('skill_fields')
+    .update(updateFields)
+    .eq('id', body.id)
+    .eq('skill_id', skillId)
+    .select(`
+      id,
+      skill_id,
+      field_id,
+      display_override,
+      tier,
+      required,
+      importance,
+      description,
+      options,
+      example,
+      extraction_hint,
+      disambiguation_rules,
+      sort_order,
+      field_catalog (
+        id,
+        canonical_name,
+        display_name,
+        field_type,
+        category,
+        description,
+        enum_options
+      )
+    `)
+    .single();
+
+  if (error) {
+    return Response.json({ error: error.message }, { status: 500 });
+  }
+
+  return Response.json({ field: data });
 }
 
 export async function DELETE(request: NextRequest, { params }: RouteParams) {

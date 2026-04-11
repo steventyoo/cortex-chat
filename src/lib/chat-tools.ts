@@ -414,14 +414,6 @@ async function executeSandboxCode(
 
 /* ── NEW: Field Catalog executor ─────────────────────────────── */
 
-interface FieldDef {
-  name: string;
-  type: string;
-  description?: string;
-  required?: boolean;
-  importance?: string;
-}
-
 async function executeFieldCatalog(
   _config: Record<string, unknown>,
   input: Record<string, unknown>,
@@ -430,29 +422,56 @@ async function executeFieldCatalog(
   const skillIds = (input.skill_ids || []) as string[];
   const sb = getSupabase();
 
-  let query = sb
+  let skillQuery = sb
     .from('document_skills')
-    .select('skill_id, display_name, field_definitions, classifier_hints')
+    .select('skill_id, display_name, classifier_hints')
     .eq('status', 'active');
 
   if (skillIds.length > 0) {
-    query = query.in('skill_id', skillIds);
+    skillQuery = skillQuery.in('skill_id', skillIds);
   }
 
-  const { data, error } = await query;
-  if (error) return { result: null, error: error.message };
+  const { data: skillData, error: skillErr } = await skillQuery;
+  if (skillErr) return { result: null, error: skillErr.message };
 
-  const skills = (data || []) as Record<string, unknown>[];
+  const skills = (skillData || []) as Record<string, unknown>[];
 
   const catalog = await Promise.all(skills.map(async (s) => {
     const skillId = s.skill_id as string;
-    const fields = ((s.field_definitions || []) as FieldDef[]).map((f: FieldDef) => ({
-      name: f.name,
-      type: f.type,
-      description: f.description || '',
-      required: f.required || false,
-      importance: f.importance || 'S',
-    }));
+
+    // Read from skill_fields JOIN field_catalog (single source of truth)
+    const { data: sfRows } = await sb
+      .from('skill_fields')
+      .select(`
+        display_override,
+        tier,
+        required,
+        importance,
+        description,
+        options,
+        extraction_hint,
+        field_catalog (
+          canonical_name,
+          display_name,
+          field_type,
+          description
+        )
+      `)
+      .eq('skill_id', skillId)
+      .order('sort_order');
+
+    const fields = (sfRows || []).map((row: Record<string, unknown>) => {
+      const catRaw = row.field_catalog as Record<string, unknown> | Record<string, unknown>[] | null;
+      const cat = Array.isArray(catRaw) ? catRaw[0] : catRaw;
+      return {
+        name: (row.display_override as string) || (cat?.display_name as string) || '',
+        type: (cat?.field_type as string) || 'string',
+        description: (row.description as string) || (cat?.description as string) || '',
+        required: (row.required as boolean) || false,
+        importance: (row.importance as string) || 'S',
+        canonical: (cat?.canonical_name as string) || '',
+      };
+    });
 
     let actual_fields: { field_name: string; record_count: number; sample_value: string }[] = [];
     try {

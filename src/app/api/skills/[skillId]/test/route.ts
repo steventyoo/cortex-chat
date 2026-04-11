@@ -105,7 +105,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   }
 
   // Build extraction prompt
-  let extractionPrompt = buildSkillPrompt(tempSkill, sourceText);
+  const testFields = tempSkill.fieldDefinitions;
+  let extractionPrompt = buildSkillPrompt(tempSkill, testFields, sourceText);
 
   if (overrides.extractionInstructions) {
     extractionPrompt = `## Additional Instructions\n${overrides.extractionInstructions}\n\n${extractionPrompt}`;
@@ -119,8 +120,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   const tExtractStart = Date.now();
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const isTyped = tempSkill.fieldDefinitions.length > 0;
-    const tool = isTyped ? buildExtractionTool(tempSkill) : buildGeneralExtractionTool();
+    const isTyped = testFields.length > 0;
+    const tool = isTyped ? buildExtractionTool(tempSkill, testFields) : buildGeneralExtractionTool();
 
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -166,7 +167,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    for (const fd of tempSkill.fieldDefinitions) {
+    for (const fd of testFields) {
       if (fd.required && !(fd.name in extraction.fields)) {
         flags.push({ field: fd.name, issue: 'Required field not returned', severity: 'warning' });
       }
