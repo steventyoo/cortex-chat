@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import SkillFieldsTab from '@/components/operator/SkillFieldsTab';
+import SkillCatalogFieldsTab from '@/components/operator/SkillCatalogFieldsTab';
 import SkillPromptTab from '@/components/operator/SkillPromptTab';
 import SkillClassifierTab from '@/components/operator/SkillClassifierTab';
 import SkillReferencesTab from '@/components/operator/SkillReferencesTab';
@@ -40,10 +41,11 @@ export interface SkillData {
   updated_at: string;
 }
 
-type TabId = 'fields' | 'prompt' | 'classifier' | 'references' | 'test' | 'versions' | 'orgs';
+type TabId = 'fields' | 'catalog' | 'prompt' | 'classifier' | 'references' | 'test' | 'versions' | 'orgs';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'fields', label: 'Fields' },
+  { id: 'catalog', label: 'Catalog' },
   { id: 'prompt', label: 'Prompt & Examples' },
   { id: 'classifier', label: 'Classifier' },
   { id: 'references', label: 'Reference Docs' },
@@ -193,6 +195,9 @@ export default function SkillDetailPage() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         {activeTab === 'fields' && (
           <SkillFieldsTab fields={fields} setFields={setFields} markDirty={markDirty} />
+        )}
+        {activeTab === 'catalog' && (
+          <SkillCatalogFieldsTab skillId={skillId} />
         )}
         {activeTab === 'prompt' && (
           <SkillPromptTab

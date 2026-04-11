@@ -15,8 +15,10 @@ function OperatorNav() {
   const pathname = usePathname();
   const tabs = [
     { label: 'Skills', href: '/operator/skills' },
+    { label: 'Field Catalog', href: '/operator/fields' },
     { label: 'Doc Links', href: '/operator/doc-links' },
     { label: 'Chat Tools', href: '/operator/chat-tools' },
+    { label: 'Context Cards', href: '/operator/context-cards' },
   ];
   return (
     <nav className="border-b border-[#e8e8e8] bg-[#fafafa]">

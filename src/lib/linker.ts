@@ -36,6 +36,64 @@ export interface LinkResult {
   candidates: LinkCandidate[];
 }
 
+// ── Field Catalog Cache ───────────────────────────────────────
+// Maps (skillId, canonicalName) → display_override or display_name
+// so the linker can resolve match_fields to exact extracted field names.
+
+interface FieldMapping {
+  canonicalName: string;
+  displayOverride: string | null;
+  catalogDisplayName: string;
+}
+
+let _fieldMapCache: Map<string, FieldMapping[]> | null = null;
+let _fieldMapCacheTime = 0;
+const FIELD_MAP_TTL = 5 * 60 * 1000;
+
+async function getFieldMap(): Promise<Map<string, FieldMapping[]>> {
+  const now = Date.now();
+  if (_fieldMapCache && now - _fieldMapCacheTime < FIELD_MAP_TTL) {
+    return _fieldMapCache;
+  }
+
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('skill_fields')
+    .select(`
+      skill_id,
+      display_override,
+      field_catalog (
+        canonical_name,
+        display_name
+      )
+    `);
+
+  const map = new Map<string, FieldMapping[]>();
+
+  if (!error && data) {
+    for (const row of data) {
+      const skillId = row.skill_id as string;
+      const catalogArr = row.field_catalog as unknown as Array<{ canonical_name: string; display_name: string }> | { canonical_name: string; display_name: string } | null;
+      const catalog = Array.isArray(catalogArr) ? catalogArr[0] : catalogArr;
+      if (!catalog) continue;
+
+      const existing = map.get(skillId) || [];
+      existing.push({
+        canonicalName: catalog.canonical_name,
+        displayOverride: row.display_override as string | null,
+        catalogDisplayName: catalog.display_name,
+      });
+      map.set(skillId, existing);
+    }
+  }
+
+  _fieldMapCache = map;
+  _fieldMapCacheTime = now;
+  return map;
+}
+
+// ── Match Helpers ─────────────────────────────────────────────
+
 function normalizeValue(val: string | number | null | undefined): string {
   if (val == null) return '';
   return String(val).toLowerCase().trim().replace(/[,\s]+/g, ' ');
@@ -73,7 +131,7 @@ function numericMatch(a: number | null, b: number | null): number {
   const max = Math.max(Math.abs(a), Math.abs(b));
   if (max === 0) return 1.0;
   const ratio = 1 - diff / max;
-  return ratio > 0.95 ? ratio : 0;
+  return ratio > 0.9 ? ratio : 0;
 }
 
 function dateMatch(a: string, b: string): number {
@@ -88,18 +146,52 @@ function dateMatch(a: string, b: string): number {
   return 0;
 }
 
-function getFieldValue(doc: PipelineDoc, fieldHint: string): string | number | null {
+// ── Catalog-Aware Field Resolution ────────────────────────────
+
+/**
+ * Resolve a canonical match_field name to the actual value in a document's
+ * extracted_data, using the field catalog for deterministic mapping.
+ *
+ * Lookup order:
+ * 1. Catalog: canonical_name → display_override or display_name → exact field key
+ * 2. Fallback: substring matching on field keys (for uncatalogued fields)
+ */
+function getFieldValue(
+  doc: PipelineDoc,
+  fieldHint: string,
+  fieldMap: Map<string, FieldMapping[]>,
+): string | number | null {
   const hint = fieldHint.toLowerCase();
 
+  // 1. Catalog-based resolution: look up the exact field name for this skill
+  const skillMappings = fieldMap.get(doc.skillId);
+  if (skillMappings) {
+    const mapping = skillMappings.find(m => m.canonicalName === hint);
+    if (mapping) {
+      const displayName = mapping.displayOverride || mapping.catalogDisplayName;
+      // Try exact match first
+      const exactVal = doc.fields[displayName];
+      if (exactVal !== undefined) return exactVal.value;
+
+      // Try case-insensitive match
+      for (const [key, val] of Object.entries(doc.fields)) {
+        if (key.toLowerCase() === displayName.toLowerCase()) return val.value;
+      }
+    }
+  }
+
+  // 2. Fallback: direct key match
   for (const [key, val] of Object.entries(doc.fields)) {
     if (key.toLowerCase() === hint) return val.value;
   }
 
+  // 3. Fallback: substring match
   for (const [key, val] of Object.entries(doc.fields)) {
     const lower = key.toLowerCase();
     if (lower.includes(hint) || hint.includes(lower)) return val.value;
   }
 
+  // 4. Legacy alias fallback for any fields not yet in catalog
   const ALIASES: Record<string, string[]> = {
     cost_code: ['cost code', 'line item number', 'cost_code'],
     csi_division: ['csi division', 'csi_division', 'division'],
@@ -123,18 +215,21 @@ function getFieldValue(doc: PipelineDoc, fieldHint: string): string | number | n
   return null;
 }
 
+// ── Scoring ───────────────────────────────────────────────────
+
 function scoreFieldMatch(
   source: PipelineDoc,
   target: PipelineDoc,
-  matchFields: string[]
+  matchFields: string[],
+  fieldMap: Map<string, FieldMapping[]>,
 ): { totalScore: number; matchedOn: Record<string, { sourceValue: string; targetValue: string; score: number }> } {
   const matchedOn: Record<string, { sourceValue: string; targetValue: string; score: number }> = {};
   let totalScore = 0;
   let fieldsChecked = 0;
 
   for (const field of matchFields) {
-    const sourceVal = getFieldValue(source, field);
-    const targetVal = getFieldValue(target, field);
+    const sourceVal = getFieldValue(source, field, fieldMap);
+    const targetVal = getFieldValue(target, field, fieldMap);
 
     if (sourceVal == null && targetVal == null) continue;
     fieldsChecked++;
@@ -175,12 +270,17 @@ function scoreFieldMatch(
   return { totalScore: normalizedScore, matchedOn };
 }
 
+// ── Main Entry Point ──────────────────────────────────────────
+
 export async function runDocumentLinking(
   orgId: string,
   projectId?: string | null
 ): Promise<LinkResult> {
   const sb = getSupabase();
   const result: LinkResult = { linksCreated: 0, linksSkipped: 0, errors: [], candidates: [] };
+
+  // Load field catalog mappings
+  const fieldMap = await getFieldMap();
 
   const { data: linkTypes } = await sb
     .from('document_link_types')
@@ -262,7 +362,7 @@ export async function runDocumentLinking(
       for (const target of targetDocs) {
         if (source.id === target.id) continue;
 
-        const { totalScore, matchedOn } = scoreFieldMatch(source, target, lt.matchFields);
+        const { totalScore, matchedOn } = scoreFieldMatch(source, target, lt.matchFields, fieldMap);
 
         if (totalScore >= MIN_CONFIDENCE && Object.keys(matchedOn).length > 0) {
           result.candidates.push({
