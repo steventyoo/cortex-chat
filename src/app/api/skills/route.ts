@@ -123,5 +123,60 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: error.message }, { status: 500 });
   }
 
+  // Sync field definitions to skill_fields (catalog-based)
+  if (body.fieldDefinitions.length > 0) {
+    for (let i = 0; i < body.fieldDefinitions.length; i++) {
+      const fd = body.fieldDefinitions[i];
+      const canonical = fd.name
+        .replace(/[^a-zA-Z0-9\s]/g, '')
+        .replace(/\s+/g, '_')
+        .toLowerCase()
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
+
+      // Find or create catalog entry
+      let catalogId: string | null = null;
+      const { data: existing } = await sb
+        .from('field_catalog')
+        .select('id')
+        .eq('canonical_name', canonical)
+        .single();
+
+      if (existing) {
+        catalogId = existing.id;
+      } else {
+        const { data: created } = await sb
+          .from('field_catalog')
+          .insert({
+            canonical_name: canonical,
+            display_name: fd.name,
+            field_type: fd.type || 'string',
+            category: 'general',
+            description: fd.description || '',
+            enum_options: fd.options || null,
+          })
+          .select('id')
+          .single();
+        catalogId = created?.id ?? null;
+      }
+
+      if (catalogId) {
+        await sb.from('skill_fields').insert({
+          skill_id: skillId,
+          field_id: catalogId,
+          display_override: fd.name,
+          tier: fd.tier ?? 1,
+          required: fd.required ?? false,
+          importance: fd.importance || null,
+          description: fd.description || '',
+          options: fd.options || null,
+          extraction_hint: fd.disambiguationRules || null,
+          disambiguation_rules: fd.disambiguationRules || null,
+          sort_order: i + 1,
+        });
+      }
+    }
+  }
+
   return Response.json({ skill: data }, { status: 201 });
 }

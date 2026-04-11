@@ -91,6 +91,7 @@ function OperatorNav() {
   const pathname = usePathname();
   const tabs = [
     { label: 'Skills', href: '/operator/skills' },
+    { label: 'Field Catalog', href: '/operator/fields' },
     { label: 'Doc Links', href: '/operator/doc-links' },
     { label: 'Chat Tools', href: '/operator/chat-tools' },
     { label: 'Context Cards', href: '/operator/context-cards' },
@@ -384,11 +385,15 @@ function ChainsTab() {
                         lt.status === 'missing' ? 'bg-[#fff8f8]' : ''
                       }`}>
                         <td className="px-3 py-2 font-medium text-[#1a1a1a] whitespace-nowrap">
-                          {SKILL_LABELS[lt.sourceSkill] || lt.sourceSkill}
+                          <Link href={`/operator/skills/${lt.sourceSkill}`} className="hover:underline">
+                            {SKILL_LABELS[lt.sourceSkill] || lt.sourceSkill}
+                          </Link>
                         </td>
                         <td className="px-2 py-2 text-center text-[#ccc]">→</td>
                         <td className="px-3 py-2 font-medium text-[#1a1a1a] whitespace-nowrap">
-                          {SKILL_LABELS[lt.targetSkill] || lt.targetSkill}
+                          <Link href={`/operator/skills/${lt.targetSkill}`} className="hover:underline">
+                            {SKILL_LABELS[lt.targetSkill] || lt.targetSkill}
+                          </Link>
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-[#666]">{lt.sourceDocs}</td>
                         <td className="px-3 py-2 text-right font-mono text-[#666]">{lt.targetDocs}</td>
@@ -640,11 +645,15 @@ export default function DocLinksPage() {
                             />
                           </td>
                           <td className="px-2 py-1.5 font-medium text-[#1a1a1a] whitespace-nowrap">
-                            {SKILL_LABELS[lt.source_skill] || lt.source_skill}
+                            <Link href={`/operator/skills/${lt.source_skill}`} className="hover:underline">
+                              {SKILL_LABELS[lt.source_skill] || lt.source_skill}
+                            </Link>
                           </td>
                           <td className="px-2 py-1.5 text-center text-[#ccc]">→</td>
                           <td className="px-2 py-1.5 font-medium text-[#1a1a1a] whitespace-nowrap">
-                            {SKILL_LABELS[lt.target_skill] || lt.target_skill}
+                            <Link href={`/operator/skills/${lt.target_skill}`} className="hover:underline">
+                              {SKILL_LABELS[lt.target_skill] || lt.target_skill}
+                            </Link>
                           </td>
                           <td className="px-2 py-1.5">
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${

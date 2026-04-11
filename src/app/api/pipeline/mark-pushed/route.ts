@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { getSupabase } from '@/lib/supabase';
+import { runDocumentLinking } from '@/lib/linker';
 
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
@@ -30,6 +31,17 @@ export async function POST(request: NextRequest) {
       console.error('Supabase update error:', error.message);
       return Response.json({ error: 'Failed to update record' }, { status: 500 });
     }
+
+    const { data: record } = await sb
+      .from('pipeline_log')
+      .select('project_id')
+      .eq('id', recordId)
+      .single();
+
+    // Auto-link after push (non-blocking)
+    runDocumentLinking(session.orgId, record?.project_id ?? null).catch(err => {
+      console.error('[auto-link] Failed after push:', err);
+    });
 
     return Response.json({ success: true, recordId, status: 'pushed' });
   } catch (err) {

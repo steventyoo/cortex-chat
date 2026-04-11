@@ -87,6 +87,7 @@ let _skillsCache: DocumentSkill[] | null = null;
 let _skillsCacheTime = 0;
 
 const _orgAliasCache = new Map<string, { data: Map<string, string[]>; time: number }>();
+const _skillFieldDefsCache = new Map<string, { data: FieldDefinition[]; time: number }>();
 
 function mapRowToSkill(row: Record<string, unknown>): DocumentSkill {
   return {
@@ -132,6 +133,91 @@ export async function listActiveSkills(): Promise<DocumentSkill[]> {
 export async function getSkill(skillId: string): Promise<DocumentSkill | null> {
   const skills = await listActiveSkills();
   return skills.find(s => s.skillId === skillId) || null;
+}
+
+/**
+ * Assembles FieldDefinition[] from skill_fields JOIN field_catalog.
+ * This is the single source of truth for what fields a skill should extract.
+ * Falls back to skill.fieldDefinitions (legacy JSONB) if no catalog rows exist.
+ */
+export async function getSkillFieldDefinitions(skillId: string): Promise<FieldDefinition[]> {
+  const now = Date.now();
+  const cached = _skillFieldDefsCache.get(skillId);
+  if (cached && now - cached.time < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('skill_fields')
+    .select(`
+      display_override,
+      tier,
+      required,
+      importance,
+      description,
+      options,
+      extraction_hint,
+      disambiguation_rules,
+      sort_order,
+      field_catalog (
+        canonical_name,
+        display_name,
+        field_type,
+        category,
+        description,
+        enum_options
+      )
+    `)
+    .eq('skill_id', skillId)
+    .order('sort_order');
+
+  if (error || !data || data.length === 0) {
+    const skill = await getSkill(skillId);
+    return skill?.fieldDefinitions || [];
+  }
+
+  const fields: FieldDefinition[] = [];
+  for (const row of data) {
+    const catalogRaw = row.field_catalog as unknown;
+    const catalog = Array.isArray(catalogRaw) ? catalogRaw[0] : catalogRaw;
+    if (!catalog) continue;
+
+    const cat = catalog as {
+      canonical_name: string;
+      display_name: string;
+      field_type: string;
+      description: string;
+      enum_options: string[] | null;
+    };
+
+    const name = row.display_override || cat.display_name;
+    const fieldType = (cat.field_type || 'string') as FieldDefinition['type'];
+    const desc = (row.description as string) || cat.description || '';
+
+    const optionsRaw = row.options as string[] | null;
+    const options = optionsRaw && optionsRaw.length > 0
+      ? optionsRaw
+      : cat.enum_options && cat.enum_options.length > 0
+        ? cat.enum_options
+        : undefined;
+
+    const disambiguationRules = (row.extraction_hint as string) || (row.disambiguation_rules as string) || undefined;
+
+    fields.push({
+      name,
+      type: fieldType,
+      tier: ((row.tier as number) ?? 1) as FieldDefinition['tier'],
+      required: (row.required as boolean) ?? false,
+      description: desc,
+      options,
+      disambiguationRules,
+      importance: (row.importance as FieldDefinition['importance']) || undefined,
+    });
+  }
+
+  _skillFieldDefsCache.set(skillId, { data: fields, time: now });
+  return fields;
 }
 
 // ── Org Alias Map ─────────────────────────────────────────────
@@ -251,16 +337,16 @@ function importanceLabel(imp: 'P' | 'S' | 'E' | 'A'): string {
   }
 }
 
-export function buildSkillPrompt(skill: DocumentSkill, sourceText: string): string {
+export function buildSkillPrompt(skill: DocumentSkill, fields: FieldDefinition[], sourceText: string): string {
   const lines: string[] = [];
 
   lines.push(`Extract ALL structured data from the following ${skill.displayName} document.`);
   lines.push('');
 
-  if (skill.fieldDefinitions.length > 0) {
+  if (fields.length > 0) {
     lines.push('## Fields to Extract');
     lines.push('');
-    for (const field of skill.fieldDefinitions) {
+    for (const field of fields) {
       const reqLabel = field.required ? 'required' : 'optional';
       const impLabel = field.importance ? `, ${importanceLabel(field.importance)}` : '';
       let fieldLine = `**${field.name}** (${field.type}, ${reqLabel}${impLabel}): ${field.description}`;
@@ -340,12 +426,16 @@ export async function extractWithSkill(
   }
 
   tStep = Date.now();
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const extractionPrompt = buildSkillPrompt(skill, sourceText);
+  const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+  const tCatalog = Date.now() - tStep;
 
-  const isTypedSkill = skill.fieldDefinitions.length > 0;
+  tStep = Date.now();
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const extractionPrompt = buildSkillPrompt(skill, catalogFields, sourceText);
+
+  const isTypedSkill = catalogFields.length > 0;
   const tool = isTypedSkill
-    ? buildExtractionTool(skill)
+    ? buildExtractionTool(skill, catalogFields)
     : buildGeneralExtractionTool();
 
   console.log(`[extract] tool schema debug: mode=${isTypedSkill ? 'typed' : 'general'} skill=${skill.skillId}`);
@@ -424,7 +514,7 @@ export async function extractWithSkill(
       });
     }
     if (fieldData.value === null) {
-      const expectedField = skill.fieldDefinitions.find(f => f.name === fieldName);
+      const expectedField = catalogFields.find(f => f.name === fieldName);
       if (expectedField?.required) {
         flags.push({
           field: fieldName,
@@ -435,7 +525,7 @@ export async function extractWithSkill(
     }
   }
 
-  for (const fd of skill.fieldDefinitions) {
+  for (const fd of catalogFields) {
     if (fd.required && !(fd.name in extraction.fields)) {
       flags.push({
         field: fd.name,
@@ -456,7 +546,7 @@ export async function extractWithSkill(
   const tTotal = Date.now() - t0;
   const fieldCount = Object.keys(extraction.fields).length;
   console.log(`[extractWithSkill] skill=${skill.skillId} mode=${isTypedSkill ? 'typed+extras' : 'general'} — ` +
-    `listSkills=${tSkills}ms classify=${tClassify}ms getSkill=${tGetSkill}ms extract=${tExtract}ms total=${tTotal}ms ` +
+    `listSkills=${tSkills}ms classify=${tClassify}ms getSkill=${tGetSkill}ms catalog=${tCatalog}ms extract=${tExtract}ms total=${tTotal}ms ` +
     `(inputChars=${sourceText.length} classConf=${classification.confidence} fields=${fieldCount})`);
 
   const fieldSummary = Object.entries(extraction.fields)

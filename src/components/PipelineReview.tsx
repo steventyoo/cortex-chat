@@ -305,6 +305,7 @@ export default function PipelineReview() {
   const [coverageReport, setCoverageReport] = useState<any>(null);
   const [coverageLoading, setCoverageLoading] = useState(false);
   const [coverageError, setCoverageError] = useState<string | null>(null);
+  const [coverageCachedAt, setCoverageCachedAt] = useState<string | null>(null);
 
   // Drive connection state
   const [showDriveSetup, setShowDriveSetup] = useState(false);
@@ -824,18 +825,19 @@ export default function PipelineReview() {
     }
   };
 
-  const fetchCoverage = async () => {
+  const fetchCoverage = async (forceRefresh = false) => {
     setCoverageLoading(true);
     setCoverageError(null);
     try {
       const res = await fetch('/api/pipeline/coverage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: selectedProject || null }),
+        body: JSON.stringify({ projectId: selectedProject || null, forceRefresh }),
       });
       const data = await res.json();
       if (res.ok) {
         setCoverageReport(data.report);
+        setCoverageCachedAt(data.cached ? data.cachedAt : null);
       } else {
         setCoverageError(data.error || 'Failed to load coverage');
       }
@@ -2315,7 +2317,8 @@ export default function PipelineReview() {
             report={coverageReport}
             loading={coverageLoading}
             error={coverageError}
-            onRefresh={fetchCoverage}
+            cachedAt={coverageCachedAt}
+            onRefresh={() => fetchCoverage(true)}
           />
         ) : listView === 'drive' ? (
           selectedDrivePath ? (
@@ -2541,10 +2544,11 @@ interface CoveragePanelProps {
   report: any;
   loading: boolean;
   error: string | null;
+  cachedAt?: string | null;
   onRefresh: () => void;
 }
 
-function CoveragePanel({ report, loading, error, onRefresh }: CoveragePanelProps) {
+function CoveragePanel({ report, loading, error, cachedAt, onRefresh }: CoveragePanelProps) {
   const [expandedCodes, setExpandedCodes] = useState<Set<string>>(new Set());
 
   const toggleCode = (code: string) => {
@@ -2631,6 +2635,9 @@ function CoveragePanel({ report, loading, error, onRefresh }: CoveragePanelProps
               Anchored to <span className="font-medium text-[#555]">{jcrFileName}</span>
               {projectName && projectName !== 'Unknown' && (
                 <> — {projectName}</>
+              )}
+              {cachedAt && (
+                <> · <span className="text-[#bbb]">cached {new Date(cachedAt).toLocaleDateString()} {new Date(cachedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></>
               )}
             </p>
           </div>
