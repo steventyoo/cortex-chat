@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getSupabase } from '@/lib/supabase';
+import { z } from 'zod';
+import { SkillSchema } from '@/lib/schemas/skills.schema';
+import { listSkills, insertSkill, replaceSkillFields } from '@/lib/stores/skills.store';
 import { FieldDefinition } from '@/lib/skills';
 
 export async function GET(request: NextRequest) {
@@ -9,21 +11,16 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const sb = getSupabase();
   const statusFilter = request.nextUrl.searchParams.get('status') || 'active';
 
-  let query = sb.from('document_skills').select('*');
-  if (statusFilter !== 'all') {
-    query = query.eq('status', statusFilter);
+  try {
+    const raw = await listSkills(statusFilter);
+    const skills = z.array(SkillSchema).parse(raw);
+    return Response.json({ skills });
+  } catch (err) {
+    console.error('[skills] GET validation/query error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
-  query = query.order('display_name', { ascending: true });
-
-  const { data, error } = await query;
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
-  }
-
-  return Response.json({ skills: data || [] });
 }
 
 export async function POST(request: NextRequest) {
@@ -46,28 +43,14 @@ export async function POST(request: NextRequest) {
     if (!body.skillId || !body.displayName || !body.fieldDefinitions) {
       return Response.json(
         { error: 'skillId, displayName, and fieldDefinitions are required' },
-        { status: 400 }
+        { status: 400 },
       );
     }
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const sb = getSupabase();
   const skillId = body.skillId.toLowerCase().replace(/[^a-z0-9_]/g, '_');
-
-  const { data: existing } = await sb
-    .from('document_skills')
-    .select('id')
-    .eq('skill_id', skillId)
-    .single();
-
-  if (existing) {
-    return Response.json(
-      { error: `Skill "${skillId}" already exists` },
-      { status: 409 }
-    );
-  }
 
   const columnMapping: Record<string, string> = {};
   for (const field of body.fieldDefinitions) {
@@ -101,9 +84,8 @@ export async function POST(request: NextRequest) {
     keywords: body.fieldDefinitions.slice(0, 5).map(f => f.name),
   };
 
-  const { data, error } = await sb
-    .from('document_skills')
-    .insert({
+  try {
+    const data = await insertSkill({
       skill_id: skillId,
       display_name: body.displayName,
       version: 1,
@@ -114,69 +96,17 @@ export async function POST(request: NextRequest) {
       column_mapping: columnMapping,
       sample_extractions: [],
       classifier_hints: classifierHints,
-    })
-    .select()
-    .single();
+    });
 
-  if (error) {
-    console.error('Failed to create skill:', error.message);
-    return Response.json({ error: error.message }, { status: 500 });
-  }
-
-  // Sync field definitions to skill_fields (catalog-based)
-  if (body.fieldDefinitions.length > 0) {
-    for (let i = 0; i < body.fieldDefinitions.length; i++) {
-      const fd = body.fieldDefinitions[i];
-      const canonical = fd.name
-        .replace(/[^a-zA-Z0-9\s]/g, '')
-        .replace(/\s+/g, '_')
-        .toLowerCase()
-        .replace(/_+/g, '_')
-        .replace(/^_|_$/g, '');
-
-      // Find or create catalog entry
-      let catalogId: string | null = null;
-      const { data: existing } = await sb
-        .from('field_catalog')
-        .select('id')
-        .eq('canonical_name', canonical)
-        .single();
-
-      if (existing) {
-        catalogId = existing.id;
-      } else {
-        const { data: created } = await sb
-          .from('field_catalog')
-          .insert({
-            canonical_name: canonical,
-            display_name: fd.name,
-            field_type: fd.type || 'string',
-            category: 'general',
-            description: fd.description || '',
-            enum_options: fd.options || null,
-          })
-          .select('id')
-          .single();
-        catalogId = created?.id ?? null;
-      }
-
-      if (catalogId) {
-        await sb.from('skill_fields').insert({
-          skill_id: skillId,
-          field_id: catalogId,
-          display_override: fd.name,
-          tier: fd.tier ?? 1,
-          required: fd.required ?? false,
-          importance: fd.importance || null,
-          description: fd.description || '',
-          options: fd.options || null,
-          extraction_hint: fd.disambiguationRules || null,
-          disambiguation_rules: fd.disambiguationRules || null,
-          sort_order: i + 1,
-        });
-      }
+    if (body.fieldDefinitions.length > 0) {
+      await replaceSkillFields(skillId, body.fieldDefinitions);
     }
-  }
 
-  return Response.json({ skill: data }, { status: 201 });
+    const skill = SkillSchema.parse(data);
+    return Response.json({ skill }, { status: 201 });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[skills] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
+  }
 }

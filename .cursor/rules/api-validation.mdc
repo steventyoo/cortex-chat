@@ -1,0 +1,66 @@
+---
+description: API route validation and store layer conventions
+globs: src/app/api/**/*.ts, src/lib/stores/*.ts, src/lib/schemas/*.ts
+---
+
+# API Validation & Store Layer
+
+Every API route that touches the database MUST follow this architecture:
+
+## Three Layers
+
+```
+Route (auth + glue) → Store (DB queries) → Schema (Zod validation)
+```
+
+### 1. Schema Layer (`src/lib/schemas/<domain>.schema.ts`)
+
+- Define **read schemas** with Zod for each entity returned by the API.
+- Use `normalizeStringArray` from `./helpers` for any JSONB column that may be a pipe-delimited string.
+- Use `normalizeJsonObject` / `normalizeJsonArray` for JSONB object/array columns.
+- Export `z.infer<>` types alongside schemas.
+- Define **write input schemas** (e.g., `CreateFooInput`, `UpdateFooInput`) for request bodies.
+- Zod v4: `z.record()` requires two args — use `z.record(z.string(), z.unknown())`.
+
+### 2. Store Layer (`src/lib/stores/<domain>.store.ts`)
+
+- **All** Supabase queries for a domain live here — no direct `getSupabase()` calls in routes.
+- Functions throw on error (let the route catch and format the response).
+- Avoid `select('*')` — use explicit column lists when the table has sensitive/internal columns.
+- Store functions return raw Supabase data; validation happens in the route.
+
+### 3. Route Layer (`src/app/api/<path>/route.ts`)
+
+- Import from stores and schemas, never from `@/lib/supabase` directly.
+- **Reads (GET)**: call store → validate with `.parse()` → return. Parse failures are bugs (500).
+- **Writes (POST/PATCH)**: parse body with `.safeParse()` → return 400 with `error.flatten().fieldErrors` on failure.
+- Always wrap store calls in try/catch; check for Postgres error codes (e.g., `23505` = unique violation → 409).
+
+## Conventions
+
+- Schema file naming: `<domain>.schema.ts`
+- Store file naming: `<domain>.store.ts`
+- Both directories have barrel `index.ts` exports.
+- Frontend components import types from `@/lib/schemas/*`, never define inline interfaces for API data.
+- Preprocessors in `helpers.ts` handle data coercion (string→array, string→object).
+
+## Example Pattern
+
+```typescript
+// Route GET handler
+const raw = await listFoos(orgId);
+const foos = z.array(FooSchema).parse(raw);
+return Response.json({ foos });
+
+// Route POST handler
+const parsed = CreateFooInput.safeParse(body);
+if (!parsed.success) {
+  return Response.json(
+    { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+    { status: 400 },
+  );
+}
+const raw = await insertFoo({ ...parsed.data, org_id: orgId });
+const foo = FooSchema.parse(raw);
+return Response.json({ foo });
+```

@@ -1,16 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-
-interface OrgConfig {
-  id: string;
-  org_id: string;
-  org_name?: string;
-  skill_id: string;
-  pinned_version: number | null;
-  document_aliases: string[];
-  hidden_fields: string[];
-}
+import type { OrgSkillConfig } from '@/lib/schemas/skills.schema';
 
 interface OrgInfo {
   org_id: string;
@@ -23,7 +14,7 @@ interface Props {
 }
 
 export default function SkillOrgConfigTab({ skillId, currentVersion }: Props) {
-  const [configs, setConfigs] = useState<OrgConfig[]>([]);
+  const [configs, setConfigs] = useState<OrgSkillConfig[]>([]);
   const [orgs, setOrgs] = useState<OrgInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -162,7 +153,7 @@ export default function SkillOrgConfigTab({ skillId, currentVersion }: Props) {
 }
 
 function OrgConfigRow({ config, orgName, currentVersion, saving, onSave, onRemove }: {
-  config: OrgConfig;
+  config: OrgSkillConfig;
   orgName: string;
   currentVersion: number;
   saving: boolean;

@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getSupabase } from '@/lib/supabase';
+import { z } from 'zod';
+import { LinkTypeSchema, CreateLinkTypeInput } from '@/lib/schemas/link-types.schema';
+import { listLinkTypes, insertLinkType } from '@/lib/stores/link-types.store';
 
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
@@ -8,18 +10,14 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('document_link_types')
-    .select('*')
-    .order('source_skill')
-    .order('target_skill');
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  try {
+    const raw = await listLinkTypes();
+    const linkTypes = z.array(LinkTypeSchema).parse(raw);
+    return Response.json({ linkTypes });
+  } catch (err) {
+    console.error('[link-types] GET error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ linkTypes: data });
 }
 
 export async function POST(request: NextRequest) {
@@ -29,31 +27,38 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const body = await request.json();
-  const { linkTypeKey, displayName, sourceSkill, targetSkill, relationship, matchFields, description } = body;
-
-  if (!linkTypeKey || !displayName || !sourceSkill || !targetSkill || !relationship) {
-    return Response.json({ error: 'Missing required fields' }, { status: 400 });
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('document_link_types')
-    .insert({
-      link_type_key: linkTypeKey,
-      display_name: displayName,
-      source_skill: sourceSkill,
-      target_skill: targetSkill,
-      relationship,
-      match_fields: matchFields || [],
-      description: description || '',
-    })
-    .select()
-    .single();
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  const parsed = CreateLinkTypeInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
   }
 
-  return Response.json({ linkType: data });
+  const input = parsed.data;
+
+  try {
+    const raw = await insertLinkType({
+      link_type_key: input.linkTypeKey,
+      display_name: input.displayName,
+      source_skill: input.sourceSkill,
+      target_skill: input.targetSkill,
+      relationship: input.relationship,
+      match_fields: input.matchFields,
+      description: input.description,
+    });
+    const linkType = LinkTypeSchema.parse(raw);
+    return Response.json({ linkType });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[link-types] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
+  }
 }

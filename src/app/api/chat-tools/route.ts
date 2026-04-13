@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
-import { getSupabase } from '@/lib/supabase';
+import { z } from 'zod';
+import { ChatToolSchema, CreateChatToolInput } from '@/lib/schemas/chat-tools.schema';
+import { listChatTools, insertChatTool } from '@/lib/stores/chat-tools.store';
 
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
@@ -10,19 +12,15 @@ export async function GET(request: NextRequest) {
   }
 
   const orgId = (session as SessionPayload).orgId;
-  const sb = getSupabase();
 
-  const { data, error } = await sb
-    .from('chat_tools')
-    .select('*')
-    .eq('org_id', orgId)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  try {
+    const raw = await listChatTools(orgId);
+    const tools = z.array(ChatToolSchema).parse(raw);
+    return Response.json({ tools });
+  } catch (err) {
+    console.error('[chat-tools] GET error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ tools: data });
 }
 
 export async function POST(request: NextRequest) {
@@ -33,33 +31,41 @@ export async function POST(request: NextRequest) {
   }
 
   const orgId = (session as SessionPayload).orgId;
-  const body = await request.json();
-  const { toolName, displayName, description, inputSchema, implementationType, implementationConfig, samplePrompts } = body;
 
-  if (!toolName || !displayName || !description || !implementationType) {
-    return Response.json({ error: 'Missing required fields' }, { status: 400 });
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('chat_tools')
-    .insert({
+  const parsed = CreateChatToolInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
+
+  const input = parsed.data;
+
+  try {
+    const raw = await insertChatTool({
       org_id: orgId,
-      tool_name: toolName,
-      display_name: displayName,
-      description,
-      input_schema: inputSchema || {},
-      implementation_type: implementationType,
-      implementation_config: implementationConfig || {},
-      sample_prompts: samplePrompts || [],
+      tool_name: input.toolName,
+      display_name: input.displayName,
+      description: input.description,
+      input_schema: input.inputSchema,
+      implementation_type: input.implementationType,
+      implementation_config: input.implementationConfig,
+      sample_prompts: input.samplePrompts,
       created_by: session.userId,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    });
+    const tool = ChatToolSchema.parse(raw);
+    return Response.json({ tool });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[chat-tools] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ tool: data });
 }

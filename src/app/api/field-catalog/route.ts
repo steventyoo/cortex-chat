@@ -1,6 +1,18 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getSupabase } from '@/lib/supabase';
+import { z } from 'zod';
+import {
+  CatalogFieldSchema,
+  CatalogFieldWithUsageSchema,
+  CreateCatalogFieldInput,
+  UpdateCatalogFieldInput,
+} from '@/lib/schemas/field-catalog.schema';
+import {
+  listCatalogFields,
+  getFieldUsageCounts,
+  insertCatalogField,
+  updateCatalogField,
+} from '@/lib/stores/field-catalog.store';
 
 export async function GET(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
@@ -8,40 +20,25 @@ export async function GET(request: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const sb = getSupabase();
-  const category = request.nextUrl.searchParams.get('category');
+  const category = request.nextUrl.searchParams.get('category') || undefined;
   const withUsage = request.nextUrl.searchParams.get('withUsage') === 'true';
 
-  let query = sb.from('field_catalog').select('*').order('category').order('display_name');
-  if (category) {
-    query = query.eq('category', category);
-  }
+  try {
+    const raw = await listCatalogFields({ category });
 
-  const { data, error } = await query;
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
-  }
-
-  if (withUsage && data) {
-    const { data: usageCounts } = await sb
-      .from('skill_fields')
-      .select('field_id');
-
-    const countMap = new Map<string, number>();
-    for (const row of usageCounts || []) {
-      const fid = row.field_id as string;
-      countMap.set(fid, (countMap.get(fid) || 0) + 1);
+    if (withUsage) {
+      const countMap = await getFieldUsageCounts();
+      const enriched = raw.map(f => ({ ...f, usage_count: countMap.get(f.id) || 0 }));
+      const fields = z.array(CatalogFieldWithUsageSchema).parse(enriched);
+      return Response.json({ fields });
     }
 
-    const enriched = data.map(f => ({
-      ...f,
-      usage_count: countMap.get(f.id) || 0,
-    }));
-
-    return Response.json({ fields: enriched });
+    const fields = z.array(CatalogFieldSchema).parse(raw);
+    return Response.json({ fields });
+  } catch (err) {
+    console.error('[field-catalog] GET validation/query error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ fields: data || [] });
 }
 
 export async function POST(request: NextRequest) {
@@ -50,52 +47,47 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: {
-    canonicalName: string;
-    displayName: string;
-    fieldType?: string;
-    category?: string;
-    description?: string;
-    enumOptions?: string[];
-  };
-
+  let body: unknown;
   try {
     body = await request.json();
-    if (!body.canonicalName || !body.displayName) {
-      return Response.json({ error: 'canonicalName and displayName are required' }, { status: 400 });
-    }
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const canonicalName = body.canonicalName
+  const parsed = CreateCatalogFieldInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
+
+  const { canonicalName, displayName, fieldType, category, description, enumOptions } = parsed.data;
+  const canonical = canonicalName
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, '')
     .replace(/\s+/g, '_')
     .trim();
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('field_catalog')
-    .insert({
-      canonical_name: canonicalName,
-      display_name: body.displayName,
-      field_type: body.fieldType || 'string',
-      category: body.category || 'general',
-      description: body.description || '',
-      enum_options: body.enumOptions ? JSON.stringify(body.enumOptions) : null,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    if (error.code === '23505') {
-      return Response.json({ error: `Field "${canonicalName}" already exists` }, { status: 409 });
+  try {
+    const data = await insertCatalogField({
+      canonical_name: canonical,
+      display_name: displayName,
+      field_type: fieldType,
+      category,
+      description,
+      enum_options: enumOptions ?? null,
+    });
+    const field = CatalogFieldSchema.parse(data);
+    return Response.json({ field }, { status: 201 });
+  } catch (err: unknown) {
+    const pgErr = err as { code?: string; message?: string };
+    if (pgErr.code === '23505') {
+      return Response.json({ error: `Field "${canonical}" already exists` }, { status: 409 });
     }
-    return Response.json({ error: error.message }, { status: 500 });
+    console.error('[field-catalog] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ field: data }, { status: 201 });
 }
 
 export async function PATCH(request: NextRequest) {
@@ -104,42 +96,36 @@ export async function PATCH(request: NextRequest) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: {
-    id: string;
-    displayName?: string;
-    fieldType?: string;
-    category?: string;
-    description?: string;
-    enumOptions?: string[] | null;
-  };
-
+  let body: unknown;
   try {
     body = await request.json();
-    if (!body.id) {
-      return Response.json({ error: 'id is required' }, { status: 400 });
-    }
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const sb = getSupabase();
-  const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (body.displayName !== undefined) update.display_name = body.displayName;
-  if (body.fieldType !== undefined) update.field_type = body.fieldType;
-  if (body.category !== undefined) update.category = body.category;
-  if (body.description !== undefined) update.description = body.description;
-  if (body.enumOptions !== undefined) update.enum_options = body.enumOptions;
-
-  const { data, error } = await sb
-    .from('field_catalog')
-    .update(update)
-    .eq('id', body.id)
-    .select()
-    .single();
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  const parsed = UpdateCatalogFieldInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
   }
 
-  return Response.json({ field: data });
+  const { id, displayName, fieldType, category, description, enumOptions } = parsed.data;
+  const update: Record<string, unknown> = {};
+  if (displayName !== undefined) update.display_name = displayName;
+  if (fieldType !== undefined) update.field_type = fieldType;
+  if (category !== undefined) update.category = category;
+  if (description !== undefined) update.description = description;
+  if (enumOptions !== undefined) update.enum_options = enumOptions;
+
+  try {
+    const data = await updateCatalogField(id, update);
+    const field = CatalogFieldSchema.parse(data);
+    return Response.json({ field });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[field-catalog] PATCH error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
+  }
 }

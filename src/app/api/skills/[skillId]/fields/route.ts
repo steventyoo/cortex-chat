@@ -1,6 +1,18 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import { getSupabase } from '@/lib/supabase';
+import { z } from 'zod';
+import {
+  SkillFieldSchema,
+  CreateSkillFieldInput,
+  UpdateSkillFieldInput,
+} from '@/lib/schemas/field-catalog.schema';
+import {
+  listSkillFields,
+  getNextSortOrder,
+  insertSkillField,
+  updateSkillField,
+  deleteSkillField,
+} from '@/lib/stores/field-catalog.store';
 
 interface RouteParams {
   params: Promise<{ skillId: string }>;
@@ -13,42 +25,15 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 
   const { skillId } = await params;
-  const sb = getSupabase();
 
-  const { data, error } = await sb
-    .from('skill_fields')
-    .select(`
-      id,
-      skill_id,
-      field_id,
-      display_override,
-      tier,
-      required,
-      importance,
-      description,
-      options,
-      example,
-      extraction_hint,
-      disambiguation_rules,
-      sort_order,
-      field_catalog (
-        id,
-        canonical_name,
-        display_name,
-        field_type,
-        category,
-        description,
-        enum_options
-      )
-    `)
-    .eq('skill_id', skillId)
-    .order('sort_order');
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  try {
+    const raw = await listSkillFields(skillId);
+    const fields = z.array(SkillFieldSchema).parse(raw);
+    return Response.json({ fields });
+  } catch (err) {
+    console.error('[skill-fields] GET validation/query error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ fields: data || [] });
 }
 
 export async function POST(request: NextRequest, { params }: RouteParams) {
@@ -59,90 +44,49 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 
   const { skillId } = await params;
 
-  let body: {
-    fieldId: string;
-    displayOverride?: string;
-    tier?: number;
-    required?: boolean;
-    importance?: string;
-    description?: string;
-    options?: string[];
-    example?: string;
-    extractionHint?: string;
-    disambiguationRules?: string;
-  };
-
+  let body: unknown;
   try {
     body = await request.json();
-    if (!body.fieldId) {
-      return Response.json({ error: 'fieldId is required' }, { status: 400 });
-    }
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const sb = getSupabase();
-
-  const { data: maxOrder } = await sb
-    .from('skill_fields')
-    .select('sort_order')
-    .eq('skill_id', skillId)
-    .order('sort_order', { ascending: false })
-    .limit(1)
-    .single();
-
-  const nextOrder = (maxOrder?.sort_order ?? 0) + 1;
-
-  const { data, error } = await sb
-    .from('skill_fields')
-    .insert({
-      skill_id: skillId,
-      field_id: body.fieldId,
-      display_override: body.displayOverride || null,
-      tier: body.tier ?? 1,
-      required: body.required ?? false,
-      importance: body.importance || 'E',
-      description: body.description || '',
-      options: body.options || null,
-      example: body.example || '',
-      extraction_hint: body.extractionHint || null,
-      disambiguation_rules: body.disambiguationRules || null,
-      sort_order: nextOrder,
-    })
-    .select(`
-      id,
-      skill_id,
-      field_id,
-      display_override,
-      tier,
-      required,
-      importance,
-      description,
-      options,
-      example,
-      extraction_hint,
-      disambiguation_rules,
-      sort_order,
-      field_catalog (
-        id,
-        canonical_name,
-        display_name,
-        field_type,
-        category,
-        description,
-        enum_options
-      )
-    `)
-    .single();
-
-  if (error) {
-    if (error.code === '23505') {
-      return Response.json({ error: 'Field already assigned to this skill' }, { status: 409 });
-    }
-    return Response.json({ error: error.message }, { status: 500 });
+  const parsed = CreateSkillFieldInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
   }
 
-  return Response.json({ field: data }, { status: 201 });
+  const input = parsed.data;
+
+  try {
+    const nextOrder = await getNextSortOrder(skillId);
+    const raw = await insertSkillField({
+      skill_id: skillId,
+      field_id: input.fieldId,
+      display_override: input.displayOverride || null,
+      tier: input.tier ?? 1,
+      required: input.required ?? false,
+      importance: input.importance || 'E',
+      description: input.description || '',
+      options: input.options || null,
+      example: input.example || '',
+      extraction_hint: input.extractionHint || null,
+      disambiguation_rules: input.disambiguationRules || null,
+      sort_order: nextOrder,
+    });
+    const field = SkillFieldSchema.parse(raw);
+    return Response.json({ field }, { status: 201 });
+  } catch (err: unknown) {
+    const pgErr = err as { code?: string; message?: string };
+    if (pgErr.code === '23505') {
+      return Response.json({ error: 'Field already assigned to this skill' }, { status: 409 });
+    }
+    console.error('[skill-fields] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
@@ -153,83 +97,47 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
   const { skillId } = await params;
 
-  let body: {
-    id: string;
-    displayOverride?: string | null;
-    tier?: number;
-    required?: boolean;
-    importance?: string | null;
-    description?: string;
-    options?: string[] | null;
-    example?: string;
-    extractionHint?: string | null;
-    disambiguationRules?: string | null;
-    sortOrder?: number;
-  };
-
+  let body: unknown;
   try {
     body = await request.json();
-    if (!body.id) {
-      return Response.json({ error: 'id is required' }, { status: 400 });
-    }
   } catch {
     return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const sb = getSupabase();
+  const parsed = UpdateSkillFieldInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
 
+  const input = parsed.data;
   const updateFields: Record<string, unknown> = {};
-  if (body.displayOverride !== undefined) updateFields.display_override = body.displayOverride;
-  if (body.tier !== undefined) updateFields.tier = body.tier;
-  if (body.required !== undefined) updateFields.required = body.required;
-  if (body.importance !== undefined) updateFields.importance = body.importance;
-  if (body.description !== undefined) updateFields.description = body.description;
-  if (body.options !== undefined) updateFields.options = body.options;
-  if (body.example !== undefined) updateFields.example = body.example;
-  if (body.extractionHint !== undefined) updateFields.extraction_hint = body.extractionHint;
-  if (body.disambiguationRules !== undefined) updateFields.disambiguation_rules = body.disambiguationRules;
-  if (body.sortOrder !== undefined) updateFields.sort_order = body.sortOrder;
+  if (input.displayOverride !== undefined) updateFields.display_override = input.displayOverride;
+  if (input.tier !== undefined) updateFields.tier = input.tier;
+  if (input.required !== undefined) updateFields.required = input.required;
+  if (input.importance !== undefined) updateFields.importance = input.importance;
+  if (input.description !== undefined) updateFields.description = input.description;
+  if (input.options !== undefined) updateFields.options = input.options;
+  if (input.example !== undefined) updateFields.example = input.example;
+  if (input.extractionHint !== undefined) updateFields.extraction_hint = input.extractionHint;
+  if (input.disambiguationRules !== undefined) updateFields.disambiguation_rules = input.disambiguationRules;
+  if (input.sortOrder !== undefined) updateFields.sort_order = input.sortOrder;
 
   if (Object.keys(updateFields).length === 0) {
     return Response.json({ error: 'No fields to update' }, { status: 400 });
   }
 
-  const { data, error } = await sb
-    .from('skill_fields')
-    .update(updateFields)
-    .eq('id', body.id)
-    .eq('skill_id', skillId)
-    .select(`
-      id,
-      skill_id,
-      field_id,
-      display_override,
-      tier,
-      required,
-      importance,
-      description,
-      options,
-      example,
-      extraction_hint,
-      disambiguation_rules,
-      sort_order,
-      field_catalog (
-        id,
-        canonical_name,
-        display_name,
-        field_type,
-        category,
-        description,
-        enum_options
-      )
-    `)
-    .single();
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  try {
+    const raw = await updateSkillField(input.id, skillId, updateFields);
+    const field = SkillFieldSchema.parse(raw);
+    return Response.json({ field });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[skill-fields] PATCH error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ field: data });
 }
 
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
@@ -244,16 +152,12 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     return Response.json({ error: 'id query param is required' }, { status: 400 });
   }
 
-  const sb = getSupabase();
-  const { error } = await sb
-    .from('skill_fields')
-    .delete()
-    .eq('id', skillFieldId)
-    .eq('skill_id', skillId);
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  try {
+    await deleteSkillField(skillFieldId, skillId);
+    return Response.json({ success: true });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[skill-fields] DELETE error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ success: true });
 }
