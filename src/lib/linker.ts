@@ -1,4 +1,8 @@
 import { getSupabase } from './supabase';
+import {
+  getFieldMap as storeGetFieldMap,
+  type FieldMapping,
+} from './stores/field-catalog.store';
 
 interface PipelineDoc {
   id: string;
@@ -40,12 +44,6 @@ export interface LinkResult {
 // Maps (skillId, canonicalName) → display_override or display_name
 // so the linker can resolve match_fields to exact extracted field names.
 
-interface FieldMapping {
-  canonicalName: string;
-  displayOverride: string | null;
-  catalogDisplayName: string;
-}
-
 let _fieldMapCache: Map<string, FieldMapping[]> | null = null;
 let _fieldMapCacheTime = 0;
 const FIELD_MAP_TTL = 5 * 60 * 1000;
@@ -56,40 +54,9 @@ async function getFieldMap(): Promise<Map<string, FieldMapping[]>> {
     return _fieldMapCache;
   }
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('skill_fields')
-    .select(`
-      skill_id,
-      display_override,
-      field_catalog (
-        canonical_name,
-        display_name
-      )
-    `);
-
-  const map = new Map<string, FieldMapping[]>();
-
-  if (!error && data) {
-    for (const row of data) {
-      const skillId = row.skill_id as string;
-      const catalogArr = row.field_catalog as unknown as Array<{ canonical_name: string; display_name: string }> | { canonical_name: string; display_name: string } | null;
-      const catalog = Array.isArray(catalogArr) ? catalogArr[0] : catalogArr;
-      if (!catalog) continue;
-
-      const existing = map.get(skillId) || [];
-      existing.push({
-        canonicalName: catalog.canonical_name,
-        displayOverride: row.display_override as string | null,
-        catalogDisplayName: catalog.display_name,
-      });
-      map.set(skillId, existing);
-    }
-  }
-
-  _fieldMapCache = map;
+  _fieldMapCache = await storeGetFieldMap();
   _fieldMapCacheTime = now;
-  return map;
+  return _fieldMapCache;
 }
 
 // ── Match Helpers ─────────────────────────────────────────────

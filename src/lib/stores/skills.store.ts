@@ -14,6 +14,20 @@ export async function listSkills(statusFilter: string = 'active') {
   return data ?? [];
 }
 
+/**
+ * Fetch active skills with only the columns needed at runtime
+ * (classifier, extraction). Used by skills.ts listActiveSkills().
+ */
+export async function listActiveSkillRows() {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('document_skills')
+    .select('*')
+    .eq('status', 'active');
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function getSkillById(skillId: string) {
   const sb = getSupabase();
   const { data, error } = await sb
@@ -23,6 +37,24 @@ export async function getSkillById(skillId: string) {
     .single();
   if (error) throw error;
   return data;
+}
+
+/**
+ * Fetch active skills with classifier_hints for the field catalog tool.
+ * Optionally filtered to specific skill IDs.
+ */
+export async function listActiveSkillSummaries(skillIds?: string[]) {
+  const sb = getSupabase();
+  let query = sb
+    .from('document_skills')
+    .select('skill_id, display_name, classifier_hints')
+    .eq('status', 'active');
+  if (skillIds && skillIds.length > 0) {
+    query = query.in('skill_id', skillIds);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
 }
 
 export async function listSkillVersions(skillId: string) {

@@ -2,6 +2,18 @@ import { getSupabase } from './supabase';
 import { searchByEmbedding, generateEmbedding } from './embeddings';
 import { SandboxSession } from './sandbox';
 import { validateToolInput, CalcResultSchema } from './tool-schemas';
+import {
+  listActiveChatTools,
+  listActiveChatTemplates,
+} from './stores/chat-tools.store';
+import {
+  listActiveSkillSummaries,
+} from './stores/skills.store';
+import {
+  getSkillFieldCatalogInfo,
+  getFieldFrequency,
+  getFieldMap,
+} from './stores/field-catalog.store';
 
 export interface ChatTool {
   id: string;
@@ -54,23 +66,13 @@ export interface ToolExecResult {
 }
 
 export async function fetchActiveTools(orgId: string): Promise<ChatTool[]> {
-  const sb = getSupabase();
-  const { data } = await sb
-    .from('chat_tools')
-    .select('*')
-    .eq('org_id', orgId)
-    .eq('is_active', true);
-  return (data || []) as ChatTool[];
+  const data = await listActiveChatTools(orgId);
+  return data as ChatTool[];
 }
 
 export async function fetchActiveTemplates(orgId: string): Promise<ChatPromptTemplate[]> {
-  const sb = getSupabase();
-  const { data } = await sb
-    .from('chat_prompt_templates')
-    .select('*')
-    .eq('org_id', orgId)
-    .eq('is_active', true);
-  return (data || []) as ChatPromptTemplate[];
+  const data = await listActiveChatTemplates(orgId);
+  return data as ChatPromptTemplate[];
 }
 
 export function matchTemplates(templates: ChatPromptTemplate[], userMessage: string): ChatPromptTemplate[] {
@@ -569,73 +571,14 @@ async function executeFieldCatalog(
   ctx: ToolExecContext
 ): Promise<ToolExecResult> {
   const skillIds = (input.skill_ids || []) as string[];
-  const sb = getSupabase();
 
-  let skillQuery = sb
-    .from('document_skills')
-    .select('skill_id, display_name, classifier_hints')
-    .eq('status', 'active');
+  const skills = await listActiveSkillSummaries(skillIds.length > 0 ? skillIds : undefined);
 
-  if (skillIds.length > 0) {
-    skillQuery = skillQuery.in('skill_id', skillIds);
-  }
-
-  const { data: skillData, error: skillErr } = await skillQuery;
-  if (skillErr) return { result: null, error: skillErr.message };
-
-  const skills = (skillData || []) as Record<string, unknown>[];
-
-  const catalog = await Promise.all(skills.map(async (s) => {
+  const catalog = await Promise.all(skills.map(async (s: Record<string, unknown>) => {
     const skillId = s.skill_id as string;
 
-    // Read from skill_fields JOIN field_catalog (single source of truth)
-    const { data: sfRows } = await sb
-      .from('skill_fields')
-      .select(`
-        display_override,
-        tier,
-        required,
-        importance,
-        description,
-        options,
-        extraction_hint,
-        field_catalog (
-          canonical_name,
-          display_name,
-          field_type,
-          description
-        )
-      `)
-      .eq('skill_id', skillId)
-      .order('sort_order');
-
-    const fields = (sfRows || []).map((row: Record<string, unknown>) => {
-      const catRaw = row.field_catalog as Record<string, unknown> | Record<string, unknown>[] | null;
-      const cat = Array.isArray(catRaw) ? catRaw[0] : catRaw;
-      return {
-        name: (row.display_override as string) || (cat?.display_name as string) || '',
-        type: (cat?.field_type as string) || 'string',
-        description: (row.description as string) || (cat?.description as string) || '',
-        required: (row.required as boolean) || false,
-        importance: (row.importance as string) || 'S',
-        canonical: (cat?.canonical_name as string) || '',
-      };
-    });
-
-    let actual_fields: { field_name: string; record_count: number; sample_value: string }[] = [];
-    try {
-      const { data: freqData } = await sb.rpc('get_field_frequency', {
-        p_org_id: ctx.orgId,
-        p_skill_id: skillId,
-        p_include_pending: ctx.includePending || false,
-      });
-      if (freqData) {
-        actual_fields = (freqData as { field_name: string; record_count: number; sample_value: string }[])
-          .slice(0, 30);
-      }
-    } catch {
-      // RPC may not exist yet — degrade gracefully
-    }
+    const fields = await getSkillFieldCatalogInfo(skillId);
+    const actual_fields = await getFieldFrequency(ctx.orgId, skillId, ctx.includePending || false);
 
     return {
       skill_id: skillId,
@@ -655,6 +598,106 @@ async function executeFieldCatalog(
 }
 
 /* ── NEW: Context Retrieval executor ─────────────────────────── */
+
+/**
+ * Build a display-name lookup for a set of skills using the live field catalog.
+ * Returns a map: canonical_name → current display name (display_override or catalog display_name).
+ */
+async function buildFieldNameLookup(
+  skillIds: string[]
+): Promise<Map<string, string>> {
+  const fieldMap = await getFieldMap();
+  const lookup = new Map<string, string>();
+
+  for (const skillId of skillIds) {
+    const mappings = fieldMap.get(skillId);
+    if (!mappings) continue;
+    for (const m of mappings) {
+      const displayName = m.displayOverride || m.catalogDisplayName;
+      lookup.set(m.canonicalName, displayName);
+      lookup.set(displayName.toLowerCase(), displayName);
+    }
+  }
+
+  return lookup;
+}
+
+/**
+ * Resolve key_fields display names against the live field catalog.
+ * For each skill in key_fields, try to match field names against the catalog
+ * and replace with the current display name.
+ */
+function resolveKeyFields(
+  keyFields: Record<string, string[]>,
+  fieldMap: Map<string, { canonicalName: string; displayOverride: string | null; catalogDisplayName: string }[]>,
+): Record<string, string[]> {
+  const resolved: Record<string, string[]> = {};
+
+  for (const [skillId, fields] of Object.entries(keyFields)) {
+    const mappings = fieldMap.get(skillId);
+    if (!mappings) {
+      resolved[skillId] = fields;
+      continue;
+    }
+
+    resolved[skillId] = fields.map(fieldName => {
+      const mapping = mappings.find(m => {
+        const displayName = m.displayOverride || m.catalogDisplayName;
+        return displayName.toLowerCase() === fieldName.toLowerCase()
+          || m.canonicalName === fieldName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+      });
+      if (mapping) {
+        return mapping.displayOverride || mapping.catalogDisplayName;
+      }
+      return fieldName;
+    });
+  }
+
+  return resolved;
+}
+
+/**
+ * Resolve field name references in SQL templates against the live field catalog.
+ * Replaces `fields->'Old Display Name'` with `fields->'Current Display Name'`.
+ */
+function resolveSqlTemplates(
+  sqlTemplates: Record<string, string>,
+  fieldMap: Map<string, { canonicalName: string; displayOverride: string | null; catalogDisplayName: string }[]>,
+  skillIds: string[],
+): Record<string, string> {
+  const allMappings: { canonicalName: string; displayOverride: string | null; catalogDisplayName: string }[] = [];
+  for (const skillId of skillIds) {
+    const mappings = fieldMap.get(skillId);
+    if (mappings) allMappings.push(...mappings);
+  }
+
+  if (allMappings.length === 0) return sqlTemplates;
+
+  const resolved: Record<string, string> = {};
+  for (const [key, sql] of Object.entries(sqlTemplates)) {
+    let resolvedSql = sql;
+
+    for (const m of allMappings) {
+      const currentDisplay = m.displayOverride || m.catalogDisplayName;
+      const catalogDisplay = m.catalogDisplayName;
+
+      if (currentDisplay !== catalogDisplay) {
+        resolvedSql = resolvedSql.replace(
+          new RegExp(`fields->'${escapeRegExp(catalogDisplay)}'`, 'g'),
+          `fields->'${currentDisplay}'`,
+        );
+      }
+    }
+
+    resolved[key] = resolvedSql;
+  }
+
+  return resolved;
+}
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 async function executeContextRetrieval(
   _config: Record<string, unknown>,
@@ -681,17 +724,41 @@ async function executeContextRetrieval(
 
     if (error) return { result: null, error: error.message };
 
-    const cards = (data || []).map((c: Record<string, unknown>) => ({
-      card_name: c.card_name,
-      display_name: c.display_name,
-      description: c.description,
-      skills_involved: c.skills_involved,
-      business_logic: c.business_logic,
-      key_fields: c.key_fields,
-      sql_templates: c.sql_templates,
-      calc_function: c.calc_function,
-      similarity: c.similarity,
-    }));
+    const rawCards = (data || []) as Record<string, unknown>[];
+
+    const allSkillIds = new Set<string>();
+    for (const c of rawCards) {
+      const skills = (c.skills_involved || []) as string[];
+      skills.forEach(s => allSkillIds.add(s));
+    }
+
+    const fieldMap = allSkillIds.size > 0 ? await getFieldMap() : new Map();
+
+    const cards = rawCards.map((c) => {
+      const skillsInvolved = (c.skills_involved || []) as string[];
+
+      const keyFields = c.key_fields as Record<string, string[]> | null;
+      const resolvedKeyFields = keyFields
+        ? resolveKeyFields(keyFields, fieldMap)
+        : keyFields;
+
+      const sqlTemplates = c.sql_templates as Record<string, string> | null;
+      const resolvedSqlTemplates = sqlTemplates
+        ? resolveSqlTemplates(sqlTemplates, fieldMap, skillsInvolved)
+        : sqlTemplates;
+
+      return {
+        card_name: c.card_name,
+        display_name: c.display_name,
+        description: c.description,
+        skills_involved: skillsInvolved,
+        business_logic: c.business_logic,
+        key_fields: resolvedKeyFields,
+        sql_templates: resolvedSqlTemplates,
+        calc_function: c.calc_function,
+        similarity: c.similarity,
+      };
+    });
 
     return {
       result: {
