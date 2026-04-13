@@ -13,6 +13,20 @@ export async function listChatTools(orgId: string) {
   return data ?? [];
 }
 
+/**
+ * Fetch only active chat tools (for runtime use in chat route).
+ */
+export async function listActiveChatTools(orgId: string) {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('chat_tools')
+    .select('*')
+    .eq('org_id', orgId)
+    .eq('is_active', true);
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function getChatToolById(toolId: string, orgId: string) {
   const sb = getSupabase();
   const { data, error } = await sb
@@ -32,6 +46,20 @@ export async function listChatTemplates(orgId: string) {
     .select('*')
     .eq('org_id', orgId)
     .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * Fetch only active prompt templates (for runtime use in chat route).
+ */
+export async function listActiveChatTemplates(orgId: string) {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('chat_prompt_templates')
+    .select('*')
+    .eq('org_id', orgId)
+    .eq('is_active', true);
   if (error) throw error;
   return data ?? [];
 }

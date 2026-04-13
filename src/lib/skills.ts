@@ -18,6 +18,12 @@ import {
   buildExtractionTool,
   buildGeneralExtractionTool,
 } from './extraction-schemas';
+import {
+  listActiveSkillRows,
+} from './stores/skills.store';
+import {
+  getSkillFieldDefinitions as storeGetSkillFieldDefs,
+} from './stores/field-catalog.store';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -114,20 +120,15 @@ export async function listActiveSkills(): Promise<DocumentSkill[]> {
     return _skillsCache;
   }
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('document_skills')
-    .select('*')
-    .eq('status', 'active');
-
-  if (error) {
-    console.error('Failed to fetch skills:', error.message);
+  try {
+    const data = await listActiveSkillRows();
+    _skillsCache = data.map(mapRowToSkill);
+    _skillsCacheTime = now;
+    return _skillsCache;
+  } catch (err) {
+    console.error('Failed to fetch skills:', err instanceof Error ? err.message : err);
     return _skillsCache || [];
   }
-
-  _skillsCache = (data || []).map(mapRowToSkill);
-  _skillsCacheTime = now;
-  return _skillsCache;
 }
 
 export async function getSkill(skillId: string): Promise<DocumentSkill | null> {
@@ -147,77 +148,20 @@ export async function getSkillFieldDefinitions(skillId: string): Promise<FieldDe
     return cached.data;
   }
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('skill_fields')
-    .select(`
-      display_override,
-      tier,
-      required,
-      importance,
-      description,
-      options,
-      extraction_hint,
-      disambiguation_rules,
-      sort_order,
-      field_catalog (
-        canonical_name,
-        display_name,
-        field_type,
-        category,
-        description,
-        enum_options
-      )
-    `)
-    .eq('skill_id', skillId)
-    .order('sort_order');
+  const fields = await storeGetSkillFieldDefs(skillId);
 
-  if (error || !data || data.length === 0) {
+  if (fields.length === 0) {
+    console.warn(
+      `[skills] No catalog rows for skill "${skillId}" — falling back to legacy fieldDefinitions JSONB. ` +
+      `Migrate this skill to field_catalog to remove this fallback.`
+    );
     const skill = await getSkill(skillId);
     return skill?.fieldDefinitions || [];
   }
 
-  const fields: FieldDefinition[] = [];
-  for (const row of data) {
-    const catalogRaw = row.field_catalog as unknown;
-    const catalog = Array.isArray(catalogRaw) ? catalogRaw[0] : catalogRaw;
-    if (!catalog) continue;
-
-    const cat = catalog as {
-      canonical_name: string;
-      display_name: string;
-      field_type: string;
-      description: string;
-      enum_options: string[] | null;
-    };
-
-    const name = row.display_override || cat.display_name;
-    const fieldType = (cat.field_type || 'string') as FieldDefinition['type'];
-    const desc = (row.description as string) || cat.description || '';
-
-    const optionsRaw = row.options as string[] | null;
-    const options = optionsRaw && optionsRaw.length > 0
-      ? optionsRaw
-      : cat.enum_options && cat.enum_options.length > 0
-        ? cat.enum_options
-        : undefined;
-
-    const disambiguationRules = (row.extraction_hint as string) || (row.disambiguation_rules as string) || undefined;
-
-    fields.push({
-      name,
-      type: fieldType,
-      tier: ((row.tier as number) ?? 1) as FieldDefinition['tier'],
-      required: (row.required as boolean) ?? false,
-      description: desc,
-      options,
-      disambiguationRules,
-      importance: (row.importance as FieldDefinition['importance']) || undefined,
-    });
-  }
-
-  _skillFieldDefsCache.set(skillId, { data: fields, time: now });
-  return fields;
+  const result: FieldDefinition[] = fields as FieldDefinition[];
+  _skillFieldDefsCache.set(skillId, { data: result, time: now });
+  return result;
 }
 
 // ── Org Alias Map ─────────────────────────────────────────────
