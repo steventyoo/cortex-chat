@@ -1,33 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-
-interface CatalogField {
-  id: string;
-  canonical_name: string;
-  display_name: string;
-  field_type: string;
-  category: string;
-  description: string;
-  enum_options: string[] | null;
-}
-
-interface SkillField {
-  id: string;
-  skill_id: string;
-  field_id: string;
-  display_override: string | null;
-  tier: number;
-  required: boolean;
-  importance: string | null;
-  description: string;
-  options: string[] | null;
-  example: string;
-  extraction_hint: string | null;
-  disambiguation_rules: string | null;
-  sort_order: number;
-  field_catalog: CatalogField;
-}
+import type { CatalogField, SkillField } from '@/lib/schemas/field-catalog.schema';
 
 interface Props {
   skillId: string;

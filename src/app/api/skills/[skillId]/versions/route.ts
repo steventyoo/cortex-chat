@@ -1,12 +1,19 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, isAdminRole } from '@/lib/auth-v2';
-import { getSupabase } from '@/lib/supabase';
+import { z } from 'zod';
+import { SkillSchema, SkillVersionSchema } from '@/lib/schemas/skills.schema';
+import {
+  listSkillVersions,
+  getSkillVersionSnapshot,
+  getSkillById,
+  updateSkill,
+  upsertSkillVersion,
+} from '@/lib/stores/skills.store';
 
 interface RouteParams {
   params: Promise<{ skillId: string }>;
 }
 
-/** GET all version snapshots for a skill */
 export async function GET(request: NextRequest, { params }: RouteParams) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   if (!token || !(await validateUserSession(token))) {
@@ -14,22 +21,17 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 
   const { skillId } = await params;
-  const sb = getSupabase();
 
-  const { data, error } = await sb
-    .from('skill_version_history')
-    .select('*')
-    .eq('skill_id', skillId)
-    .order('version', { ascending: false });
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  try {
+    const raw = await listSkillVersions(skillId);
+    const versions = z.array(SkillVersionSchema).parse(raw);
+    return Response.json({ versions });
+  } catch (err) {
+    console.error('[skill-versions] GET error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ versions: data || [] });
 }
 
-/** POST rollback a skill to a specific version */
 export async function POST(request: NextRequest, { params }: RouteParams) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = await validateUserSession(token || '');
@@ -44,35 +46,24 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     return Response.json({ error: 'version is required' }, { status: 400 });
   }
 
-  const sb = getSupabase();
+  try {
+    const historyRow = await getSkillVersionSnapshot(skillId, version);
+    if (!historyRow) {
+      return Response.json({ error: `Version ${version} not found` }, { status: 404 });
+    }
 
-  // Fetch the target snapshot
-  const { data: historyRow, error: fetchErr } = await sb
-    .from('skill_version_history')
-    .select('snapshot')
-    .eq('skill_id', skillId)
-    .eq('version', version)
-    .single();
+    const snapshot = historyRow.snapshot as Record<string, unknown>;
 
-  if (fetchErr || !historyRow) {
-    return Response.json({ error: `Version ${version} not found` }, { status: 404 });
-  }
+    let current;
+    try {
+      current = await getSkillById(skillId);
+    } catch {
+      return Response.json({ error: 'Skill not found' }, { status: 404 });
+    }
 
-  const snapshot = historyRow.snapshot as Record<string, unknown>;
+    const newVersion = ((current?.version as number) || 1) + 1;
 
-  // Get current version to increment
-  const { data: current } = await sb
-    .from('document_skills')
-    .select('version')
-    .eq('skill_id', skillId)
-    .single();
-
-  const newVersion = ((current?.version as number) || 1) + 1;
-
-  // Apply snapshot to the skill
-  const { data, error } = await sb
-    .from('document_skills')
-    .update({
+    const raw = await updateSkill(skillId, {
       display_name: snapshot.display_name,
       system_prompt: snapshot.system_prompt,
       extraction_instructions: snapshot.extraction_instructions,
@@ -83,23 +74,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       status: snapshot.status,
       version: newVersion,
       updated_at: new Date().toISOString(),
-    })
-    .eq('skill_id', skillId)
-    .select()
-    .single();
+    });
 
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+    await upsertSkillVersion({
+      skill_id: skillId,
+      version: newVersion,
+      snapshot,
+      changed_by: session.email,
+      change_summary: `Rolled back to v${version}`,
+    });
+
+    const skill = SkillSchema.parse(raw);
+    return Response.json({ skill });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[skill-versions] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
-
-  // Record the rollback as a new version entry
-  await sb.from('skill_version_history').upsert({
-    skill_id: skillId,
-    version: newVersion,
-    snapshot,
-    changed_by: session.email,
-    change_summary: `Rolled back to v${version}`,
-  }, { onConflict: 'skill_id,version' });
-
-  return Response.json({ skill: data });
 }

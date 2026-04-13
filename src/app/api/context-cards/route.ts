@@ -1,7 +1,18 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
-import { getSupabase } from '@/lib/supabase';
+import { z } from 'zod';
 import { generateEmbedding } from '@/lib/embeddings';
+import {
+  ContextCardSchema,
+  CreateContextCardInput,
+  UpdateContextCardInput,
+} from '@/lib/schemas/context-cards.schema';
+import {
+  listContextCards,
+  insertContextCard,
+  updateContextCard,
+  deleteContextCard,
+} from '@/lib/stores/context-cards.store';
 
 async function embedCardText(card: {
   display_name: string;
@@ -35,16 +46,15 @@ export async function GET(request: NextRequest) {
   }
 
   const orgId = (session as SessionPayload).orgId;
-  const sb = getSupabase();
 
-  const { data, error } = await sb
-    .from('context_cards')
-    .select('*')
-    .eq('org_id', orgId)
-    .order('display_name');
-
-  if (error) return Response.json({ error: error.message }, { status: 500 });
-  return Response.json({ cards: data || [] });
+  try {
+    const raw = await listContextCards(orgId);
+    const cards = z.array(ContextCardSchema).parse(raw);
+    return Response.json({ cards });
+  } catch (err) {
+    console.error('[context-cards] GET error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -55,32 +65,47 @@ export async function POST(request: NextRequest) {
   }
 
   const orgId = (session as SessionPayload).orgId;
-  const body = await request.json();
 
-  const embeddingStr = await embedCardText(body);
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 });
+  }
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('context_cards')
-    .insert({
+  const parsed = CreateContextCardInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
+
+  const input = parsed.data;
+  const embeddingStr = await embedCardText(input);
+
+  try {
+    const raw = await insertContextCard({
       org_id: orgId,
-      card_name: body.card_name,
-      display_name: body.display_name,
-      description: body.description,
-      trigger_concepts: body.trigger_concepts || [],
-      skills_involved: body.skills_involved || [],
-      business_logic: body.business_logic,
-      key_fields: body.key_fields || {},
-      example_questions: body.example_questions || [],
+      card_name: input.card_name,
+      display_name: input.display_name,
+      description: input.description,
+      trigger_concepts: input.trigger_concepts,
+      skills_involved: input.skills_involved,
+      business_logic: input.business_logic,
+      key_fields: input.key_fields,
+      example_questions: input.example_questions,
       embedding: embeddingStr,
-      is_active: body.is_active !== false,
+      is_active: input.is_active,
       created_by: session.userId,
-    })
-    .select()
-    .single();
-
-  if (error) return Response.json({ error: error.message }, { status: 500 });
-  return Response.json({ card: data });
+    });
+    const card = ContextCardSchema.parse(raw);
+    return Response.json({ card });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[context-cards] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: NextRequest) {
@@ -91,51 +116,62 @@ export async function PATCH(request: NextRequest) {
   }
 
   const orgId = (session as SessionPayload).orgId;
-  const body = await request.json();
 
-  if (!body.id) return Response.json({ error: 'Missing card id' }, { status: 400 });
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 });
+  }
 
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  const parsed = UpdateContextCardInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
+
+  const input = parsed.data;
+  const updates: Record<string, unknown> = {};
 
   const textFields = ['card_name', 'display_name', 'description', 'business_logic'] as const;
   for (const f of textFields) {
-    if (body[f] !== undefined) updates[f] = body[f];
+    if (input[f] !== undefined) updates[f] = input[f];
   }
 
   const arrayFields = ['trigger_concepts', 'skills_involved', 'example_questions'] as const;
   for (const f of arrayFields) {
-    if (body[f] !== undefined) updates[f] = body[f];
+    if (input[f] !== undefined) updates[f] = input[f];
   }
 
-  if (body.key_fields !== undefined) updates.key_fields = body.key_fields;
-  if (body.is_active !== undefined) updates.is_active = body.is_active;
+  if (input.key_fields !== undefined) updates.key_fields = input.key_fields;
+  if (input.is_active !== undefined) updates.is_active = input.is_active;
 
-  const needsReEmbed = body.display_name !== undefined ||
-    body.description !== undefined ||
-    body.trigger_concepts !== undefined ||
-    body.example_questions !== undefined;
+  const needsReEmbed = input.display_name !== undefined ||
+    input.description !== undefined ||
+    input.trigger_concepts !== undefined ||
+    input.example_questions !== undefined;
 
   if (needsReEmbed) {
     const embeddingStr = await embedCardText({
-      display_name: body.display_name || '',
-      description: body.description || '',
-      trigger_concepts: body.trigger_concepts,
-      example_questions: body.example_questions,
+      display_name: input.display_name || '',
+      description: input.description || '',
+      trigger_concepts: input.trigger_concepts,
+      example_questions: input.example_questions,
     });
     if (embeddingStr) updates.embedding = embeddingStr;
   }
 
-  const sb = getSupabase();
-  const { data, error } = await sb
-    .from('context_cards')
-    .update(updates)
-    .eq('id', body.id)
-    .eq('org_id', orgId)
-    .select()
-    .single();
-
-  if (error) return Response.json({ error: error.message }, { status: 500 });
-  return Response.json({ card: data });
+  try {
+    const raw = await updateContextCard(input.id, orgId, updates);
+    const card = ContextCardSchema.parse(raw);
+    return Response.json({ card });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[context-cards] PATCH error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
+  }
 }
 
 export async function DELETE(request: NextRequest) {
@@ -151,13 +187,12 @@ export async function DELETE(request: NextRequest) {
 
   if (!id) return Response.json({ error: 'Missing id' }, { status: 400 });
 
-  const sb = getSupabase();
-  const { error } = await sb
-    .from('context_cards')
-    .delete()
-    .eq('id', id)
-    .eq('org_id', orgId);
-
-  if (error) return Response.json({ error: error.message }, { status: 500 });
-  return Response.json({ success: true });
+  try {
+    await deleteContextCard(id, orgId);
+    return Response.json({ success: true });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[context-cards] DELETE error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
+  }
 }

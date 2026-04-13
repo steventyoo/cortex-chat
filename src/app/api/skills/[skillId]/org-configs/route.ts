@@ -1,6 +1,12 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, isAdminRole } from '@/lib/auth-v2';
-import { getSupabase } from '@/lib/supabase';
+import { z } from 'zod';
+import { OrgSkillConfigSchema, CreateOrgSkillConfigInput } from '@/lib/schemas/skills.schema';
+import {
+  listOrgSkillConfigs,
+  upsertOrgSkillConfig,
+  deleteOrgSkillConfig,
+} from '@/lib/stores/skills.store';
 
 interface RouteParams {
   params: Promise<{ skillId: string }>;
@@ -13,18 +19,15 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 
   const { skillId } = await params;
-  const sb = getSupabase();
 
-  const { data, error } = await sb
-    .from('org_skill_configs')
-    .select('*')
-    .eq('skill_id', skillId);
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  try {
+    const raw = await listOrgSkillConfigs(skillId);
+    const configs = z.array(OrgSkillConfigSchema).parse(raw);
+    return Response.json({ configs });
+  } catch (err) {
+    console.error('[org-configs] GET error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ configs: data || [] });
 }
 
 export async function POST(request: NextRequest, { params }: RouteParams) {
@@ -35,37 +38,37 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   }
 
   const { skillId } = await params;
-  const body = await request.json() as {
-    orgId: string;
-    pinned_version?: number | null;
-    document_aliases?: string[];
-    hidden_fields?: string[];
-  };
 
-  if (!body.orgId) {
-    return Response.json({ error: 'orgId is required' }, { status: 400 });
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
 
-  const sb = getSupabase();
+  const parsed = CreateOrgSkillConfigInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
 
-  const { data, error } = await sb
-    .from('org_skill_configs')
-    .upsert({
-      org_id: body.orgId,
+  try {
+    const raw = await upsertOrgSkillConfig({
+      org_id: parsed.data.orgId,
       skill_id: skillId,
-      pinned_version: body.pinned_version ?? null,
-      document_aliases: body.document_aliases || [],
-      hidden_fields: body.hidden_fields || [],
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'org_id,skill_id' })
-    .select()
-    .single();
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+      pinned_version: parsed.data.pinned_version ?? null,
+      document_aliases: parsed.data.document_aliases,
+      hidden_fields: parsed.data.hidden_fields,
+    });
+    const config = OrgSkillConfigSchema.parse(raw);
+    return Response.json({ config });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[org-configs] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ config: data });
 }
 
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
@@ -78,16 +81,12 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
   const { skillId } = await params;
   const { orgId } = await request.json() as { orgId: string };
 
-  const sb = getSupabase();
-  const { error } = await sb
-    .from('org_skill_configs')
-    .delete()
-    .eq('skill_id', skillId)
-    .eq('org_id', orgId);
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  try {
+    await deleteOrgSkillConfig(skillId, orgId);
+    return Response.json({ success: true });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[org-configs] DELETE error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ success: true });
 }
