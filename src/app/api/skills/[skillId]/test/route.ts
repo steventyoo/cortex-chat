@@ -83,6 +83,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     columnMapping: {},
     sampleExtractions: overrides.sampleExtractions || [],
     classifierHints: null,
+    extractionMethod: 'llm',
   };
 
   // Retrieve reference document chunks if available

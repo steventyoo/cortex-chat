@@ -55,6 +55,7 @@ export interface DocumentSkill {
   columnMapping: Record<string, string>;
   sampleExtractions: FewShotExample[];
   classifierHints: { description: string; keywords: string[] } | null;
+  extractionMethod: 'llm' | 'codegen' | 'vision';
 }
 
 export interface FewShotExample {
@@ -96,6 +97,7 @@ const _orgAliasCache = new Map<string, { data: Map<string, string[]>; time: numb
 const _skillFieldDefsCache = new Map<string, { data: FieldDefinition[]; time: number }>();
 
 function mapRowToSkill(row: Record<string, unknown>): DocumentSkill {
+  const method = String(row.extraction_method || 'llm');
   return {
     id: String(row.id || ''),
     skillId: String(row.skill_id || ''),
@@ -109,6 +111,7 @@ function mapRowToSkill(row: Record<string, unknown>): DocumentSkill {
     columnMapping: (row.column_mapping as Record<string, string>) || {},
     sampleExtractions: (row.sample_extractions as FewShotExample[]) || [],
     classifierHints: (row.classifier_hints as DocumentSkill['classifierHints']) || null,
+    extractionMethod: (method === 'codegen' || method === 'vision') ? method : 'llm',
   };
 }
 

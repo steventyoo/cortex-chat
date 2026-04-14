@@ -65,3 +65,33 @@ export async function deleteContextCard(id: string, orgId: string) {
     .eq('org_id', orgId);
   if (error) throw error;
 }
+
+/**
+ * Returns the set of key_fields referenced across all context cards that involve a given skill.
+ * Used by the code-gen meta-prompt to know which fields context cards need
+ * beyond what the skill schema defines (the "floor" for extraction).
+ */
+export async function getContextCardFieldsForSkill(
+  skillId: string,
+  orgId: string,
+): Promise<string[]> {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('context_cards')
+    .select('key_fields')
+    .eq('org_id', orgId)
+    .eq('is_active', true)
+    .contains('skills_involved', [skillId]);
+  if (error) throw error;
+
+  const fieldNames = new Set<string>();
+  for (const row of data ?? []) {
+    const kf = row.key_fields as Record<string, unknown> | null;
+    if (kf && typeof kf === 'object') {
+      for (const key of Object.keys(kf)) {
+        fieldNames.add(key);
+      }
+    }
+  }
+  return Array.from(fieldNames);
+}
