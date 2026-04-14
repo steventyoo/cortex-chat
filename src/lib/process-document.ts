@@ -20,6 +20,8 @@ const ALWAYS_PROCESS_PATTERNS = [
   /cost\s*report/i,
 ];
 
+const VISION_EXTS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp']);
+
 function shouldAlwaysProcess(fileName: string, folderPath?: string): boolean {
   const haystack = `${fileName} ${folderPath || ''}`;
   return ALWAYS_PROCESS_PATTERNS.some(p => p.test(haystack));
@@ -287,9 +289,8 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
     const skill = classification.skillId ? await getSkill(classification.skillId) : null;
 
     if (skill?.extractionMethod === 'vision') {
-      console.log(`[process] Using VISION extraction for skill=${skill.skillId}`);
       const catalogFields = await getSkillFieldDefinitions(skill.skillId);
-      const fileExt = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
+      const fileExt = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : '';
 
       let docBuffer: Buffer;
       if (driveFileId) {
@@ -300,22 +301,53 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         docBuffer = Buffer.from(await dlData!.arrayBuffer());
       }
 
-      try {
-        const visionResult: VisionExtractionResult = await extractWithVision(
-          docBuffer, skill, catalogFields, classification.confidence, fileExt,
-        );
-        extraction = visionResult.extraction;
-        discoveredFields = visionResult.discoveredFields;
-        overallConfidence = visionResult.overallConfidence;
-        flags = visionResult.flags;
-        usedExtractionMethod = 'vision';
-        console.log(`[process] Vision extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
-      } catch (visionErr) {
-        console.warn(`[process] Vision extraction failed, falling back to LLM: ${visionErr instanceof Error ? visionErr.message : visionErr}`);
-        const result = await extractWithSkill(sourceText, projectId || '', orgId);
-        extraction = result.extraction;
-        overallConfidence = result.overallConfidence;
-        flags = result.flags;
+      if (VISION_EXTS.has(fileExt)) {
+        console.log(`[process] Using VISION extraction for skill=${skill.skillId} ext=${fileExt}`);
+        try {
+          const visionResult: VisionExtractionResult = await extractWithVision(
+            docBuffer, skill, catalogFields, classification.confidence, fileExt,
+          );
+          extraction = visionResult.extraction;
+          discoveredFields = visionResult.discoveredFields;
+          overallConfidence = visionResult.overallConfidence;
+          flags = visionResult.flags;
+          usedExtractionMethod = 'vision';
+          console.log(`[process] Vision extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
+        } catch (visionErr) {
+          console.warn(`[process] Vision extraction failed, falling back to LLM: ${visionErr instanceof Error ? visionErr.message : visionErr}`);
+          const result = await extractWithSkill(sourceText, projectId || '', orgId);
+          extraction = result.extraction;
+          overallConfidence = result.overallConfidence;
+          flags = result.flags;
+        }
+      } else {
+        console.log(`[process] Using CODEGEN extraction for skill=${skill.skillId} ext=${fileExt} (non-PDF/image)`);
+        const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
+
+        try {
+          const codegenResult: CodegenExtractionResult = await extractWithCodegen(
+            docBuffer, sourceText, skill, catalogFields, contextCardFields,
+            classification.confidence, fileExt,
+          );
+          extraction = codegenResult.extraction;
+          discoveredFields = codegenResult.discoveredFields;
+          overallConfidence = computeOverallConfidence(extraction);
+          flags = [];
+
+          for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
+            if (fieldData.value !== null && fieldData.confidence < 0.7) {
+              flags.push({ field: fieldName, issue: `Low confidence (${Math.round(fieldData.confidence * 100)}%)`, severity: 'warning' });
+            }
+          }
+          usedExtractionMethod = 'codegen';
+          console.log(`[process] Codegen extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
+        } catch (codegenErr) {
+          console.warn(`[process] Codegen extraction failed, falling back to LLM: ${codegenErr instanceof Error ? codegenErr.message : codegenErr}`);
+          const result = await extractWithSkill(sourceText, projectId || '', orgId);
+          extraction = result.extraction;
+          overallConfidence = result.overallConfidence;
+          flags = result.flags;
+        }
       }
     } else if (skill?.extractionMethod === 'codegen') {
       console.log(`[process] Using CODEGEN extraction for skill=${skill.skillId}`);

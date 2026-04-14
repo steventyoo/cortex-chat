@@ -107,7 +107,7 @@ The document content is available at \`/tmp/input${fileExt ? '.' + fileExt : ''}
 5. For totals: verify by summing components when possible. Include both the stated total and calculated total if they differ.
 6. Cross-reference values across sections when the same data appears in multiple places.
 
-Write the complete Python script now. Use only the standard library plus: pandas, numpy, openpyxl, pdfplumber, xlrd.`;
+Write the complete Python script now. Use only the standard library plus: pandas, numpy, openpyxl, pdfplumber, xlrd, python-docx, docx2txt, olefile, python-pptx.`;
 }
 
 function getFileTypeHint(fileExt: string): string {
@@ -122,28 +122,132 @@ with pdfplumber.open("/tmp/input.pdf") as pdf:
         tables = page.extract_tables()
 \`\`\``;
     case 'xlsx':
-    case 'xls':
-      return `This is an Excel file. Use openpyxl:
+      return `This is an Excel (.xlsx) file. Use openpyxl to preserve cell types, merged cells, and formulas:
 \`\`\`python
 import openpyxl
-wb = openpyxl.load_workbook("/tmp/input.${fileExt}")
+wb = openpyxl.load_workbook("/tmp/input.xlsx", data_only=True)
 for sheet_name in wb.sheetnames:
     ws = wb[sheet_name]
     for row in ws.iter_rows(values_only=True):
         ...
-\`\`\``;
+\`\`\`
+Tips: Use data_only=True to get computed values instead of formulas. Check ws.merged_cells.ranges for merged regions. Iterate ws.iter_rows(min_row=, max_row=) for specific ranges.`;
+    case 'xls':
+      return `This is a legacy Excel (.xls) file. Use xlrd:
+\`\`\`python
+import xlrd
+wb = xlrd.open_workbook("/tmp/input.xls")
+for sheet in wb.sheets():
+    for row_idx in range(sheet.nrows):
+        row = [sheet.cell_value(row_idx, col) for col in range(sheet.ncols)]
+\`\`\`
+Tips: xlrd only supports .xls (BIFF format). Date cells need xlrd.xldate_as_tuple() conversion.`;
+    case 'docx':
+      return `This is a Word (.docx) file. Use python-docx to extract paragraphs AND tables with full structure:
+\`\`\`python
+from docx import Document
+doc = Document("/tmp/input.docx")
+for para in doc.paragraphs:
+    text = para.text
+    style = para.style.name  # e.g. 'Heading 1', 'Normal'
+for table in doc.tables:
+    for row in table.rows:
+        cells = [cell.text for cell in row.cells]
+\`\`\`
+Tips: Tables often contain the key structured data. Check para.style.name for headings vs body text. Use doc.sections for page layout info.`;
+    case 'doc':
+      return `This is a legacy Word (.doc) file. Use docx2txt for text extraction, or olefile for raw OLE access:
+\`\`\`python
+import docx2txt
+text = docx2txt.process("/tmp/input.doc")
+\`\`\`
+If docx2txt fails, fall back to olefile:
+\`\`\`python
+import olefile
+ole = olefile.OleFileIO("/tmp/input.doc")
+if ole.exists("WordDocument"):
+    stream = ole.openstream("WordDocument").read()
+\`\`\`
+Tips: Legacy .doc files may lose table formatting. Extract what you can from the raw text and use regex for structured fields.`;
+    case 'pptx':
+      return `This is a PowerPoint (.pptx) file. Use python-pptx to extract text from slides and tables:
+\`\`\`python
+from pptx import Presentation
+prs = Presentation("/tmp/input.pptx")
+for slide in prs.slides:
+    for shape in slide.shapes:
+        if shape.has_text_frame:
+            for para in shape.text_frame.paragraphs:
+                text = para.text
+        if shape.has_table:
+            table = shape.table
+            for row in table.rows:
+                cells = [cell.text for cell in row.cells]
+\`\`\`
+Tips: Check shape.shape_type for charts, images, etc. Slide notes are in slide.notes_slide.notes_text_frame.`;
     case 'csv':
       return `This is a CSV file. Use pandas:
 \`\`\`python
 import pandas as pd
 df = pd.read_csv("/tmp/input.csv")
-\`\`\``;
-    default:
-      return `Read the file as text:
+\`\`\`
+Tips: Try different encodings (encoding='utf-8-sig' or 'latin-1') if parsing fails. Use df.to_dict('records') for row iteration.`;
+    case 'txt':
+    case 'md':
+      return `This is a plain text file. Read directly:
 \`\`\`python
-with open("/tmp/input${fileExt ? '.' + fileExt : ''}", "r") as f:
+with open("/tmp/input.${fileExt}", "r", encoding="utf-8") as f:
     content = f.read()
+lines = content.splitlines()
+\`\`\`
+Tips: Use regex for structured extraction. Look for key-value patterns like "Field: Value" or tabular data separated by tabs/pipes.`;
+    case 'html':
+    case 'htm':
+      return `This is an HTML file. Parse with the standard library:
+\`\`\`python
+from html.parser import HTMLParser
+import re
+with open("/tmp/input.${fileExt}", "r", encoding="utf-8") as f:
+    content = f.read()
+text = re.sub(r'<[^>]+>', ' ', content)  # strip tags for simple extraction
+\`\`\`
+Tips: For tables, use regex to find <table>...</table> blocks and parse <tr>/<td> elements. Consider extracting data attributes from tags.`;
+    case 'eml':
+    case 'msg':
+      return `This is an email file. Parse headers, body, and attachments:
+\`\`\`python
+import email
+from email import policy
+with open("/tmp/input.${fileExt}", "rb") as f:
+    msg = email.message_from_binary_file(f, policy=policy.default)
+subject = msg["subject"]
+from_addr = msg["from"]
+date = msg["date"]
+body = msg.get_body(preferencelist=("plain", "html")).get_content()
+\`\`\`
+Tips: Check for attachments with msg.iter_attachments(). HTML body may need tag stripping.`;
+    case 'json':
+      return `This is a JSON file. Parse directly:
+\`\`\`python
+import json
+with open("/tmp/input.json", "r") as f:
+    data = json.load(f)
 \`\`\``;
+    case 'xml':
+      return `This is an XML file. Use ElementTree:
+\`\`\`python
+import xml.etree.ElementTree as ET
+tree = ET.parse("/tmp/input.xml")
+root = tree.getroot()
+\`\`\`
+Tips: Handle namespaces with {namespace}tag syntax. Use root.iter() for recursive element search.`;
+    default:
+      return `Read the file as text (best effort):
+\`\`\`python
+with open("/tmp/input${fileExt ? '.' + fileExt : ''}", "r", errors="replace") as f:
+    content = f.read()
+\`\`\`
+Tips: If the file is binary, try reading as bytes and decoding what you can.`;
   }
 }
 
