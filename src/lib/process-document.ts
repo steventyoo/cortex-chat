@@ -366,8 +366,8 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       ? { ...extraction, discovered_fields: discoveredFields }
       : extraction;
     const aiModel = Object.keys(discoveredFields).length > 0
-      ? 'haiku-classify+sonnet-codegen'
-      : 'haiku-classify+sonnet-extract';
+      ? 'haiku-classify+opus-codegen'
+      : 'haiku-classify+opus-extract';
 
     await sb.from('pipeline_log').update({
       document_type: extraction.skillId || null,

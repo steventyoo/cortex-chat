@@ -301,7 +301,7 @@ export async function POST(request: NextRequest) {
               roundText = '';
               currentGeneration = trace.generation({
                 name: `llm-round-${rse.round}`,
-                model: 'claude-sonnet-4-20250514',
+                model: 'claude-opus-4-6',
                 modelParameters: { max_tokens: 4096 },
                 input: rse.round === 0
                   ? { messageCount: messages.length, toolCount: anthropicTools.length }

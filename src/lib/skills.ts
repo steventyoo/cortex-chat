@@ -392,7 +392,7 @@ export async function extractWithSkill(
 
   // Use streaming for multi-record skills (large documents can exceed Anthropic's non-streaming timeout)
   const messageParams = {
-    model: 'claude-sonnet-4-20250514' as const,
+    model: 'claude-opus-4-6' as const,
     max_tokens: maxTokens,
     system: skill.systemPrompt,
     messages: [{ role: 'user' as const, content: extractionPrompt }],

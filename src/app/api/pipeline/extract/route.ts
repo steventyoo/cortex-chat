@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
       status: 'tier1_extracting',
       source_text: sourceText.substring(0, 500000),
       created_at: now,
-      ai_model: 'sonnet-classify+sonnet-extract',
+      ai_model: 'opus-extract',
     }).select('id').single();
     if (data) recordId = String(data.id);
   } catch (err) {

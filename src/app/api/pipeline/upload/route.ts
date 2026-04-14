@@ -67,7 +67,7 @@ export async function POST(request: NextRequest) {
       file_name: fileName,
       status: 'queued',
       created_at: now,
-      ai_model: 'haiku-classify+sonnet-extract',
+      ai_model: 'haiku-classify+opus-extract',
     }).select('id').single();
     if (data) recordId = String(data.id);
   } catch (err) {
