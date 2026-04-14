@@ -5,7 +5,7 @@ import { normalizeJsonObject, normalizeJsonArray, normalizeStringArray } from '.
 
 export const ChatToolSchema = z.object({
   id: z.string().uuid(),
-  org_id: z.string().uuid(),
+  org_id: z.string(),
   tool_name: z.string(),
   display_name: z.string(),
   description: z.string().nullable().default(''),
@@ -25,7 +25,7 @@ export type ChatTool = z.infer<typeof ChatToolSchema>;
 
 export const ChatPromptTemplateSchema = z.object({
   id: z.string().uuid(),
-  org_id: z.string().uuid(),
+  org_id: z.string(),
   template_name: z.string(),
   trigger_description: z.string().nullable().default(null),
   trigger_keywords: normalizeStringArray.transform(v => v ?? []),

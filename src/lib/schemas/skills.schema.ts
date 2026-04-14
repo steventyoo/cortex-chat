@@ -41,7 +41,7 @@ export type SkillVersion = z.infer<typeof SkillVersionSchema>;
 
 export const OrgSkillConfigSchema = z.object({
   id: z.string().uuid(),
-  org_id: z.string().uuid(),
+  org_id: z.string(),
   skill_id: z.string(),
   pinned_version: z.coerce.number().nullable().default(null),
   document_aliases: normalizeStringArray.transform(v => v ?? []),

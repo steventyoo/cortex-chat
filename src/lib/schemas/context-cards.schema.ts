@@ -5,7 +5,7 @@ import { normalizeStringArray, normalizeJsonObject, normalizeJsonArray } from '.
 
 export const ContextCardSchema = z.object({
   id: z.string().uuid(),
-  org_id: z.string().uuid(),
+  org_id: z.string(),
   card_name: z.string(),
   display_name: z.string(),
   description: z.string().nullable().default(''),
