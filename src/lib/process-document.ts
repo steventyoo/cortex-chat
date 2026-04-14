@@ -1,6 +1,7 @@
 import { getSupabase, lookupCategoryId } from '@/lib/supabase';
 import { extractWithSkill, getSkillFieldDefinitions, listActiveSkills, classifyDocument, getSkill } from '@/lib/skills';
 import { extractWithCodegen, type CodegenExtractionResult } from '@/lib/codegen-extractor';
+import { extractWithVision, type VisionExtractionResult } from '@/lib/vision-extractor';
 import { getContextCardFieldsForSkill } from '@/lib/stores/context-cards.store';
 import { parseFileBuffer, extractTextWithClaude } from '@/lib/file-parser';
 import { ValidationFlag, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
@@ -275,6 +276,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   let overallConfidence: number;
   let flags: ValidationFlag[];
   let discoveredFields: Record<string, unknown> = {};
+  let usedExtractionMethod = 'llm';
 
   try {
     console.log(`[process] Starting AI extraction: project=${projectId || 'none'} org=${orgId}`);
@@ -284,7 +286,38 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
     const classification = await classifyDocument(sourceText, skills, orgId);
     const skill = classification.skillId ? await getSkill(classification.skillId) : null;
 
-    if (skill?.extractionMethod === 'codegen') {
+    if (skill?.extractionMethod === 'vision') {
+      console.log(`[process] Using VISION extraction for skill=${skill.skillId}`);
+      const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+      const fileExt = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
+
+      let docBuffer: Buffer;
+      if (driveFileId) {
+        const { buffer } = await downloadFileRaw(driveFileId, mimeType);
+        docBuffer = buffer;
+      } else {
+        const { data: dlData } = await sb.storage.from(DOCUMENTS_BUCKET).download(storagePath);
+        docBuffer = Buffer.from(await dlData!.arrayBuffer());
+      }
+
+      try {
+        const visionResult: VisionExtractionResult = await extractWithVision(
+          docBuffer, skill, catalogFields, classification.confidence, fileExt,
+        );
+        extraction = visionResult.extraction;
+        discoveredFields = visionResult.discoveredFields;
+        overallConfidence = visionResult.overallConfidence;
+        flags = visionResult.flags;
+        usedExtractionMethod = 'vision';
+        console.log(`[process] Vision extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
+      } catch (visionErr) {
+        console.warn(`[process] Vision extraction failed, falling back to LLM: ${visionErr instanceof Error ? visionErr.message : visionErr}`);
+        const result = await extractWithSkill(sourceText, projectId || '', orgId);
+        extraction = result.extraction;
+        overallConfidence = result.overallConfidence;
+        flags = result.flags;
+      }
+    } else if (skill?.extractionMethod === 'codegen') {
       console.log(`[process] Using CODEGEN extraction for skill=${skill.skillId}`);
       const catalogFields = await getSkillFieldDefinitions(skill.skillId);
       const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
@@ -316,6 +349,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           }
         }
         console.log(`[process] Codegen extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
+        usedExtractionMethod = 'codegen';
       } catch (codegenErr) {
         console.warn(`[process] Codegen extraction failed, falling back to LLM: ${codegenErr instanceof Error ? codegenErr.message : codegenErr}`);
         const result = await extractWithSkill(sourceText, projectId || '', orgId);
@@ -365,9 +399,11 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
     const extractionWithDiscovered = Object.keys(discoveredFields).length > 0
       ? { ...extraction, discovered_fields: discoveredFields }
       : extraction;
-    const aiModel = Object.keys(discoveredFields).length > 0
-      ? 'haiku-classify+opus-codegen'
-      : 'haiku-classify+opus-extract';
+    const aiModel = usedExtractionMethod === 'vision'
+      ? 'haiku-classify+opus-vision'
+      : usedExtractionMethod === 'codegen'
+        ? 'haiku-classify+opus-codegen'
+        : 'haiku-classify+opus-extract';
 
     await sb.from('pipeline_log').update({
       document_type: extraction.skillId || null,
