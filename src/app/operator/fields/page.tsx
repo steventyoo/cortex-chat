@@ -37,7 +37,6 @@ export default function FieldCatalogPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CatalogField | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [usagePopover, setUsagePopover] = useState<string | null>(null);
 
   const fetchFields = useCallback(async () => {
     setLoading(true);
@@ -162,7 +161,7 @@ export default function FieldCatalogPage() {
                         <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[200px]">Display Name</th>
                         <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[70px]">Type</th>
                         <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Description</th>
-                        <th className="text-center px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[70px]">Used By</th>
+                        <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide min-w-[120px]">Used By</th>
                         <th className="w-[100px]" />
                       </tr>
                     </thead>
@@ -173,30 +172,27 @@ export default function FieldCatalogPage() {
                           <td className="px-2 py-1.5 text-[#555]">{f.display_name}</td>
                           <td className="px-2 py-1.5 font-mono text-[#888]">{f.field_type}</td>
                           <td className="px-2 py-1.5 text-[#999] truncate max-w-[300px]">{f.description}</td>
-                          <td className="px-2 py-1.5 text-center relative">
-                            {f.usage_count ? (
-                              <button
-                                onClick={() => setUsagePopover(usagePopover === f.id ? null : f.id)}
-                                className="text-[11px] font-medium text-[#007aff] hover:underline cursor-pointer"
-                              >
-                                {f.usage_count} skill{f.usage_count > 1 ? 's' : ''}
-                              </button>
-                            ) : (
-                              <span className="text-[11px] text-[#ccc]">&mdash;</span>
-                            )}
-                            {usagePopover === f.id && f.used_by_skills && f.used_by_skills.length > 0 && (
-                              <div className="absolute z-30 right-0 top-full mt-1 bg-white border border-[#e0e0e0] rounded-lg shadow-lg py-1.5 px-1 min-w-[180px] text-left">
-                                <div className="px-2 py-1 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Used by</div>
-                                {f.used_by_skills.map(s => (
+                          <td className="px-2 py-1.5">
+                            {f.used_by_skills && f.used_by_skills.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {f.used_by_skills.slice(0, 2).map(s => (
                                   <Link
                                     key={s.skill_id}
                                     href={`/operator/skills/${s.skill_id}`}
-                                    className="block px-2 py-1 text-[12px] text-[#333] hover:bg-[#f5f5f5] rounded transition-colors truncate"
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#eef2ff] text-[#4338ca] text-[10px] font-medium hover:bg-[#ddd6fe] transition-colors truncate max-w-[120px]"
+                                    title={s.skill_name}
                                   >
                                     {s.skill_name}
                                   </Link>
                                 ))}
+                                {f.used_by_skills.length > 2 && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#f5f5f5] text-[#888] text-[10px] font-medium" title={f.used_by_skills.slice(2).map(s => s.skill_name).join(', ')}>
+                                    +{f.used_by_skills.length - 2}
+                                  </span>
+                                )}
                               </div>
+                            ) : (
+                              <span className="text-[11px] text-[#ccc]">&mdash;</span>
                             )}
                           </td>
                           <td className="px-2 py-1.5 text-right flex items-center justify-end gap-2">
@@ -229,11 +225,6 @@ export default function FieldCatalogPage() {
           </div>
         )}
       </div>
-
-      {/* Click-outside handler for usage popover */}
-      {usagePopover && (
-        <div className="fixed inset-0 z-20" onClick={() => setUsagePopover(null)} />
-      )}
 
       {/* Delete Confirmation Modal */}
       {deleteTarget && (
