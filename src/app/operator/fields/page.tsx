@@ -12,6 +12,7 @@ interface CatalogField {
   description: string;
   enum_options: string[] | null;
   usage_count?: number;
+  used_by_skills?: { skill_id: string; skill_name: string }[];
 }
 
 const CATEGORIES = ['identity', 'financial', 'schedule', 'technical', 'quality', 'admin', 'general'] as const;
@@ -34,11 +35,14 @@ export default function FieldCatalogPage() {
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CatalogField | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [usagePopover, setUsagePopover] = useState<string | null>(null);
 
   const fetchFields = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/field-catalog?withUsage=true');
+      const res = await fetch('/api/field-catalog?withUsage=true&withDetails=true');
       const data = await res.json();
       setFields(data.fields || []);
     } catch { /* ignore */ }
@@ -46,6 +50,18 @@ export default function FieldCatalogPage() {
   }, []);
 
   useEffect(() => { fetchFields(); }, [fetchFields]);
+
+  const handleDelete = async (field: CatalogField) => {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/field-catalog?id=${field.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        fetchFields();
+        setDeleteTarget(null);
+      }
+    } catch { /* ignore */ }
+    setDeleting(false);
+  };
 
   const filtered = fields.filter(f => {
     if (filter !== 'all' && f.category !== filter) return false;
@@ -147,7 +163,7 @@ export default function FieldCatalogPage() {
                         <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[70px]">Type</th>
                         <th className="text-left px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Description</th>
                         <th className="text-center px-2 py-2 text-[10px] font-semibold text-[#999] uppercase tracking-wide w-[70px]">Used By</th>
-                        <th className="w-[60px]" />
+                        <th className="w-[100px]" />
                       </tr>
                     </thead>
                     <tbody>
@@ -157,19 +173,44 @@ export default function FieldCatalogPage() {
                           <td className="px-2 py-1.5 text-[#555]">{f.display_name}</td>
                           <td className="px-2 py-1.5 font-mono text-[#888]">{f.field_type}</td>
                           <td className="px-2 py-1.5 text-[#999] truncate max-w-[300px]">{f.description}</td>
-                          <td className="px-2 py-1.5 text-center">
+                          <td className="px-2 py-1.5 text-center relative">
                             {f.usage_count ? (
-                              <span className="text-[11px] font-medium text-[#007aff]">{f.usage_count} skills</span>
+                              <button
+                                onClick={() => setUsagePopover(usagePopover === f.id ? null : f.id)}
+                                className="text-[11px] font-medium text-[#007aff] hover:underline cursor-pointer"
+                              >
+                                {f.usage_count} skill{f.usage_count > 1 ? 's' : ''}
+                              </button>
                             ) : (
-                              <span className="text-[11px] text-[#ccc]">—</span>
+                              <span className="text-[11px] text-[#ccc]">&mdash;</span>
+                            )}
+                            {usagePopover === f.id && f.used_by_skills && f.used_by_skills.length > 0 && (
+                              <div className="absolute z-30 right-0 top-full mt-1 bg-white border border-[#e0e0e0] rounded-lg shadow-lg py-1.5 px-1 min-w-[180px] text-left">
+                                <div className="px-2 py-1 text-[10px] font-semibold text-[#999] uppercase tracking-wide">Used by</div>
+                                {f.used_by_skills.map(s => (
+                                  <Link
+                                    key={s.skill_id}
+                                    href={`/operator/skills/${s.skill_id}`}
+                                    className="block px-2 py-1 text-[12px] text-[#333] hover:bg-[#f5f5f5] rounded transition-colors truncate"
+                                  >
+                                    {s.skill_name}
+                                  </Link>
+                                ))}
+                              </div>
                             )}
                           </td>
-                          <td className="px-2 py-1.5 text-right">
+                          <td className="px-2 py-1.5 text-right flex items-center justify-end gap-2">
                             <button
                               onClick={() => { setEditId(f.id); setShowAdd(true); }}
                               className="text-[11px] text-[#007aff] hover:underline"
                             >
                               Edit
+                            </button>
+                            <button
+                              onClick={() => setDeleteTarget(f)}
+                              className="text-[11px] text-[#dc2626] hover:underline"
+                            >
+                              Delete
                             </button>
                           </td>
                         </tr>
@@ -188,6 +229,58 @@ export default function FieldCatalogPage() {
           </div>
         )}
       </div>
+
+      {/* Click-outside handler for usage popover */}
+      {usagePopover && (
+        <div className="fixed inset-0 z-20" onClick={() => setUsagePopover(null)} />
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onClick={() => !deleting && setDeleteTarget(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-[420px]" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-[#e8e8e8]">
+              <h3 className="text-[15px] font-semibold text-[#1a1a1a]">Delete Field</h3>
+            </div>
+            <div className="px-6 py-4">
+              <p className="text-[13px] text-[#555]">
+                Are you sure you want to delete <span className="font-mono font-medium text-[#1a1a1a]">{deleteTarget.canonical_name}</span>?
+              </p>
+              {deleteTarget.usage_count ? (
+                <div className="mt-3 px-3 py-2 rounded-lg bg-[#fef3c7] text-[#92400e] text-[12px]">
+                  This field is currently used by <strong>{deleteTarget.usage_count} skill{deleteTarget.usage_count > 1 ? 's' : ''}</strong>.
+                  Deleting it will remove it from all skills.
+                  {deleteTarget.used_by_skills && deleteTarget.used_by_skills.length > 0 && (
+                    <ul className="mt-1.5 ml-3 list-disc">
+                      {deleteTarget.used_by_skills.map(s => (
+                        <li key={s.skill_id}>{s.skill_name}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : (
+                <p className="mt-2 text-[12px] text-[#999]">This field is not used by any skills.</p>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-[#e8e8e8] flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="px-4 py-2 rounded-lg text-[13px] text-[#666] hover:bg-[#f0f0f0] transition-colors disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDelete(deleteTarget)}
+                disabled={deleting}
+                className="px-4 py-2 rounded-lg bg-[#dc2626] text-white text-[13px] font-medium hover:bg-[#b91c1c] transition-colors disabled:opacity-40"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add/Edit Modal */}
       {showAdd && (
