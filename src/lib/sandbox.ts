@@ -6,6 +6,7 @@ const SANDBOX_LIFETIME = 5 * 60_000;
 const MAX_HTML_SIZE = 100_000;
 const MAX_STDOUT_SIZE = 50_000;
 const REQUIRED_PACKAGES = ['pandas', 'plotly', 'numpy'];
+const EXTRACTION_PACKAGES = ['openpyxl', 'pdfplumber', 'pandas', 'numpy', 'xlrd'];
 
 function getCredentials() {
   const token = process.env.VERCEL_TOKEN;
@@ -276,4 +277,128 @@ export async function createAnalysisSnapshot(): Promise<string> {
   const snapshot = await sandbox.snapshot();
   console.log(`[sandbox] Snapshot created: ${snapshot.snapshotId}`);
   return snapshot.snapshotId;
+}
+
+// ── Extraction Sandbox ──────────────────────────────────────────
+
+export interface ExtractionFile {
+  path: string;
+  content: Buffer;
+}
+
+export interface ExtractionRunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+const EXTRACTION_EXEC_TIMEOUT = 60_000;
+const EXTRACTION_SANDBOX_LIFETIME = 3 * 60_000;
+const MAX_EXTRACTION_STDOUT = 500_000;
+
+/**
+ * Short-lived sandbox for running code-generated extraction scripts at pipeline time.
+ * Unlike SandboxSession (which persists across chat tool calls), this is a single-shot
+ * executor: create -> write files -> run script -> collect output -> destroy.
+ *
+ * Pre-installs openpyxl, pdfplumber, pandas, numpy, xlrd for document parsing.
+ */
+export class ExtractionSandbox {
+  private sandbox: (Sandbox & AsyncDisposable) | null = null;
+
+  private async boot(): Promise<Sandbox & AsyncDisposable> {
+    const creds = getCredentials();
+    const snapshotId = process.env.EXTRACTION_SNAPSHOT_ID;
+
+    if (snapshotId) {
+      return Sandbox.create({
+        ...creds,
+        source: { type: 'snapshot', snapshotId },
+        timeout: EXTRACTION_SANDBOX_LIFETIME,
+        networkPolicy: 'deny-all',
+      });
+    }
+
+    const sb = await Sandbox.create({
+      ...creds,
+      runtime: 'python3.13',
+      timeout: EXTRACTION_SANDBOX_LIFETIME,
+    });
+
+    const pipResult = await sb.runCommand('pip', [
+      'install', '-q', ...EXTRACTION_PACKAGES,
+    ]);
+    if (pipResult.exitCode !== 0) {
+      const stderr = await pipResult.stderr();
+      await sb.stop({ blocking: true }).catch(() => {});
+      throw new Error(`[extraction-sandbox] pip install failed: ${stderr.slice(0, 2000)}`);
+    }
+
+    await sb.updateNetworkPolicy('deny-all');
+    return sb;
+  }
+
+  async run(
+    code: string,
+    files: ExtractionFile[] = [],
+  ): Promise<ExtractionRunResult> {
+    this.sandbox = await this.boot();
+    const sb = this.sandbox;
+
+    const allFiles: Array<{ path: string; content: Buffer }> = [
+      ...files,
+      { path: '/tmp/extract.py', content: Buffer.from(code) },
+    ];
+    await sb.writeFiles(allFiles);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EXTRACTION_EXEC_TIMEOUT);
+
+    let result;
+    try {
+      result = await sb.runCommand('python3', ['/tmp/extract.py'], {
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const stdoutRaw = await result.stdout();
+    const stdout = stdoutRaw.length > MAX_EXTRACTION_STDOUT
+      ? stdoutRaw.slice(-MAX_EXTRACTION_STDOUT)
+      : stdoutRaw;
+
+    const stderr = result.exitCode !== 0
+      ? (await result.stderr()).slice(0, 10_000)
+      : '';
+
+    return { stdout, stderr, exitCode: result.exitCode };
+  }
+
+  async destroy(): Promise<void> {
+    if (this.sandbox) {
+      try {
+        await this.sandbox.stop({ blocking: true });
+      } catch {
+        // Best effort
+      }
+      this.sandbox = null;
+    }
+  }
+
+  /**
+   * One-shot: create sandbox, write files, run code, collect result, destroy.
+   * Convenience wrapper for pipeline use.
+   */
+  static async execute(
+    code: string,
+    files: ExtractionFile[] = [],
+  ): Promise<ExtractionRunResult> {
+    const sandbox = new ExtractionSandbox();
+    try {
+      return await sandbox.run(code, files);
+    } finally {
+      await sandbox.destroy();
+    }
+  }
 }

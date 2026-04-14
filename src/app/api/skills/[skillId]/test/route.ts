@@ -83,6 +83,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     columnMapping: {},
     sampleExtractions: overrides.sampleExtractions || [],
     classifierHints: null,
+    extractionMethod: 'llm',
   };
 
   // Retrieve reference document chunks if available
@@ -124,7 +125,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const tool = isTyped ? buildExtractionTool(tempSkill, testFields) : buildGeneralExtractionTool();
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-opus-4-6',
       max_tokens: 8192,
       system: tempSkill.systemPrompt,
       messages: [{ role: 'user', content: extractionPrompt }],

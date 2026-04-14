@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-opus-4-6',
       max_tokens: 4096,
       system: `You are a construction document analysis expert. Given a sample document, you analyze its structure and content to propose a comprehensive extraction schema.
 

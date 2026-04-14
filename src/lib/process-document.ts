@@ -1,7 +1,10 @@
 import { getSupabase, lookupCategoryId } from '@/lib/supabase';
-import { extractWithSkill } from '@/lib/skills';
+import { extractWithSkill, getSkillFieldDefinitions, listActiveSkills, classifyDocument, getSkill } from '@/lib/skills';
+import { extractWithCodegen, type CodegenExtractionResult } from '@/lib/codegen-extractor';
+import { extractWithVision, type VisionExtractionResult } from '@/lib/vision-extractor';
+import { getContextCardFieldsForSkill } from '@/lib/stores/context-cards.store';
 import { parseFileBuffer, extractTextWithClaude } from '@/lib/file-parser';
-import { ValidationFlag, resolveCategoryKey, generateCanonicalName } from '@/lib/pipeline';
+import { ValidationFlag, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
 import { ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
 import { extractText as pdfExtractText } from 'unpdf';
@@ -272,13 +275,95 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   let extraction;
   let overallConfidence: number;
   let flags: ValidationFlag[];
+  let discoveredFields: Record<string, unknown> = {};
+  let usedExtractionMethod = 'llm';
 
   try {
     console.log(`[process] Starting AI extraction: project=${projectId || 'none'} org=${orgId}`);
-    const result = await extractWithSkill(sourceText, projectId || '', orgId);
-    extraction = result.extraction;
-    overallConfidence = result.overallConfidence;
-    flags = result.flags;
+
+    // Pre-classify to check if skill uses codegen extraction
+    const skills = await listActiveSkills();
+    const classification = await classifyDocument(sourceText, skills, orgId);
+    const skill = classification.skillId ? await getSkill(classification.skillId) : null;
+
+    if (skill?.extractionMethod === 'vision') {
+      console.log(`[process] Using VISION extraction for skill=${skill.skillId}`);
+      const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+      const fileExt = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
+
+      let docBuffer: Buffer;
+      if (driveFileId) {
+        const { buffer } = await downloadFileRaw(driveFileId, mimeType);
+        docBuffer = buffer;
+      } else {
+        const { data: dlData } = await sb.storage.from(DOCUMENTS_BUCKET).download(storagePath);
+        docBuffer = Buffer.from(await dlData!.arrayBuffer());
+      }
+
+      try {
+        const visionResult: VisionExtractionResult = await extractWithVision(
+          docBuffer, skill, catalogFields, classification.confidence, fileExt,
+        );
+        extraction = visionResult.extraction;
+        discoveredFields = visionResult.discoveredFields;
+        overallConfidence = visionResult.overallConfidence;
+        flags = visionResult.flags;
+        usedExtractionMethod = 'vision';
+        console.log(`[process] Vision extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
+      } catch (visionErr) {
+        console.warn(`[process] Vision extraction failed, falling back to LLM: ${visionErr instanceof Error ? visionErr.message : visionErr}`);
+        const result = await extractWithSkill(sourceText, projectId || '', orgId);
+        extraction = result.extraction;
+        overallConfidence = result.overallConfidence;
+        flags = result.flags;
+      }
+    } else if (skill?.extractionMethod === 'codegen') {
+      console.log(`[process] Using CODEGEN extraction for skill=${skill.skillId}`);
+      const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+      const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
+      const fileExt = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
+
+      // Re-download raw buffer for the codegen sandbox
+      let docBuffer: Buffer;
+      if (driveFileId) {
+        const { buffer } = await downloadFileRaw(driveFileId, mimeType);
+        docBuffer = buffer;
+      } else {
+        const { data: dlData } = await sb.storage.from(DOCUMENTS_BUCKET).download(storagePath);
+        docBuffer = Buffer.from(await dlData!.arrayBuffer());
+      }
+
+      try {
+        const codegenResult: CodegenExtractionResult = await extractWithCodegen(
+          docBuffer, sourceText, skill, catalogFields, contextCardFields,
+          classification.confidence, fileExt,
+        );
+        extraction = codegenResult.extraction;
+        discoveredFields = codegenResult.discoveredFields;
+        overallConfidence = computeOverallConfidence(extraction);
+        flags = [];
+
+        for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
+          if (fieldData.value !== null && fieldData.confidence < 0.7) {
+            flags.push({ field: fieldName, issue: `Low confidence (${Math.round(fieldData.confidence * 100)}%)`, severity: 'warning' });
+          }
+        }
+        console.log(`[process] Codegen extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
+        usedExtractionMethod = 'codegen';
+      } catch (codegenErr) {
+        console.warn(`[process] Codegen extraction failed, falling back to LLM: ${codegenErr instanceof Error ? codegenErr.message : codegenErr}`);
+        const result = await extractWithSkill(sourceText, projectId || '', orgId);
+        extraction = result.extraction;
+        overallConfidence = result.overallConfidence;
+        flags = result.flags;
+      }
+    } else {
+      const result = await extractWithSkill(sourceText, projectId || '', orgId);
+      extraction = result.extraction;
+      overallConfidence = result.overallConfidence;
+      flags = result.flags;
+    }
+
     console.log(`[process] AI extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} flags=${flags.length}`);
   } catch (err) {
     console.error(`[process] AI extraction failed for ${recordId}:`, err);
@@ -311,13 +396,22 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
 
   tStep = Date.now();
   try {
+    const extractionWithDiscovered = Object.keys(discoveredFields).length > 0
+      ? { ...extraction, discovered_fields: discoveredFields }
+      : extraction;
+    const aiModel = usedExtractionMethod === 'vision'
+      ? 'haiku-classify+opus-vision'
+      : usedExtractionMethod === 'codegen'
+        ? 'haiku-classify+opus-codegen'
+        : 'haiku-classify+opus-extract';
+
     await sb.from('pipeline_log').update({
       document_type: extraction.skillId || null,
       status: finalStatus,
       overall_confidence: overallConfidence,
-      extracted_data: extraction,
+      extracted_data: extractionWithDiscovered,
       validation_flags: flags.length > 0 ? flags : null,
-      ai_model: 'haiku-classify+sonnet-extract',
+      ai_model: aiModel,
       tier1_completed_at: new Date().toISOString(),
       tier2_completed_at: new Date().toISOString(),
       ...(categoryId ? { category_id: categoryId } : {}),

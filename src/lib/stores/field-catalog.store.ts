@@ -23,7 +23,7 @@ export interface AssembledFieldDef {
 
 export async function listCatalogFields(opts?: { category?: string }) {
   const sb = getSupabase();
-  let query = sb.from('field_catalog').select('*').order('category').order('display_name');
+  let query = sb.from('field_catalog').select('id, canonical_name, display_name, field_type, category, description, enum_options, created_at, updated_at').order('category').order('display_name');
   if (opts?.category) {
     query = query.eq('category', opts.category);
   }
