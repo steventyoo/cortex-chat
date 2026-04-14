@@ -296,9 +296,13 @@ async function generateParserCode(
   const generation = langfuseParent?.generation({
     name: previousError ? 'codegen-retry' : 'codegen-generate',
     model: 'claude-opus-4-6',
-    input: messages,
+    input: {
+      promptSummary: metaPrompt.slice(0, 500),
+      documentPreviewLength: documentPreview.length,
+      isRetry: !!previousError,
+      ...(previousError ? { previousError: previousError.slice(0, 1000) } : {}),
+    },
     modelParameters: { maxTokens: 16384 },
-    metadata: { isRetry: !!previousError },
   });
 
   const response = await client.messages.create({
@@ -317,7 +321,11 @@ async function generateParserCode(
   generation?.end({
     output: code,
     usage: { input: response.usage?.input_tokens ?? 0, output: response.usage?.output_tokens ?? 0 },
-    metadata: { stopReason: response.stop_reason, codeLength: code.length },
+    metadata: {
+      stopReason: response.stop_reason,
+      codeLength: code.length,
+      elapsedMs: Date.now() - (generation as any)?._startTime || 0,
+    },
   });
 
   return {
@@ -460,7 +468,7 @@ export async function extractWithCodegen(
     const tExec = Date.now();
     const sandboxSpan = options?.langfuseParent?.span({
       name: 'sandbox-execute',
-      input: { codeLength: code.length, attempt: attempt + 1 },
+      input: { codeLength: code.length, attempt: attempt + 1, codePreview: code.slice(0, 2000) },
     });
     let result;
     try {
@@ -477,8 +485,12 @@ export async function extractWithCodegen(
     }
     const execTime = Date.now() - tExec;
     sandboxSpan?.end({
-      output: { exitCode: result.exitCode, stdoutLength: result.stdout.length, stderrLength: result.stderr.length },
-      metadata: { elapsedMs: execTime },
+      output: {
+        exitCode: result.exitCode,
+        stdoutPreview: result.stdout.slice(0, 3000),
+        stderrPreview: result.stderr.slice(0, 1000),
+      },
+      metadata: { elapsedMs: execTime, stdoutLength: result.stdout.length, stderrLength: result.stderr.length },
     });
     console.log(`[codegen] Script executed in ${execTime}ms: exitCode=${result.exitCode}`);
 
@@ -503,9 +515,27 @@ export async function extractWithCodegen(
 
       const totalTime = Date.now() - t0;
       const fieldCount = Object.keys(normalized.extraction.fields).length;
+      const recordCount = normalized.extraction.records?.length ?? 0;
       const discoveredCount = Object.keys(normalized.discoveredFields).length;
+
+      options?.langfuseParent?.span({
+        name: 'codegen-result',
+        input: { fieldCount, recordCount, discoveredCount, overallConfidence: classifierConfidence },
+        output: {
+          fields: normalized.extraction.fields,
+          recordSample: normalized.extraction.records?.slice(0, 3),
+          discoveredFields: normalized.discoveredFields,
+        },
+        metadata: {
+          totalElapsedMs: totalTime,
+          retries,
+          parserMethod: normalized.metadata.parserMethod,
+          warnings: normalized.metadata.warnings,
+        },
+      });
+
       console.log(
-        `[codegen] SUCCESS skill=${skill.skillId} fields=${fieldCount} discovered=${discoveredCount} ` +
+        `[codegen] SUCCESS skill=${skill.skillId} fields=${fieldCount} records=${recordCount} discovered=${discoveredCount} ` +
         `retries=${retries} total=${totalTime}ms`
       );
 
