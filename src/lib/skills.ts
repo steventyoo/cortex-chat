@@ -330,7 +330,7 @@ export function buildSkillPrompt(skill: DocumentSkill, fields: FieldDefinition[]
     lines.push('');
   }
 
-  if (skill.multiRecordConfig) {
+  if (skill.multiRecordConfig && Array.isArray(skill.multiRecordConfig.fields) && skill.multiRecordConfig.fields.length > 0) {
     lines.push('## Multi-Record Extraction');
     lines.push('This document contains MULTIPLE line items / cost codes. You MUST extract EVERY line item as a separate record in the "records" array.');
     lines.push('Each record should contain these fields:');
@@ -341,7 +341,7 @@ export function buildSkillPrompt(skill: DocumentSkill, fields: FieldDefinition[]
     lines.push('The "fields" object should contain document-level summary data (totals, project info, report metadata).');
     lines.push('The "records" array should contain one entry per cost code / line item found in the document.');
     lines.push('Extract ALL line items — do not summarize or skip any. Even if there are hundreds of line items, extract every single one.');
-    if (skill.multiRecordConfig.secondaryTables) {
+    if (Array.isArray(skill.multiRecordConfig.secondaryTables)) {
       for (const st of skill.multiRecordConfig.secondaryTables) {
         lines.push(`Also extract into "${st.table}": ${st.fields.join(', ')}`);
       }

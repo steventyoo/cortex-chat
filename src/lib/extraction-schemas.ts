@@ -122,7 +122,7 @@ export function buildExtractionTool(
   };
   const required = ['documentType', 'documentTypeConfidence', 'fields', 'extra_fields'];
 
-  if (skill.multiRecordConfig) {
+  if (skill.multiRecordConfig && Array.isArray(skill.multiRecordConfig.fields) && skill.multiRecordConfig.fields.length > 0) {
     const recordFields: Record<string, unknown> = {};
     for (const fieldName of skill.multiRecordConfig.fields) {
       const fd = fields.find(f => f.name === fieldName);

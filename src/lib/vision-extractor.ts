@@ -37,7 +37,7 @@ function buildPromptText(skill: DocumentSkill): string {
     'For numerical values, extract EXACT numbers — do NOT estimate or round.',
   ];
 
-  if (skill.multiRecordConfig) {
+  if (skill.multiRecordConfig && Array.isArray(skill.multiRecordConfig.fields) && skill.multiRecordConfig.fields.length > 0) {
     lines.push('');
     lines.push('This document contains MULTIPLE line items / cost codes.');
     lines.push('Extract EVERY line item as a separate record in the "records" array.');
