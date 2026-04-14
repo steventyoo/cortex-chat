@@ -186,8 +186,15 @@ export default function FieldCatalogPage() {
                                   </Link>
                                 ))}
                                 {f.used_by_skills.length > 2 && (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#f5f5f5] text-[#888] text-[10px] font-medium" title={f.used_by_skills.slice(2).map(s => s.skill_name).join(', ')}>
+                                  <span className="relative group inline-flex items-center px-1.5 py-0.5 rounded bg-[#f5f5f5] text-[#888] text-[10px] font-medium cursor-default">
                                     +{f.used_by_skills.length - 2}
+                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:flex flex-col bg-[#1a1a1a] text-white text-[11px] rounded-lg px-2.5 py-1.5 whitespace-nowrap shadow-lg z-40">
+                                      {f.used_by_skills.slice(2).map(s => (
+                                        <Link key={s.skill_id} href={`/operator/skills/${s.skill_id}`} className="py-0.5 hover:text-[#93c5fd] transition-colors">
+                                          {s.skill_name}
+                                        </Link>
+                                      ))}
+                                    </span>
                                   </span>
                                 )}
                               </div>
