@@ -17,6 +17,7 @@ import type { LangfuseParent } from './langfuse';
 import { PDFDocument } from 'pdf-lib';
 
 const VISION_MAX_RAW_BYTES = 20 * 1024 * 1024; // ~20MB raw → safe under Claude's request limit after base64 inflation
+const VISION_MAX_PDF_PAGES = 100;
 
 export interface VisionExtractionResult {
   extraction: ExtractionResult;
@@ -71,9 +72,16 @@ export async function extractWithVision(
 ): Promise<VisionExtractionResult> {
   const t0 = Date.now();
 
-  if (fileExt === 'pdf' && rawBuffer.length > VISION_MAX_RAW_BYTES) {
-    console.log(`[vision] PDF too large for single request (${(rawBuffer.length / 1024 / 1024).toFixed(1)}MB). Using chunked extraction.`);
-    return extractWithVisionChunked(rawBuffer, skill, catalogFields, classifierConfidence, fileExt, options);
+  if (fileExt === 'pdf') {
+    let pageCount = 0;
+    try { pageCount = (await PDFDocument.load(rawBuffer, { ignoreEncryption: true })).getPageCount(); } catch {}
+    if (rawBuffer.length > VISION_MAX_RAW_BYTES || pageCount > VISION_MAX_PDF_PAGES) {
+      const reason = pageCount > VISION_MAX_PDF_PAGES
+        ? `${pageCount} pages (limit ${VISION_MAX_PDF_PAGES})`
+        : `${(rawBuffer.length / 1024 / 1024).toFixed(1)}MB`;
+      console.log(`[vision] PDF too large for single request (${reason}). Using chunked extraction.`);
+      return extractWithVisionChunked(rawBuffer, skill, catalogFields, classifierConfidence, fileExt, options);
+    }
   }
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });

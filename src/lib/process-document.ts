@@ -3,7 +3,7 @@ import { extractWithSkill, getSkillFieldDefinitions, listActiveSkills, classifyD
 import { extractWithCodegen, type CodegenExtractionResult } from '@/lib/codegen-extractor';
 import { extractWithVision, type VisionExtractionResult } from '@/lib/vision-extractor';
 import { getContextCardFieldsForSkill } from '@/lib/stores/context-cards.store';
-import { parseFileBuffer, extractTextWithClaude, extractTextFromLargePdf, CLAUDE_MAX_BASE64_BYTES } from '@/lib/file-parser';
+import { parseFileBuffer, extractTextWithClaude, extractTextFromLargePdf, CLAUDE_MAX_BASE64_BYTES, getPdfPageCount } from '@/lib/file-parser';
 import { ValidationFlag, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
 import { ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
@@ -32,12 +32,20 @@ function shouldAlwaysProcess(fileName: string, folderPath?: string): boolean {
  * Size-safe wrapper: if the base64 exceeds Claude's limit, fall back to
  * page-by-page extraction using pdf-lib to split the PDF.
  */
+const CLAUDE_MAX_PDF_PAGES = 100;
+
 async function safePdfOcr(base64Data: string, rawBuffer: Buffer | null): Promise<string> {
-  if (base64Data.length <= CLAUDE_MAX_BASE64_BYTES) {
+  const buf = rawBuffer ?? Buffer.from(base64Data, 'base64');
+  const pageCount = await getPdfPageCount(buf).catch(() => 0);
+
+  if (base64Data.length <= CLAUDE_MAX_BASE64_BYTES && pageCount <= CLAUDE_MAX_PDF_PAGES) {
     return extractTextWithClaude(base64Data, 'application/pdf', 'pdf');
   }
-  const buf = rawBuffer ?? Buffer.from(base64Data, 'base64');
-  console.log(`[safePdfOcr] PDF too large for single request (${(base64Data.length / 1024 / 1024).toFixed(1)}MB base64). Using page-by-page OCR.`);
+
+  const reason = pageCount > CLAUDE_MAX_PDF_PAGES
+    ? `${pageCount} pages (limit ${CLAUDE_MAX_PDF_PAGES})`
+    : `${(base64Data.length / 1024 / 1024).toFixed(1)}MB base64`;
+  console.log(`[safePdfOcr] PDF too large for single request (${reason}). Using page-by-page OCR.`);
   return extractTextFromLargePdf(buf);
 }
 

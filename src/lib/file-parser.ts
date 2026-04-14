@@ -12,6 +12,11 @@ import { PDFDocument } from 'pdf-lib';
 
 export const CLAUDE_MAX_BASE64_BYTES = 28 * 1024 * 1024; // ~28MB base64 → ~21MB raw (safe under Claude's 32MB request limit)
 
+export async function getPdfPageCount(pdfBuffer: Buffer): Promise<number> {
+  const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+  return doc.getPageCount();
+}
+
 // ── MIME type groups ────────────────────────────────────────────
 
 export const TEXT_TYPES = [
