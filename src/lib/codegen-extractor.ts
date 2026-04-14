@@ -13,6 +13,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ExtractionSandbox, type ExtractionFile } from './sandbox';
 import { ExtractionResult, type ExtractedField } from './pipeline';
 import type { FieldDefinition, DocumentSkill } from './skills';
+import type { LangfuseParent } from './langfuse';
 
 const MAX_RETRIES = 2;
 
@@ -268,6 +269,7 @@ async function generateParserCode(
   metaPrompt: string,
   documentPreview: string,
   previousError?: string,
+  langfuseParent?: LangfuseParent,
 ): Promise<CodegenGenerationResult> {
   const messages: Anthropic.MessageParam[] = [];
 
@@ -291,6 +293,14 @@ async function generateParserCode(
     });
   }
 
+  const generation = langfuseParent?.generation({
+    name: previousError ? 'codegen-retry' : 'codegen-generate',
+    model: 'claude-opus-4-6',
+    input: messages,
+    modelParameters: { maxTokens: 16384 },
+    metadata: { isRetry: !!previousError },
+  });
+
   const response = await client.messages.create({
     model: 'claude-opus-4-6',
     max_tokens: 16384,
@@ -302,8 +312,16 @@ async function generateParserCode(
     throw new Error('[codegen] No text block in Claude response');
   }
 
+  const code = extractPythonCode(textBlock.text);
+
+  generation?.end({
+    output: code,
+    usage: { input: response.usage?.input_tokens ?? 0, output: response.usage?.output_tokens ?? 0 },
+    metadata: { stopReason: response.stop_reason, codeLength: code.length },
+  });
+
   return {
-    code: extractPythonCode(textBlock.text),
+    code,
     inputTokens: response.usage?.input_tokens ?? 0,
     outputTokens: response.usage?.output_tokens ?? 0,
   };
@@ -408,6 +426,7 @@ export async function extractWithCodegen(
   contextCardFields: string[],
   classifierConfidence: number,
   fileExt: string,
+  options?: { langfuseParent?: LangfuseParent },
 ): Promise<CodegenExtractionResult> {
   const t0 = Date.now();
   const client = new Anthropic();
@@ -429,7 +448,7 @@ export async function extractWithCodegen(
 
     let genResult: CodegenGenerationResult;
     try {
-      genResult = await generateParserCode(client, metaPrompt, docPreview, lastError);
+      genResult = await generateParserCode(client, metaPrompt, docPreview, lastError, options?.langfuseParent);
     } catch (err) {
       console.error(`[codegen] Code generation failed:`, err);
       throw err;
@@ -439,10 +458,15 @@ export async function extractWithCodegen(
     console.log(`[codegen] Code generated in ${genTime}ms (${code.length} chars) tokens=${codegenInTokens}in/${codegenOutTokens}out`);
 
     const tExec = Date.now();
+    const sandboxSpan = options?.langfuseParent?.span({
+      name: 'sandbox-execute',
+      input: { codeLength: code.length, attempt: attempt + 1 },
+    });
     let result;
     try {
       result = await ExtractionSandbox.execute(code, [inputFile]);
     } catch (err) {
+      sandboxSpan?.end({ output: { error: err instanceof Error ? err.message : String(err) }, level: 'ERROR' as const });
       console.error(`[codegen] Sandbox execution error:`, err);
       if (attempt < MAX_RETRIES) {
         lastError = err instanceof Error ? err.message : String(err);
@@ -452,6 +476,10 @@ export async function extractWithCodegen(
       throw err;
     }
     const execTime = Date.now() - tExec;
+    sandboxSpan?.end({
+      output: { exitCode: result.exitCode, stdoutLength: result.stdout.length, stderrLength: result.stderr.length },
+      metadata: { elapsedMs: execTime },
+    });
     console.log(`[codegen] Script executed in ${execTime}ms: exitCode=${result.exitCode}`);
 
     if (result.exitCode !== 0) {

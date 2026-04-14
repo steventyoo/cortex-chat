@@ -13,6 +13,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import { buildExtractionTool } from './extraction-schemas';
 import { ExtractionResult, ExtractedField, ValidationFlag, computeOverallConfidence } from './pipeline';
 import type { DocumentSkill, FieldDefinition } from './skills';
+import type { LangfuseParent } from './langfuse';
+import { PDFDocument } from 'pdf-lib';
+
+const VISION_MAX_RAW_BYTES = 20 * 1024 * 1024; // ~20MB raw → safe under Claude's request limit after base64 inflation
 
 export interface VisionExtractionResult {
   extraction: ExtractionResult;
@@ -63,8 +67,15 @@ export async function extractWithVision(
   catalogFields: FieldDefinition[],
   classifierConfidence: number,
   fileExt: string,
+  options?: { langfuseParent?: LangfuseParent },
 ): Promise<VisionExtractionResult> {
   const t0 = Date.now();
+
+  if (fileExt === 'pdf' && rawBuffer.length > VISION_MAX_RAW_BYTES) {
+    console.log(`[vision] PDF too large for single request (${(rawBuffer.length / 1024 / 1024).toFixed(1)}MB). Using chunked extraction.`);
+    return extractWithVisionChunked(rawBuffer, skill, catalogFields, classifierConfidence, fileExt, options);
+  }
+
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const tool = buildExtractionTool(skill, catalogFields);
@@ -96,6 +107,13 @@ export async function extractWithVision(
     tool_choice: { type: 'tool' as const, name: 'extract_document' },
   };
 
+  const generation = options?.langfuseParent?.generation({
+    name: 'vision-extraction',
+    model: 'claude-opus-4-6',
+    input: { system: skill.systemPrompt, promptText, fileExt, fileSizeBytes: rawBuffer.length, skillId: skill.skillId, toolName: tool.name },
+    modelParameters: { maxTokens },
+  });
+
   let response: Anthropic.Message;
   if (skill.multiRecordConfig) {
     const stream = client.messages.stream(messageParams);
@@ -125,6 +143,18 @@ export async function extractWithVision(
     extra_fields?: Record<string, { value: string | number | null; confidence: number }>;
     records?: Array<Record<string, { value: string | number | null; confidence: number }>>;
   };
+
+  generation?.end({
+    output: raw,
+    usage: { input: inputTokens, output: outputTokens },
+    metadata: {
+      stopReason: response.stop_reason,
+      fieldCount: Object.keys(raw.fields).length,
+      extraFieldCount: raw.extra_fields ? Object.keys(raw.extra_fields).length : 0,
+      recordCount: raw.records?.length ?? 0,
+      elapsedMs: elapsed,
+    },
+  });
 
   const discoveredFields: Record<string, unknown> = {};
   if (raw.extra_fields) {
@@ -180,5 +210,131 @@ export async function extractWithVision(
     overallConfidence,
     flags,
     metadata: { inputTokens, outputTokens, elapsedMs: elapsed },
+  };
+}
+
+/**
+ * Chunked vision extraction: splits a large PDF into page-range chunks
+ * that each fit under Claude's request size limit, extracts from each,
+ * then merges results (highest confidence wins for field conflicts).
+ */
+async function extractWithVisionChunked(
+  rawBuffer: Buffer,
+  skill: DocumentSkill,
+  catalogFields: FieldDefinition[],
+  classifierConfidence: number,
+  fileExt: string,
+  options?: { langfuseParent?: LangfuseParent },
+): Promise<VisionExtractionResult> {
+  const t0 = Date.now();
+  const pdfDoc = await PDFDocument.load(rawBuffer);
+  const totalPages = pdfDoc.getPageCount();
+
+  const chunks: Buffer[] = [];
+  let startPage = 0;
+
+  while (startPage < totalPages) {
+    let endPage = startPage;
+    let lastGoodChunk: Uint8Array | null = null;
+
+    while (endPage < totalPages) {
+      const chunkDoc = await PDFDocument.create();
+      const pageIndices = Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i);
+      const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
+      copiedPages.forEach(p => chunkDoc.addPage(p));
+      const chunkBytes = await chunkDoc.save();
+
+      if (chunkBytes.length > VISION_MAX_RAW_BYTES) {
+        if (lastGoodChunk) break;
+        // Single page exceeds limit — include it anyway, it'll be the best we can do
+        lastGoodChunk = chunkBytes;
+        endPage++;
+        break;
+      }
+      lastGoodChunk = chunkBytes;
+      endPage++;
+    }
+
+    if (lastGoodChunk) {
+      chunks.push(Buffer.from(lastGoodChunk));
+    }
+    startPage = endPage;
+  }
+
+  console.log(`[vision] Split ${totalPages}-page PDF into ${chunks.length} chunks`);
+
+  const mergedFields: Record<string, ExtractedField> = {};
+  const mergedDiscovered: Record<string, unknown> = {};
+  const allRecords: Array<Record<string, ExtractedField>> = [];
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+
+  const chunkSpan = options?.langfuseParent?.span({
+    name: 'vision-chunked',
+    input: { totalPages, chunkCount: chunks.length, rawSizeMB: (rawBuffer.length / 1024 / 1024).toFixed(1) },
+  });
+
+  for (let i = 0; i < chunks.length; i++) {
+    console.log(`[vision] Processing chunk ${i + 1}/${chunks.length} (${(chunks[i].length / 1024 / 1024).toFixed(1)}MB)`);
+    try {
+      const chunkResult = await extractWithVision(
+        chunks[i], skill, catalogFields, classifierConfidence, fileExt,
+        { langfuseParent: chunkSpan },
+      );
+
+      for (const [key, val] of Object.entries(chunkResult.extraction.fields)) {
+        if (!mergedFields[key] || val.confidence > mergedFields[key].confidence) {
+          mergedFields[key] = val;
+        }
+      }
+      for (const [key, val] of Object.entries(chunkResult.discoveredFields)) {
+        if (!(key in mergedDiscovered)) {
+          mergedDiscovered[key] = val;
+        }
+      }
+      if (chunkResult.extraction.records) {
+        allRecords.push(...chunkResult.extraction.records);
+      }
+
+      totalInputTokens += chunkResult.metadata.inputTokens;
+      totalOutputTokens += chunkResult.metadata.outputTokens;
+    } catch (err) {
+      console.warn(`[vision] Chunk ${i + 1} failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  const elapsed = Date.now() - t0;
+
+  const extraction: ExtractionResult = {
+    documentType: skill.skillId,
+    documentTypeConfidence: classifierConfidence,
+    fields: mergedFields,
+    records: allRecords.length > 0 ? allRecords : undefined,
+    skillId: skill.skillId,
+    skillVersion: skill.version,
+    classifierConfidence,
+  };
+
+  const overallConfidence = computeOverallConfidence(extraction);
+  const flags: ValidationFlag[] = [];
+  for (const [name, f] of Object.entries(mergedFields)) {
+    if (f.value !== null && f.confidence < 0.7) {
+      flags.push({ field: name, issue: `Low confidence (${Math.round(f.confidence * 100)}%)`, severity: 'warning' });
+    }
+  }
+
+  chunkSpan?.end({
+    output: { fieldCount: Object.keys(mergedFields).length, recordCount: allRecords.length, overallConfidence },
+    metadata: { totalInputTokens, totalOutputTokens, elapsedMs: elapsed, chunkCount: chunks.length },
+  });
+
+  console.log(`[vision] Chunked extraction complete: ${Object.keys(mergedFields).length} fields, ${allRecords.length} records, ${elapsed}ms`);
+
+  return {
+    extraction,
+    discoveredFields: mergedDiscovered,
+    overallConfidence,
+    flags,
+    metadata: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens, elapsedMs: elapsed },
   };
 }

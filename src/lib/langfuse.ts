@@ -1,4 +1,7 @@
 import { Langfuse } from 'langfuse';
+import type { LangfuseTraceClient, LangfuseSpanClient } from 'langfuse';
+
+export type LangfuseParent = LangfuseTraceClient | LangfuseSpanClient;
 
 let _langfuse: Langfuse | null = null;
 

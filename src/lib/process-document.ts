@@ -3,7 +3,7 @@ import { extractWithSkill, getSkillFieldDefinitions, listActiveSkills, classifyD
 import { extractWithCodegen, type CodegenExtractionResult } from '@/lib/codegen-extractor';
 import { extractWithVision, type VisionExtractionResult } from '@/lib/vision-extractor';
 import { getContextCardFieldsForSkill } from '@/lib/stores/context-cards.store';
-import { parseFileBuffer, extractTextWithClaude } from '@/lib/file-parser';
+import { parseFileBuffer, extractTextWithClaude, extractTextFromLargePdf, CLAUDE_MAX_BASE64_BYTES } from '@/lib/file-parser';
 import { ValidationFlag, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
 import { ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
@@ -26,6 +26,19 @@ const VISION_EXTS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp']);
 function shouldAlwaysProcess(fileName: string, folderPath?: string): boolean {
   const haystack = `${fileName} ${folderPath || ''}`;
   return ALWAYS_PROCESS_PATTERNS.some(p => p.test(haystack));
+}
+
+/**
+ * Size-safe wrapper: if the base64 exceeds Claude's limit, fall back to
+ * page-by-page extraction using pdf-lib to split the PDF.
+ */
+async function safePdfOcr(base64Data: string, rawBuffer: Buffer | null): Promise<string> {
+  if (base64Data.length <= CLAUDE_MAX_BASE64_BYTES) {
+    return extractTextWithClaude(base64Data, 'application/pdf', 'pdf');
+  }
+  const buf = rawBuffer ?? Buffer.from(base64Data, 'base64');
+  console.log(`[safePdfOcr] PDF too large for single request (${(base64Data.length / 1024 / 1024).toFixed(1)}MB base64). Using page-by-page OCR.`);
+  return extractTextFromLargePdf(buf);
 }
 
 function isJobCostReport(fileName: string, folderPath?: string): boolean {
@@ -172,7 +185,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         const forceClaudeOcr = isJobCostReport(fileName, driveFolderPath);
         if (forceClaudeOcr) {
           console.log(`[process] JCR-pattern detected — using Claude OCR for better table fidelity`);
-          sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+          sourceText = await safePdfOcr(content.base64, rawBuffer);
         } else {
           const pdfBuffer = rawBuffer || Buffer.from(content.base64, 'base64');
           try {
@@ -183,11 +196,11 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
               console.log(`[process] PDF text via unpdf: ${sourceText.length} chars`);
             } else {
               console.log(`[process] unpdf returned sparse text (${trimmed.length} chars), falling back to Claude OCR`);
-              sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+              sourceText = await safePdfOcr(content.base64, rawBuffer);
             }
           } catch {
             console.log(`[process] unpdf failed, falling back to Claude OCR`);
-            sourceText = await extractTextWithClaude(content.base64, content.mimeType, content.method);
+            sourceText = await safePdfOcr(content.base64, rawBuffer);
           }
         }
       } else if (content.base64 && content.method === 'image') {
@@ -296,7 +309,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
 
     const classifySpan = trace.span({ name: 'classify', input: { textLength: sourceText.length } });
     const skills = await listActiveSkills();
-    const classification = await classifyDocument(sourceText, skills, orgId);
+    const classification = await classifyDocument(sourceText, skills, orgId, { langfuseParent: classifySpan });
     const skill = classification.skillId ? await getSkill(classification.skillId) : null;
     classifySpan.end({
       output: {
@@ -326,6 +339,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         try {
           const visionResult: VisionExtractionResult = await extractWithVision(
             docBuffer, skill, catalogFields, classification.confidence, fileExt,
+            { langfuseParent: visionSpan },
           );
           extraction = visionResult.extraction;
           discoveredFields = visionResult.discoveredFields;
@@ -351,11 +365,12 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         } catch (visionErr) {
           visionSpan.end({ level: 'ERROR', statusMessage: visionErr instanceof Error ? visionErr.message : String(visionErr) });
           console.warn(`[process] Vision extraction failed, falling back to LLM: ${visionErr instanceof Error ? visionErr.message : visionErr}`);
-          const result = await extractWithSkill(sourceText, projectId || '', orgId);
+          const fallbackSpan = trace.span({ name: 'llm-fallback', input: { reason: 'vision-failed' } });
+          const result = await extractWithSkill(sourceText, projectId || '', orgId, { langfuseParent: fallbackSpan });
           extraction = result.extraction;
           overallConfidence = result.overallConfidence;
           flags = result.flags;
-          trace.span({ name: 'llm-fallback', input: { reason: 'vision-failed' } }).end({ output: { fields: extraction.fields } });
+          fallbackSpan.end({ output: { fields: extraction.fields, overallConfidence } });
         }
       } else {
         console.log(`[process] Using CODEGEN extraction for skill=${skill.skillId} ext=${fileExt} (non-PDF/image)`);
@@ -366,6 +381,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           const codegenResult: CodegenExtractionResult = await extractWithCodegen(
             docBuffer, sourceText, skill, catalogFields, contextCardFields,
             classification.confidence, fileExt,
+            { langfuseParent: codegenSpan },
           );
           extraction = codegenResult.extraction;
           discoveredFields = codegenResult.discoveredFields;
@@ -401,11 +417,12 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         } catch (codegenErr) {
           codegenSpan.end({ level: 'ERROR', statusMessage: codegenErr instanceof Error ? codegenErr.message : String(codegenErr) });
           console.warn(`[process] Codegen extraction failed, falling back to LLM: ${codegenErr instanceof Error ? codegenErr.message : codegenErr}`);
-          const result = await extractWithSkill(sourceText, projectId || '', orgId);
+          const fallbackSpan2 = trace.span({ name: 'llm-fallback', input: { reason: 'codegen-failed' } });
+          const result = await extractWithSkill(sourceText, projectId || '', orgId, { langfuseParent: fallbackSpan2 });
           extraction = result.extraction;
           overallConfidence = result.overallConfidence;
           flags = result.flags;
-          trace.span({ name: 'llm-fallback', input: { reason: 'codegen-failed' } }).end({ output: { fields: extraction.fields } });
+          fallbackSpan2.end({ output: { fields: extraction.fields, overallConfidence } });
         }
       }
     } else if (skill?.extractionMethod === 'codegen') {
@@ -428,6 +445,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         const codegenResult: CodegenExtractionResult = await extractWithCodegen(
           docBuffer, sourceText, skill, catalogFields, contextCardFields,
           classification.confidence, fileExt,
+          { langfuseParent: codegenSpan2 },
         );
         extraction = codegenResult.extraction;
         discoveredFields = codegenResult.discoveredFields;
@@ -454,14 +472,16 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       } catch (codegenErr) {
         codegenSpan2.end({ level: 'ERROR', statusMessage: codegenErr instanceof Error ? codegenErr.message : String(codegenErr) });
         console.warn(`[process] Codegen extraction failed, falling back to LLM: ${codegenErr instanceof Error ? codegenErr.message : codegenErr}`);
-        const result = await extractWithSkill(sourceText, projectId || '', orgId);
+        const legacyFallbackSpan = trace.span({ name: 'llm-fallback', input: { reason: 'codegen-failed' } });
+        const result = await extractWithSkill(sourceText, projectId || '', orgId, { langfuseParent: legacyFallbackSpan });
         extraction = result.extraction;
         overallConfidence = result.overallConfidence;
         flags = result.flags;
+        legacyFallbackSpan.end({ output: { fields: extraction.fields, overallConfidence } });
       }
     } else {
       const llmSpan = trace.span({ name: 'llm-extraction', input: { textLength: sourceText.length } });
-      const result = await extractWithSkill(sourceText, projectId || '', orgId);
+      const result = await extractWithSkill(sourceText, projectId || '', orgId, { langfuseParent: llmSpan });
       extraction = result.extraction;
       overallConfidence = result.overallConfidence;
       flags = result.flags;
@@ -471,7 +491,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
     console.log(`[process] AI extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} flags=${flags.length}`);
   } catch (err) {
     console.error(`[process] AI extraction failed for ${recordId}:`, err);
-    trace.update({ output: { error: err instanceof Error ? err.message : 'Unknown error' }, level: 'ERROR' });
+    trace.update({ output: { error: err instanceof Error ? err.message : 'Unknown error' } });
     langfuse.flushAsync().catch(() => {});
     await markFailed(sb, recordId, 'ai_extraction', err);
     return { success: false, recordId, status: 'failed', timing, error: 'AI extraction failed' };

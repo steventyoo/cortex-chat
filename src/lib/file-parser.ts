@@ -8,6 +8,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import * as XLSX from 'xlsx';
 import { extractText as pdfExtractText } from 'unpdf';
+import { PDFDocument } from 'pdf-lib';
+
+export const CLAUDE_MAX_BASE64_BYTES = 28 * 1024 * 1024; // ~28MB base64 → ~21MB raw (safe under Claude's 32MB request limit)
 
 // ── MIME type groups ────────────────────────────────────────────
 
@@ -88,6 +91,10 @@ export async function parseFileBuffer(
     if (options?.forceClaudeOcr) {
       console.log(`[parseFileBuffer] forceClaudeOcr=true — skipping unpdf for better table fidelity`);
       const base64 = buffer.toString('base64');
+      if (base64.length > CLAUDE_MAX_BASE64_BYTES) {
+        const text = await extractTextFromLargePdf(buffer);
+        return { text, method: 'pdf-ocr' };
+      }
       const text = await extractTextWithClaude(base64, 'application/pdf', 'pdf');
       return { text, method: 'pdf-ocr' };
     }
@@ -104,6 +111,10 @@ export async function parseFileBuffer(
       console.log(`[parseFileBuffer] unpdf failed (${err instanceof Error ? err.message : 'unknown'}) — falling back to Claude OCR`);
     }
     const base64 = buffer.toString('base64');
+    if (base64.length > CLAUDE_MAX_BASE64_BYTES) {
+      const text = await extractTextFromLargePdf(buffer);
+      return { text, method: 'pdf-ocr' };
+    }
     const text = await extractTextWithClaude(base64, 'application/pdf', 'pdf');
     return { text, method: 'pdf-ocr' };
   }
@@ -219,6 +230,56 @@ export async function extractTextWithClaude(
   console.log(`[extractTextWithClaude] method=${method} base64Size=${(base64Data.length / 1024).toFixed(0)}KB outputChars=${text.length} elapsed=${Date.now() - t0}ms`);
 
   return text;
+}
+
+/**
+ * Split a large PDF into individual pages and OCR each one separately.
+ * Used when the full PDF exceeds Claude's request size limit.
+ */
+export async function extractTextFromLargePdf(
+  pdfBuffer: Buffer,
+  maxPages?: number,
+): Promise<string> {
+  const t0 = Date.now();
+  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const totalPages = pdfDoc.getPageCount();
+  const pagesToProcess = maxPages ? Math.min(totalPages, maxPages) : totalPages;
+
+  console.log(`[extractTextFromLargePdf] Splitting ${totalPages} pages (processing ${pagesToProcess}), buffer=${(pdfBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+
+  const pageTexts: string[] = [];
+
+  for (let i = 0; i < pagesToProcess; i++) {
+    const singlePageDoc = await PDFDocument.create();
+    const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [i]);
+    singlePageDoc.addPage(copiedPage);
+    const singlePageBytes = await singlePageDoc.save();
+    const singleBase64 = Buffer.from(singlePageBytes).toString('base64');
+
+    if (singleBase64.length > CLAUDE_MAX_BASE64_BYTES) {
+      console.warn(`[extractTextFromLargePdf] Page ${i + 1} is ${(singleBase64.length / 1024 / 1024).toFixed(1)}MB base64 — skipping (too large even as single page)`);
+      pageTexts.push(`[Page ${i + 1}: skipped — exceeds size limit]`);
+      continue;
+    }
+
+    try {
+      const text = await extractTextWithClaude(singleBase64, 'application/pdf', 'pdf');
+      pageTexts.push(`=== Page ${i + 1} ===\n${text}`);
+      console.log(`[extractTextFromLargePdf] Page ${i + 1}/${pagesToProcess}: ${text.length} chars`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[extractTextFromLargePdf] Page ${i + 1} OCR failed: ${msg}`);
+      pageTexts.push(`[Page ${i + 1}: OCR failed — ${msg}]`);
+    }
+  }
+
+  if (pagesToProcess < totalPages) {
+    pageTexts.push(`[${totalPages - pagesToProcess} additional pages not processed]`);
+  }
+
+  const combined = pageTexts.join('\n\n');
+  console.log(`[extractTextFromLargePdf] Done: ${pagesToProcess} pages, ${combined.length} chars, elapsed=${Date.now() - t0}ms`);
+  return combined;
 }
 
 // ── Excel parser ────────────────────────────────────────────────

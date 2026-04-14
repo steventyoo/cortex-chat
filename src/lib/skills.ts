@@ -24,6 +24,7 @@ import {
 import {
   getSkillFieldDefinitions as storeGetSkillFieldDefs,
 } from './stores/field-catalog.store';
+import type { LangfuseParent } from './langfuse';
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -201,7 +202,8 @@ export async function getOrgAliasMap(orgId: string): Promise<Map<string, string[
 export async function classifyDocument(
   text: string,
   knownSkills: DocumentSkill[],
-  orgId?: string
+  orgId?: string,
+  options?: { langfuseParent?: LangfuseParent },
 ): Promise<ClassificationResult> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -232,6 +234,11 @@ ${text.slice(0, 2000)}`;
 
   try {
     const tool = buildClassificationTool(knownSkills);
+    const generation = options?.langfuseParent?.generation({
+      name: 'classify-document',
+      model: 'claude-haiku-4-5-20251001',
+      input: { prompt, tools: [tool.name] },
+    });
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 256,
@@ -250,6 +257,17 @@ ${text.slice(0, 2000)}`;
     const confidence = parsed.confidence;
 
     const matchedSkill = knownSkills.find(s => s.skillId === skillId);
+
+    generation?.end({
+      output: toolBlock.input,
+      usage: { input: response.usage?.input_tokens ?? 0, output: response.usage?.output_tokens ?? 0 },
+      metadata: {
+        skillId: confidence >= 0.7 && matchedSkill ? matchedSkill.skillId : '_general',
+        confidence,
+        reasoning: parsed.reasoning,
+        stopReason: response.stop_reason,
+      },
+    });
 
     console.log(`[classify] tool_use result: type=${skillId} conf=${confidence.toFixed(2)} ` +
       `matched=${matchedSkill ? matchedSkill.skillId : 'none'} ` +
@@ -353,7 +371,8 @@ export function buildSkillPrompt(skill: DocumentSkill, fields: FieldDefinition[]
 export async function extractWithSkill(
   sourceText: string,
   projectId: string,
-  orgId?: string
+  orgId?: string,
+  options?: { langfuseParent?: LangfuseParent },
 ): Promise<ExtractionOutput> {
   const t0 = Date.now();
   const skills = await listActiveSkills();
@@ -390,7 +409,6 @@ export async function extractWithSkill(
 
   const maxTokens = skill.multiRecordConfig ? 64000 : 8192;
 
-  // Use streaming for multi-record skills (large documents can exceed Anthropic's non-streaming timeout)
   const messageParams = {
     model: 'claude-opus-4-6' as const,
     max_tokens: maxTokens,
@@ -399,6 +417,13 @@ export async function extractWithSkill(
     tools: [tool],
     tool_choice: { type: 'tool' as const, name: 'extract_document' },
   };
+
+  const generation = options?.langfuseParent?.generation({
+    name: 'llm-extraction',
+    model: 'claude-opus-4-6',
+    input: { system: skill.systemPrompt, promptLength: extractionPrompt.length, toolName: tool.name, skillId: skill.skillId },
+    modelParameters: { maxTokens },
+  });
 
   let response;
   if (skill.multiRecordConfig) {
@@ -423,6 +448,18 @@ export async function extractWithSkill(
     extra_fields?: Record<string, { value: string | number | null; confidence: number }>;
     records?: Array<Record<string, { value: string | number | null; confidence: number }>>;
   };
+
+  generation?.end({
+    output: rawExtraction,
+    usage: { input: response.usage?.input_tokens ?? 0, output: response.usage?.output_tokens ?? 0 },
+    metadata: {
+      stopReason: response.stop_reason,
+      fieldCount: Object.keys(rawExtraction.fields).length,
+      extraFieldCount: rawExtraction.extra_fields ? Object.keys(rawExtraction.extra_fields).length : 0,
+      recordCount: rawExtraction.records?.length ?? 0,
+      elapsedMs: tExtract,
+    },
+  });
 
   const schemaFieldNames = Object.keys(rawExtraction.fields);
   const extraFieldNames = rawExtraction.extra_fields ? Object.keys(rawExtraction.extra_fields) : [];
