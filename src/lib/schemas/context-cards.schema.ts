@@ -13,6 +13,8 @@ export const ContextCardSchema = z.object({
   skills_involved: normalizeStringArray.transform(v => v ?? []),
   business_logic: z.string().nullable().default(null),
   key_fields: normalizeJsonObject.transform(v => v ?? {}),
+  sql_templates: normalizeJsonObject.transform(v => v ?? {}),
+  calc_function: z.string().nullable().default(null),
   example_questions: normalizeStringArray.transform(v => v ?? []),
   embedding: z.string().nullable().optional(),
   is_active: z.coerce.boolean().default(true),
