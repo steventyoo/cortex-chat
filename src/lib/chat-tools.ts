@@ -33,7 +33,8 @@ export interface ChatTool {
     | 'sandbox'
     | 'context_retrieval'
     | 'field_catalog'
-    | 'calc_function';
+    | 'calc_function'
+    | 'reconciliation_check';
   implementation_config: Record<string, unknown>;
   sample_prompts: string[];
   is_active: boolean;
@@ -307,44 +308,143 @@ async function executeProjectOverview(
 
   const sb = getSupabase();
 
-  const [projectRes, inventoryRes] = await Promise.all([
+  const [projectRes, profileRes, inventoryRes] = await Promise.all([
     sb.from('projects').select('*').eq('project_id', ctx.projectId).single(),
-    sb.from('extracted_records')
-      .select('skill_id')
+    sb.from('project_profiles')
+      .select('*')
+      .eq('org_id', ctx.orgId)
       .eq('project_id', ctx.projectId)
-      .eq('org_id', ctx.orgId),
+      .order('snapshot_date', { ascending: false })
+      .limit(1),
+    sb.from('pipeline_log')
+      .select('id, extracted_data->skillId')
+      .eq('project_id', ctx.projectId)
+      .eq('org_id', ctx.orgId)
+      .not('extracted_data', 'is', null),
   ]);
 
   const project = projectRes.data;
+  const profile = profileRes.data?.[0] || null;
+
   const inventory: Record<string, number> = {};
   for (const row of (inventoryRes.data || [])) {
-    const sk = String((row as Record<string, unknown>).skill_id || 'unknown');
+    const sk = String((row as Record<string, unknown>).skillId || 'unknown');
     inventory[sk] = (inventory[sk] || 0) + 1;
   }
 
+  const result: Record<string, unknown> = {
+    project: project ? {
+      project_id: project.project_id,
+      project_name: project.project_name,
+      address: project.address,
+      trade: project.trade,
+      project_status: project.project_status,
+      contract_value: project.contract_value,
+      job_to_date: project.job_to_date,
+      percent_complete: project.percent_complete_cost,
+      total_cos: project.total_cos,
+      gc_name: project.gc_name,
+      owner_name: project.owner_name,
+      project_type: project.project_type,
+      project_subtype: project.project_subtype,
+      building_type: project.building_type,
+      delivery_method: project.delivery_method,
+      gross_sf: project.gross_sf,
+      stories: project.stories,
+      geographic_market: project.geographic_market,
+    } : null,
+    document_inventory: inventory,
+  };
+
+  if (profile) {
+    result.derived_kpis = {
+      snapshot_date: profile.snapshot_date,
+      financial: {
+        contract_value: profile.contract_value,
+        revised_budget: profile.revised_budget,
+        job_to_date_cost: profile.job_to_date_cost,
+        percent_complete: profile.percent_complete,
+        projected_final_cost: profile.projected_final_cost,
+        projected_margin: profile.projected_margin,
+        projected_margin_pct: profile.projected_margin_pct,
+      },
+      labor: {
+        total_budget_hours: profile.total_budget_hours,
+        total_actual_hours: profile.total_actual_hours,
+        labor_productivity_ratio: profile.labor_productivity_ratio,
+        blended_labor_rate: profile.blended_labor_rate,
+        estimated_labor_rate: profile.estimated_labor_rate,
+      },
+      change_orders: {
+        total_cos: profile.total_cos,
+        total_co_value: profile.total_co_value,
+        approved_co_value: profile.approved_co_value,
+        pending_co_value: profile.pending_co_value,
+        co_absorption_rate: profile.co_absorption_rate,
+      },
+      risk: {
+        risk_score: profile.risk_score,
+        risk_level: profile.risk_level,
+        productivity_drift: profile.productivity_drift,
+        burn_gap: profile.burn_gap,
+        rate_drift: profile.rate_drift,
+      },
+      reconciliation: {
+        pass_rate: profile.reconciliation_pass_rate,
+        warnings: profile.reconciliation_warnings,
+        failures: profile.reconciliation_failures,
+      },
+      coverage: {
+        score: profile.coverage_score,
+        covered_cost_codes: profile.covered_cost_codes,
+        missing_cost_codes: profile.missing_cost_codes,
+      },
+      vendors: {
+        top_subs: profile.top_subs,
+        sub_co_rate: profile.sub_co_rate,
+      },
+    };
+  }
+
+  return { result };
+}
+
+async function executeReconciliationCheck(
+  _config: Record<string, unknown>,
+  _input: Record<string, unknown>,
+  ctx: ToolExecContext
+): Promise<ToolExecResult> {
+  if (!ctx.projectId) {
+    return { result: null, error: 'No project selected' };
+  }
+
+  const { reconcileProject } = await import('./reconciliation');
+  const run = await reconcileProject(ctx.projectId, ctx.orgId);
+
+  const discrepancies = run.checks
+    .filter(c => c.status === 'warning' || c.status === 'fail')
+    .map(c => ({
+      rule: c.ruleName,
+      match_key: c.matchKeyValue,
+      source_value: c.sourceValue,
+      target_value: c.targetValue,
+      difference_pct: c.differencePct,
+      severity: c.status,
+      message: c.message,
+    }));
+
   return {
     result: {
-      project: project ? {
-        project_id: project.project_id,
-        project_name: project.project_name,
-        address: project.address,
-        trade: project.trade,
-        project_status: project.project_status,
-        contract_value: project.contract_value,
-        job_to_date: project.job_to_date,
-        percent_complete: project.percent_complete_cost,
-        total_cos: project.total_cos,
-        gc_name: project.gc_name,
-        owner_name: project.owner_name,
-        project_type: project.project_type,
-        project_subtype: project.project_subtype,
-        building_type: project.building_type,
-        delivery_method: project.delivery_method,
-        gross_sf: project.gross_sf,
-        stories: project.stories,
-        geographic_market: project.geographic_market,
-      } : null,
-      document_inventory: inventory,
+      run_id: run.runId,
+      summary: {
+        total_checks: run.totalChecks,
+        passed: run.passed,
+        warnings: run.warnings,
+        failures: run.failures,
+        no_matches: run.noMatches,
+      },
+      discrepancies: discrepancies.slice(0, 20),
+      elapsed_ms: run.elapsedMs,
     },
   };
 }
@@ -845,6 +945,7 @@ async function executeTool(
     case 'field_catalog': return executeFieldCatalog(config, input, ctx);
     case 'context_retrieval': return executeContextRetrieval(config, input, ctx);
     case 'calc_function': return executeCalcFunction(config, input, ctx);
+    case 'reconciliation_check': return executeReconciliationCheck(config, input, ctx);
     case 'api_call': return executeApiCall(config, input, ctx);
     case 'composite': return executeComposite(config, input, ctx);
     default: return { result: null, error: `Unknown implementation type: ${type}` };

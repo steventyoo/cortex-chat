@@ -12,7 +12,8 @@ Follow this reasoning chain for every data question:
 6. **PRESENT**: Use exact numbers from steps 4-5. NEVER count, sum, or average records yourself. Cite source_files.
 
 For "find me documents about X" questions, use search_documents instead.
-For project overview questions, use project_overview.
+For project overview questions, use project_overview — it returns derived KPIs including risk score, productivity drift, CO absorption, reconciliation status, and coverage score when a materialized profile exists.
+For "are there any discrepancies?" or "reconcile the JCR against production" questions, use reconciliation_check — it runs the reconciliation engine and returns pass/warning/fail results per rule.
 
 ## SQL SCHEMA
 

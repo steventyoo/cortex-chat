@@ -125,6 +125,24 @@ const CORE_TOOLS = [
       'Tell me about this project',
       'What data do we have?',
       'Project overview',
+      'How is the project doing?',
+    ],
+  },
+  {
+    tool_name: 'reconciliation_check',
+    display_name: 'Reconciliation Check',
+    description: 'Run cross-document reconciliation for the current project. Compares data between linked document types (e.g. production labor hours vs JCR, pay app billing vs JCR costs, estimate budgets vs JCR revised budgets) using configurable rules and tolerances. Returns a summary of pass/warning/fail checks with discrepancy details. Use when the user asks about discrepancies, reconciliation, data consistency, or verification across documents.',
+    input_schema: {
+      properties: {},
+      required: [],
+    },
+    implementation_type: 'reconciliation_check',
+    implementation_config: {},
+    sample_prompts: [
+      'Are there any discrepancies?',
+      'Reconcile the JCR against production',
+      'Check for data inconsistencies',
+      'Do the numbers match across documents?',
     ],
   },
   {
