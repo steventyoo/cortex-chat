@@ -6,7 +6,10 @@ const SANDBOX_LIFETIME = 5 * 60_000;
 const MAX_HTML_SIZE = 100_000;
 const MAX_STDOUT_SIZE = 50_000;
 const REQUIRED_PACKAGES = ['pandas', 'plotly', 'numpy'];
-const EXTRACTION_PACKAGES = ['openpyxl', 'pdfplumber', 'pandas', 'numpy', 'xlrd'];
+const EXTRACTION_PACKAGES = [
+  'openpyxl', 'pdfplumber', 'pandas', 'numpy', 'xlrd',
+  'python-docx', 'docx2txt', 'olefile', 'python-pptx',
+];
 
 function getCredentials() {
   const token = process.env.VERCEL_TOKEN;
