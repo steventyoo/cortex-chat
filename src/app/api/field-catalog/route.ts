@@ -10,8 +10,10 @@ import {
 import {
   listCatalogFields,
   getFieldUsageCounts,
+  getFieldUsageDetails,
   insertCatalogField,
   updateCatalogField,
+  deleteCatalogField,
 } from '@/lib/stores/field-catalog.store';
 
 export async function GET(request: NextRequest) {
@@ -22,15 +24,32 @@ export async function GET(request: NextRequest) {
 
   const category = request.nextUrl.searchParams.get('category') || undefined;
   const withUsage = request.nextUrl.searchParams.get('withUsage') === 'true';
+  const withDetails = request.nextUrl.searchParams.get('withDetails') === 'true';
 
   try {
     const raw = await listCatalogFields({ category });
 
-    if (withUsage) {
+    if (withUsage || withDetails) {
       const countMap = await getFieldUsageCounts();
-      const enriched = raw.map(f => ({ ...f, usage_count: countMap.get(f.id) || 0 }));
+      let usageDetails: { field_id: string; skill_id: string; skill_name: string }[] = [];
+      if (withDetails) {
+        usageDetails = await getFieldUsageDetails();
+      }
+
+      const detailMap = new Map<string, { skill_id: string; skill_name: string }[]>();
+      for (const d of usageDetails) {
+        const arr = detailMap.get(d.field_id) || [];
+        arr.push({ skill_id: d.skill_id, skill_name: d.skill_name });
+        detailMap.set(d.field_id, arr);
+      }
+
+      const enriched = raw.map(f => ({
+        ...f,
+        usage_count: countMap.get(f.id) || 0,
+        ...(withDetails ? { used_by_skills: detailMap.get(f.id) || [] } : {}),
+      }));
       const fields = z.array(CatalogFieldWithUsageSchema).parse(enriched);
-      return Response.json({ fields });
+      return Response.json({ fields: enriched.map((e, i) => ({ ...fields[i], used_by_skills: e.used_by_skills })) });
     }
 
     const fields = z.array(CatalogFieldSchema).parse(raw);
@@ -126,6 +145,27 @@ export async function PATCH(request: NextRequest) {
   } catch (err: unknown) {
     const pgErr = err as { message?: string };
     console.error('[field-catalog] PATCH error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  if (!token || !(await validateUserSession(token))) {
+    return Response.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const id = request.nextUrl.searchParams.get('id');
+  if (!id) {
+    return Response.json({ error: 'Missing id query parameter' }, { status: 400 });
+  }
+
+  try {
+    await deleteCatalogField(id);
+    return Response.json({ ok: true });
+  } catch (err: unknown) {
+    const pgErr = err as { code?: string; message?: string };
+    console.error('[field-catalog] DELETE error:', err);
     return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
 }

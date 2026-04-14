@@ -43,6 +43,31 @@ export async function getFieldUsageCounts(): Promise<Map<string, number>> {
   return countMap;
 }
 
+export interface FieldUsageDetail {
+  field_id: string;
+  skill_id: string;
+  skill_name: string;
+}
+
+export async function getFieldUsageDetails(): Promise<FieldUsageDetail[]> {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('skill_fields')
+    .select('field_id, skill_id, document_skills(skill_id, skill_name)');
+  if (error) throw error;
+  const results: FieldUsageDetail[] = [];
+  for (const row of data || []) {
+    const skillRaw = row.document_skills as unknown;
+    const skill = Array.isArray(skillRaw) ? skillRaw[0] : skillRaw;
+    results.push({
+      field_id: row.field_id as string,
+      skill_id: row.skill_id as string,
+      skill_name: (skill as { skill_name?: string })?.skill_name || row.skill_id as string,
+    });
+  }
+  return results;
+}
+
 const SKILL_FIELD_SELECT = `
   id,
   skill_id,
@@ -112,6 +137,12 @@ export async function updateCatalogField(id: string, updates: Record<string, unk
     .single();
   if (error) throw error;
   return data;
+}
+
+export async function deleteCatalogField(id: string) {
+  const sb = getSupabase();
+  const { error } = await sb.from('field_catalog').delete().eq('id', id);
+  if (error) throw error;
 }
 
 export async function getNextSortOrder(skillId: string): Promise<number> {
