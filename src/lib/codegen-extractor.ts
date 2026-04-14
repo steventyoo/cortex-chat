@@ -24,6 +24,10 @@ export interface CodegenExtractionResult {
     parserMethod?: string;
     warnings?: string[];
     retries: number;
+    generatedCode?: string;
+    codegenInputTokens?: number;
+    codegenOutputTokens?: number;
+    sandboxElapsedMs?: number;
   };
 }
 
@@ -253,12 +257,18 @@ Tips: If the file is binary, try reading as bytes and decoding what you can.`;
 
 // ── Claude code generation ───────────────────────────────────
 
+interface CodegenGenerationResult {
+  code: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 async function generateParserCode(
   client: Anthropic,
   metaPrompt: string,
   documentPreview: string,
   previousError?: string,
-): Promise<string> {
+): Promise<CodegenGenerationResult> {
   const messages: Anthropic.MessageParam[] = [];
 
   if (previousError) {
@@ -292,7 +302,11 @@ async function generateParserCode(
     throw new Error('[codegen] No text block in Claude response');
   }
 
-  return extractPythonCode(textBlock.text);
+  return {
+    code: extractPythonCode(textBlock.text),
+    inputTokens: response.usage?.input_tokens ?? 0,
+    outputTokens: response.usage?.output_tokens ?? 0,
+  };
 }
 
 function extractPythonCode(text: string): string {
@@ -413,15 +427,16 @@ export async function extractWithCodegen(
     const tGen = Date.now();
     console.log(`[codegen] Generating parser code: attempt=${attempt + 1}/${MAX_RETRIES + 1} skill=${skill.skillId}`);
 
-    let code: string;
+    let genResult: CodegenGenerationResult;
     try {
-      code = await generateParserCode(client, metaPrompt, docPreview, lastError);
+      genResult = await generateParserCode(client, metaPrompt, docPreview, lastError);
     } catch (err) {
       console.error(`[codegen] Code generation failed:`, err);
       throw err;
     }
+    const { code, inputTokens: codegenInTokens, outputTokens: codegenOutTokens } = genResult;
     const genTime = Date.now() - tGen;
-    console.log(`[codegen] Code generated in ${genTime}ms (${code.length} chars)`);
+    console.log(`[codegen] Code generated in ${genTime}ms (${code.length} chars) tokens=${codegenInTokens}in/${codegenOutTokens}out`);
 
     const tExec = Date.now();
     let result;
@@ -453,6 +468,10 @@ export async function extractWithCodegen(
       const raw = parseCodegenOutput(result.stdout);
       const normalized = normalizeToExtractionResult(raw, skill, classifierConfidence);
       normalized.metadata.retries = retries;
+      normalized.metadata.generatedCode = code;
+      normalized.metadata.codegenInputTokens = codegenInTokens;
+      normalized.metadata.codegenOutputTokens = codegenOutTokens;
+      normalized.metadata.sandboxElapsedMs = execTime;
 
       const totalTime = Date.now() - t0;
       const fieldCount = Object.keys(normalized.extraction.fields).length;

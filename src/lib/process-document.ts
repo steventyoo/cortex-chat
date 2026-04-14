@@ -7,6 +7,7 @@ import { parseFileBuffer, extractTextWithClaude } from '@/lib/file-parser';
 import { ValidationFlag, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
 import { ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
+import { getLangfuse } from '@/lib/langfuse';
 import { extractText as pdfExtractText } from 'unpdf';
 import { countPdfPagesSync } from 'pdf-pages-count';
 
@@ -69,6 +70,16 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   } = payload;
   const t0 = Date.now();
   const timing: Record<string, number> = {};
+  const fileExt = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : '';
+
+  const langfuse = getLangfuse();
+  const trace = langfuse.trace({
+    name: 'document-extraction',
+    userId: orgId,
+    sessionId: recordId,
+    input: { fileName, mimeType, fileExt, driveFileId, driveFolderPath },
+    metadata: { orgId, projectId, recordId },
+  });
 
   console.log(`[process] START record=${recordId} file="${fileName}" mime=${mimeType} drive=${driveFileId || 'n/a'}`);
 
@@ -283,10 +294,18 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   try {
     console.log(`[process] Starting AI extraction: project=${projectId || 'none'} org=${orgId}`);
 
-    // Pre-classify to check if skill uses codegen extraction
+    const classifySpan = trace.span({ name: 'classify', input: { textLength: sourceText.length } });
     const skills = await listActiveSkills();
     const classification = await classifyDocument(sourceText, skills, orgId);
     const skill = classification.skillId ? await getSkill(classification.skillId) : null;
+    classifySpan.end({
+      output: {
+        skillId: classification.skillId,
+        confidence: classification.confidence,
+        reasoning: classification.reasoning,
+        extractionMethod: skill?.extractionMethod || 'llm',
+      },
+    });
 
     if (skill?.extractionMethod === 'vision') {
       const catalogFields = await getSkillFieldDefinitions(skill.skillId);
@@ -303,6 +322,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
 
       if (VISION_EXTS.has(fileExt)) {
         console.log(`[process] Using VISION extraction for skill=${skill.skillId} ext=${fileExt}`);
+        const visionSpan = trace.span({ name: 'vision-extraction', input: { skillId: skill.skillId, fileExt, fileSize: docBuffer.length } });
         try {
           const visionResult: VisionExtractionResult = await extractWithVision(
             docBuffer, skill, catalogFields, classification.confidence, fileExt,
@@ -312,17 +332,35 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           overallConfidence = visionResult.overallConfidence;
           flags = visionResult.flags;
           usedExtractionMethod = 'vision';
+          visionSpan.end({
+            output: {
+              fieldCount: Object.keys(extraction.fields).length,
+              recordCount: extraction.records?.length ?? 0,
+              discoveredCount: Object.keys(discoveredFields).length,
+              overallConfidence,
+              fields: extraction.fields,
+              discoveredFields,
+            },
+            metadata: {
+              inputTokens: visionResult.metadata.inputTokens,
+              outputTokens: visionResult.metadata.outputTokens,
+              elapsedMs: visionResult.metadata.elapsedMs,
+            },
+          });
           console.log(`[process] Vision extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
         } catch (visionErr) {
+          visionSpan.end({ level: 'ERROR', statusMessage: visionErr instanceof Error ? visionErr.message : String(visionErr) });
           console.warn(`[process] Vision extraction failed, falling back to LLM: ${visionErr instanceof Error ? visionErr.message : visionErr}`);
           const result = await extractWithSkill(sourceText, projectId || '', orgId);
           extraction = result.extraction;
           overallConfidence = result.overallConfidence;
           flags = result.flags;
+          trace.span({ name: 'llm-fallback', input: { reason: 'vision-failed' } }).end({ output: { fields: extraction.fields } });
         }
       } else {
         console.log(`[process] Using CODEGEN extraction for skill=${skill.skillId} ext=${fileExt} (non-PDF/image)`);
         const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
+        const codegenSpan = trace.span({ name: 'codegen-extraction', input: { skillId: skill.skillId, fileExt, fileSize: docBuffer.length } });
 
         try {
           const codegenResult: CodegenExtractionResult = await extractWithCodegen(
@@ -340,13 +378,34 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
             }
           }
           usedExtractionMethod = 'codegen';
+          codegenSpan.end({
+            output: {
+              fieldCount: Object.keys(extraction.fields).length,
+              recordCount: extraction.records?.length ?? 0,
+              discoveredCount: Object.keys(discoveredFields).length,
+              overallConfidence,
+              fields: extraction.fields,
+              discoveredFields,
+              records: extraction.records?.slice(0, 5),
+            },
+            metadata: {
+              generatedCode: codegenResult.metadata.generatedCode,
+              codegenInputTokens: codegenResult.metadata.codegenInputTokens,
+              codegenOutputTokens: codegenResult.metadata.codegenOutputTokens,
+              sandboxElapsedMs: codegenResult.metadata.sandboxElapsedMs,
+              retries: codegenResult.metadata.retries,
+              parserMethod: codegenResult.metadata.parserMethod,
+            },
+          });
           console.log(`[process] Codegen extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
         } catch (codegenErr) {
+          codegenSpan.end({ level: 'ERROR', statusMessage: codegenErr instanceof Error ? codegenErr.message : String(codegenErr) });
           console.warn(`[process] Codegen extraction failed, falling back to LLM: ${codegenErr instanceof Error ? codegenErr.message : codegenErr}`);
           const result = await extractWithSkill(sourceText, projectId || '', orgId);
           extraction = result.extraction;
           overallConfidence = result.overallConfidence;
           flags = result.flags;
+          trace.span({ name: 'llm-fallback', input: { reason: 'codegen-failed' } }).end({ output: { fields: extraction.fields } });
         }
       }
     } else if (skill?.extractionMethod === 'codegen') {
@@ -355,7 +414,6 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
       const fileExt = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
 
-      // Re-download raw buffer for the codegen sandbox
       let docBuffer: Buffer;
       if (driveFileId) {
         const { buffer } = await downloadFileRaw(driveFileId, mimeType);
@@ -365,6 +423,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         docBuffer = Buffer.from(await dlData!.arrayBuffer());
       }
 
+      const codegenSpan2 = trace.span({ name: 'codegen-extraction', input: { skillId: skill.skillId, fileExt, fileSize: docBuffer.length } });
       try {
         const codegenResult: CodegenExtractionResult = await extractWithCodegen(
           docBuffer, sourceText, skill, catalogFields, contextCardFields,
@@ -380,9 +439,20 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
             flags.push({ field: fieldName, issue: `Low confidence (${Math.round(fieldData.confidence * 100)}%)`, severity: 'warning' });
           }
         }
-        console.log(`[process] Codegen extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
         usedExtractionMethod = 'codegen';
+        codegenSpan2.end({
+          output: { fields: extraction.fields, discoveredFields, records: extraction.records?.slice(0, 5) },
+          metadata: {
+            generatedCode: codegenResult.metadata.generatedCode,
+            codegenInputTokens: codegenResult.metadata.codegenInputTokens,
+            codegenOutputTokens: codegenResult.metadata.codegenOutputTokens,
+            sandboxElapsedMs: codegenResult.metadata.sandboxElapsedMs,
+            retries: codegenResult.metadata.retries,
+          },
+        });
+        console.log(`[process] Codegen extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} discovered=${Object.keys(discoveredFields).length}`);
       } catch (codegenErr) {
+        codegenSpan2.end({ level: 'ERROR', statusMessage: codegenErr instanceof Error ? codegenErr.message : String(codegenErr) });
         console.warn(`[process] Codegen extraction failed, falling back to LLM: ${codegenErr instanceof Error ? codegenErr.message : codegenErr}`);
         const result = await extractWithSkill(sourceText, projectId || '', orgId);
         extraction = result.extraction;
@@ -390,15 +460,19 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         flags = result.flags;
       }
     } else {
+      const llmSpan = trace.span({ name: 'llm-extraction', input: { textLength: sourceText.length } });
       const result = await extractWithSkill(sourceText, projectId || '', orgId);
       extraction = result.extraction;
       overallConfidence = result.overallConfidence;
       flags = result.flags;
+      llmSpan.end({ output: { fields: extraction.fields, overallConfidence } });
     }
 
     console.log(`[process] AI extraction complete: skill=${extraction.skillId} confidence=${overallConfidence} flags=${flags.length}`);
   } catch (err) {
     console.error(`[process] AI extraction failed for ${recordId}:`, err);
+    trace.update({ output: { error: err instanceof Error ? err.message : 'Unknown error' }, level: 'ERROR' });
+    langfuse.flushAsync().catch(() => {});
     await markFailed(sb, recordId, 'ai_extraction', err);
     return { success: false, recordId, status: 'failed', timing, error: 'AI extraction failed' };
   }
@@ -458,6 +532,20 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
 
   console.log(`[process] DONE record=${recordId} file="${fileName}" status=${finalStatus} — ` +
     Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
+
+  trace.update({
+    output: {
+      status: finalStatus,
+      extractionMethod: usedExtractionMethod,
+      skillId: extraction.skillId,
+      overallConfidence,
+      fieldCount: Object.keys(extraction.fields).length,
+      recordCount: extraction.records?.length ?? 0,
+      flagCount: flags.length,
+    },
+    metadata: { ...timing, extractionMethod: usedExtractionMethod },
+  });
+  langfuse.flushAsync().catch(() => {});
 
   return { success: true, recordId, status: finalStatus, timing };
 }
