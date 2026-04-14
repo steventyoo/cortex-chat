@@ -53,7 +53,7 @@ export async function getFieldUsageDetails(): Promise<FieldUsageDetail[]> {
   const sb = getSupabase();
   const { data, error } = await sb
     .from('skill_fields')
-    .select('field_id, skill_id, document_skills(skill_id, skill_name)');
+    .select('field_id, skill_id, document_skills(skill_id, display_name)');
   if (error) throw error;
   const results: FieldUsageDetail[] = [];
   for (const row of data || []) {
@@ -62,7 +62,7 @@ export async function getFieldUsageDetails(): Promise<FieldUsageDetail[]> {
     results.push({
       field_id: row.field_id as string,
       skill_id: row.skill_id as string,
-      skill_name: (skill as { skill_name?: string })?.skill_name || row.skill_id as string,
+      skill_name: (skill as { display_name?: string })?.display_name || row.skill_id as string,
     });
   }
   return results;
