@@ -297,7 +297,7 @@ export function buildSkillPrompt(skill: DocumentSkill, fields: FieldDefinition[]
       const reqLabel = field.required ? 'required' : 'optional';
       const impLabel = field.importance ? `, ${importanceLabel(field.importance)}` : '';
       let fieldLine = `**${field.name}** (${field.type}, ${reqLabel}${impLabel}): ${field.description}`;
-      if (field.options && field.options.length > 0) {
+      if (Array.isArray(field.options) && field.options.length > 0) {
         fieldLine += ` Options: [${field.options.join(', ')}]`;
       }
       lines.push(fieldLine);

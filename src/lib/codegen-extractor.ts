@@ -37,7 +37,7 @@ function buildMetaPrompt(
 ): string {
   const fieldDescriptions = catalogFields.map(f => {
     let line = `- "${f.name}" (${f.type}${f.required ? ', REQUIRED' : ''}): ${f.description}`;
-    if (f.options?.length) line += ` | Valid values: ${f.options.join(', ')}`;
+    if (Array.isArray(f.options) && f.options.length) line += ` | Valid values: ${f.options.join(', ')}`;
     if (f.disambiguationRules) line += ` | Note: ${f.disambiguationRules}`;
     return line;
   }).join('\n');

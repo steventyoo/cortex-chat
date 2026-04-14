@@ -43,7 +43,7 @@ const EXTRACTED_FIELD_JSON_SCHEMA = {
 
 function fieldTypeToJsonSchema(fd: FieldDefinition): Record<string, unknown> {
   const base: Record<string, unknown> = { ...EXTRACTED_FIELD_JSON_SCHEMA };
-  const desc = fd.description + (fd.options?.length ? ` Options: [${fd.options.join(', ')}]` : '');
+  const desc = fd.description + (Array.isArray(fd.options) && fd.options.length ? ` Options: [${fd.options.join(', ')}]` : '');
   base.description = desc;
   return base;
 }
