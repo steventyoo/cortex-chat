@@ -75,6 +75,13 @@ function fieldVal(
   return 0;
 }
 
+function recFieldVal(
+  rec: Record<string, { value: string | number | null; confidence: number }>,
+  ...names: string[]
+): number {
+  return fieldVal(rec, ...names);
+}
+
 // ── Main Entry Point ─────────────────────────────────────────
 
 export async function materializeProjectProfile(
@@ -121,36 +128,119 @@ export async function materializeProjectProfile(
   }
   const totalDocuments = docs.length;
 
-  // 3. Financial KPIs from JCR
+  // 3. Financial KPIs from JCR (aggregate from line-item records + top-level)
   const jcrDocs = docs.filter(d => d.skillId === 'job_cost_report');
   let contractValue = 0, revisedBudget = 0, jobToDateCost = 0, percentComplete = 0;
 
   if (jcrDocs.length > 0) {
     const latest = jcrDocs[jcrDocs.length - 1];
+
     contractValue = fieldVal(latest.fields, 'Contract Value', 'Original Contract', 'Contract Amount');
-    revisedBudget = fieldVal(latest.fields, 'Revised Budget', 'Revised Contract', 'Total Budget');
-    jobToDateCost = fieldVal(latest.fields, 'Job to Date', 'Job To Date Cost', 'Actual Cost to Date');
-    const rawPct = fieldVal(latest.fields, 'Percent Complete Cost', 'Percent Complete', '% Complete');
+    const rawPct = fieldVal(latest.fields, 'Percent Complete Cost', 'Percent Complete', '% Complete', '% Budget Consumed');
     percentComplete = rawPct > 0 && rawPct <= 1 ? rawPct * 100 : rawPct;
+
+    // Try top-level summary fields first
+    revisedBudget = fieldVal(latest.fields, 'Total Revised Budget', 'Revised Budget', 'Revised Contract', 'Total Budget');
+    jobToDateCost = fieldVal(latest.fields, 'Total Jtd Cost', 'Job to Date', 'Job To Date Cost', 'total_expenses', 'Actual Cost to Date');
+
+    // If top-level totals are missing, sum from per-line-item records
+    if (latest.records && latest.records.length > 0) {
+      const recordFields = latest.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+
+      if (!revisedBudget) {
+        let sum = 0;
+        for (const rec of recordFields) {
+          sum += recFieldVal(rec, 'Revised Budget (line)', 'Revised Budget');
+        }
+        if (sum) revisedBudget = sum;
+      }
+
+      if (!jobToDateCost) {
+        let sum = 0;
+        for (const rec of recordFields) {
+          sum += recFieldVal(rec, 'Job-to-Date Cost (line)', 'Job-to-Date Cost', 'Jtd Cost');
+        }
+        if (sum) jobToDateCost = sum;
+      }
+
+      if (!contractValue) {
+        let sum = 0;
+        for (const rec of recordFields) {
+          sum += recFieldVal(rec, 'Original Budget (line)', 'Original Budget');
+        }
+        if (sum) contractValue = sum;
+      }
+    }
+
+    // Use total_revenues as contract value fallback (negated since it's stored negative)
+    if (!contractValue) {
+      const rev = fieldVal(latest.fields, 'total_revenues', 'sales_cost_code_999_rev_budget');
+      if (rev) contractValue = Math.abs(rev);
+    }
   }
 
   const projectedFinalCost = percentComplete > 0
     ? (jobToDateCost / (percentComplete / 100))
     : null;
-  const projectedMargin = revisedBudget > 0 && projectedFinalCost
-    ? revisedBudget - projectedFinalCost
+
+  // If percent complete wasn't in top-level fields, compute from aggregated budget vs JTD
+  if (!percentComplete && revisedBudget > 0 && jobToDateCost > 0) {
+    percentComplete = (jobToDateCost / revisedBudget) * 100;
+  }
+
+  const projectedFinalCostFinal = percentComplete > 0
+    ? (jobToDateCost / (percentComplete / 100))
+    : projectedFinalCost;
+  const projectedMargin = revisedBudget > 0 && projectedFinalCostFinal
+    ? revisedBudget - projectedFinalCostFinal
     : null;
   const projectedMarginPct = revisedBudget > 0 && projectedMargin != null
     ? (projectedMargin / revisedBudget) * 100
     : null;
 
-  // 4. Labor KPIs from production docs
+  // Also compute total over/under from JCR records if available
+  let totalOverUnder: number | null = null;
+  if (jcrDocs.length > 0) {
+    const latest = jcrDocs[jcrDocs.length - 1];
+    if (latest.records && latest.records.length > 0) {
+      const recordFields = latest.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+      let sum = 0;
+      let found = false;
+      for (const rec of recordFields) {
+        const v = recFieldVal(rec, 'Over/Under Budget — $ (line)', 'Over/Under Budget');
+        if (v) { sum += v; found = true; }
+      }
+      if (found) totalOverUnder = sum;
+    }
+  }
+
+  // 4. Labor KPIs from production docs + JCR records
   const prodDocs = docs.filter(d => d.skillId === 'production_activity');
   let totalBudgetHours = 0, totalActualHours = 0;
 
   for (const doc of prodDocs) {
     totalBudgetHours += fieldVal(doc.fields, 'Budget Labor Hours', 'Budget Hours', 'Estimated Hours');
     totalActualHours += fieldVal(doc.fields, 'Actual Labor Hours', 'Total Labor Hours', 'Actual Hours');
+  }
+
+  // Extract labor hours from JCR line items if production docs don't have them
+  if (jcrDocs.length > 0 && !totalActualHours) {
+    const latest = jcrDocs[jcrDocs.length - 1];
+    if (latest.records && latest.records.length > 0) {
+      const recordFields = latest.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+      for (const rec of recordFields) {
+        const category = String(rec['Cost Category']?.value || '').toLowerCase();
+        if (category !== 'labor') continue;
+        const qtyField = rec['Quantity (labor hours or units)'] || rec['Quantity'];
+        if (qtyField?.value) {
+          const raw = String(qtyField.value);
+          const hoursMatch = raw.match(/([\d,.]+)\s*hours/i);
+          if (hoursMatch) {
+            totalActualHours += parseFloat(hoursMatch[1].replace(/,/g, '')) || 0;
+          }
+        }
+      }
+    }
   }
 
   const laborProductivityRatio = totalBudgetHours > 0
@@ -279,7 +369,7 @@ export async function materializeProjectProfile(
     revisedBudget: revisedBudget || null,
     jobToDateCost: jobToDateCost || null,
     percentComplete: percentComplete || null,
-    projectedFinalCost: projectedFinalCost ? Math.round(projectedFinalCost) : null,
+    projectedFinalCost: projectedFinalCostFinal ? Math.round(projectedFinalCostFinal) : null,
     projectedMargin: projectedMargin ? Math.round(projectedMargin) : null,
     projectedMarginPct: projectedMarginPct ? Math.round(projectedMarginPct * 100) / 100 : null,
     totalBudgetHours: totalBudgetHours || null,

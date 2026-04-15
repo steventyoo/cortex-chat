@@ -160,7 +160,14 @@ function findFieldCI(
 function toNumeric(val: string | number | null | undefined): number | null {
   if (val == null) return null;
   if (typeof val === 'number') return val;
-  const cleaned = String(val).replace(/[$,%\s]/g, '');
+  const str = String(val);
+  // Handle labor hours format like "183.00 hours (Reg: 155.00, O/T: 28.00)"
+  const hoursMatch = str.match(/([\d,.]+)\s*hours/i);
+  if (hoursMatch) {
+    const num = parseFloat(hoursMatch[1].replace(/,/g, ''));
+    return isNaN(num) ? null : num;
+  }
+  const cleaned = str.replace(/[$,%\s]/g, '');
   const num = parseFloat(cleaned);
   return isNaN(num) ? null : num;
 }
@@ -309,6 +316,20 @@ export async function reconcileProject(
   for (const doc of docs) {
     const existing = docsBySkill.get(doc.skillId) || [];
     existing.push(doc);
+
+    // For multi-record documents (like JCR), also create per-record DocRecords
+    // so reconciliation can match individual line items by cost code
+    if (doc.records && doc.records.length > 0) {
+      for (const rec of doc.records) {
+        existing.push({
+          id: doc.id,
+          fileName: doc.fileName,
+          skillId: doc.skillId,
+          fields: rec,
+        });
+      }
+    }
+
     docsBySkill.set(doc.skillId, existing);
   }
 
