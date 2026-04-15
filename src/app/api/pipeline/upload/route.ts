@@ -4,6 +4,7 @@ import { getSupabase, uploadToStorage } from '@/lib/supabase';
 import { generatePipelineId } from '@/lib/pipeline';
 import { isSupportedMimeType } from '@/lib/file-parser';
 import { publishProcessJob, ProcessPayload } from '@/lib/qstash';
+import { getBaseUrl } from '@/lib/base-url';
 
 export const maxDuration = 30;
 
@@ -142,15 +143,4 @@ export async function POST(request: NextRequest) {
     qstashMessageId,
     timing,
   });
-}
-
-function getBaseUrl(request: NextRequest): string {
-  const forwardedHost = request.headers.get('x-forwarded-host');
-  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
-  if (forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}`;
-  }
-  const host = request.headers.get('host') || 'localhost:3000';
-  const proto = host.includes('localhost') ? 'http' : 'https';
-  return `${proto}://${host}`;
 }

@@ -22,6 +22,7 @@ import { fetchProjectList, getSupabase, getOrganization } from '@/lib/supabase';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { publishProcessBatch, publishScanContinuation, ProcessPayload, ScanContinuationPayload } from '@/lib/qstash';
 import { getQStashReceiver } from '@/lib/qstash';
+import { getBaseUrl } from '@/lib/base-url';
 
 const MAX_FILES_PER_RUN = 50;
 
@@ -611,15 +612,4 @@ function isDriveFileNewer(driveTime: string, storedTime: string): boolean {
 
 function fmtTiming(t: Record<string, number>): string {
   return Object.entries(t).map(([k, v]) => `${k}=${v}ms`).join(' ');
-}
-
-function getBaseUrl(request: NextRequest): string {
-  const forwardedHost = request.headers.get('x-forwarded-host');
-  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
-  if (forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}`;
-  }
-  const host = request.headers.get('host') || 'localhost:3000';
-  const proto = host.includes('localhost') ? 'http' : 'https';
-  return `${proto}://${host}`;
 }
