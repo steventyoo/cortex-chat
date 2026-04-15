@@ -7,7 +7,7 @@ import { getSupabase } from '@/lib/supabase';
 export const maxDuration = 300;
 
 const SKIP_STATUSES = new Set([
-  'extracted', 'pending_review', 'approved', 'tier2_validated', 'tier2_flagged',
+  'extracted', 'pending_review', 'approved', 'tier2_validated', 'tier2_flagged', 'failed', 'deleted',
 ]);
 
 export async function POST(request: NextRequest) {
