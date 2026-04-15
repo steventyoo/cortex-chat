@@ -20,10 +20,6 @@
     {
       "path": "/api/pipeline/scan-drive",
       "schedule": "0 14 * * *"
-    },
-    {
-      "path": "/api/pipeline/recover",
-      "schedule": "*/10 * * * *"
     }
   ]
 }
