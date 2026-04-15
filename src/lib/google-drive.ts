@@ -443,6 +443,8 @@ export function isSupportedFileType(mimeType: string): boolean {
  * Download the raw bytes of a Drive file (for uploading to Supabase Storage).
  * Google Docs/Sheets/Slides are exported as their equivalent MIME type.
  */
+const MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024; // 200 MB
+
 export async function downloadFileRaw(
   fileId: string,
   mimeType: string
@@ -460,6 +462,12 @@ export async function downloadFileRaw(
       { responseType: 'arraybuffer' }
     );
     return { buffer: Buffer.from(res.data as ArrayBuffer), effectiveMimeType: exportMime };
+  }
+
+  const meta = await drive.files.get({ fileId, fields: 'size' });
+  const fileSize = parseInt(meta.data.size || '0', 10);
+  if (fileSize > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`FILE_TOO_LARGE: ${(fileSize / 1024 / 1024).toFixed(0)} MB exceeds ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB limit`);
   }
 
   const res = await drive.files.get(

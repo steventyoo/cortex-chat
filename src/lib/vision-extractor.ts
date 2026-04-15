@@ -222,6 +222,120 @@ export async function extractWithVision(
 }
 
 /**
+ * Single-chunk extraction: sends one pre-split chunk to Claude.
+ * Unlike extractWithVision, this NEVER recurses into chunked extraction —
+ * it always sends directly, preventing infinite loops.
+ */
+async function extractSingleChunk(
+  chunkBuffer: Buffer,
+  skill: DocumentSkill,
+  catalogFields: FieldDefinition[],
+  classifierConfidence: number,
+  fileExt: string,
+  options?: { langfuseParent?: LangfuseParent },
+): Promise<VisionExtractionResult> {
+  const t0 = Date.now();
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  const tool = buildExtractionTool(skill, catalogFields);
+  const base64 = chunkBuffer.toString('base64');
+  const mediaType = mimeTypeForFile(fileExt);
+  const promptText = buildPromptText(skill);
+  const maxTokens = skill.multiRecordConfig ? 64000 : 8192;
+
+  const messageParams: Anthropic.MessageCreateParams = {
+    model: 'claude-opus-4-6',
+    max_tokens: maxTokens,
+    system: skill.systemPrompt,
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: 'document',
+          source: { type: 'base64', media_type: mediaType, data: base64 },
+        } as Anthropic.DocumentBlockParam,
+        { type: 'text', text: promptText },
+      ],
+    }],
+    tools: [tool],
+    tool_choice: { type: 'tool' as const, name: 'extract_document' },
+  };
+
+  const generation = options?.langfuseParent?.generation({
+    name: 'vision-chunk-extraction',
+    model: 'claude-opus-4-6',
+    input: { skillId: skill.skillId, fileSizeBytes: chunkBuffer.length },
+    modelParameters: { maxTokens },
+  });
+
+  let response: Anthropic.Message;
+  if (skill.multiRecordConfig) {
+    const stream = client.messages.stream(messageParams);
+    response = await stream.finalMessage();
+  } else {
+    response = await client.messages.create(messageParams);
+  }
+
+  const elapsed = Date.now() - t0;
+  const inputTokens = response.usage?.input_tokens ?? 0;
+  const outputTokens = response.usage?.output_tokens ?? 0;
+
+  const toolBlock = response.content.find(b => b.type === 'tool_use');
+  if (!toolBlock || toolBlock.type !== 'tool_use') {
+    throw new Error('[vision-chunk] No tool_use block in Claude response');
+  }
+
+  const raw = toolBlock.input as {
+    documentType: string;
+    documentTypeConfidence: number;
+    fields: Record<string, { value: string | number | null; confidence: number }>;
+    extra_fields?: Record<string, { value: string | number | null; confidence: number }>;
+    records?: Array<Record<string, { value: string | number | null; confidence: number }>>;
+  };
+
+  generation?.end({
+    output: raw,
+    usage: { input: inputTokens, output: outputTokens },
+    metadata: { stopReason: response.stop_reason, elapsedMs: elapsed },
+  });
+
+  const discoveredFields: Record<string, unknown> = {};
+  if (raw.extra_fields) {
+    for (const [key, val] of Object.entries(raw.extra_fields)) {
+      discoveredFields[key] = val.value;
+    }
+    raw.fields = { ...raw.fields, ...raw.extra_fields };
+    delete raw.extra_fields;
+  }
+
+  const extraction: ExtractionResult = {
+    documentType: raw.documentType,
+    documentTypeConfidence: raw.documentTypeConfidence,
+    fields: raw.fields,
+    records: raw.records,
+    skillId: skill.skillId,
+    skillVersion: skill.version,
+    classifierConfidence,
+  };
+
+  const overallConfidence = computeOverallConfidence(extraction);
+  const flags: ValidationFlag[] = [];
+  for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
+    if (fieldData.value !== null && fieldData.confidence < 0.7) {
+      flags.push({ field: fieldName, issue: `Low confidence (${Math.round(fieldData.confidence * 100)}%)`, severity: 'warning' });
+    }
+  }
+
+  return {
+    extraction,
+    discoveredFields,
+    overallConfidence,
+    flags,
+    metadata: { inputTokens, outputTokens, elapsedMs: elapsed },
+  };
+}
+
+/**
  * Chunked vision extraction: splits a large PDF into page-range chunks
  * that each fit under Claude's request size limit, extracts from each
  * in parallel batches, then merges results (highest confidence wins for
@@ -238,36 +352,35 @@ async function extractWithVisionChunked(
   options?: { langfuseParent?: LangfuseParent },
 ): Promise<VisionExtractionResult> {
   const t0 = Date.now();
-  const pdfDoc = await PDFDocument.load(rawBuffer);
+  const pdfDoc = await PDFDocument.load(rawBuffer, { ignoreEncryption: true });
   const totalPages = pdfDoc.getPageCount();
 
   const chunks: Buffer[] = [];
   let startPage = 0;
 
   while (startPage < totalPages) {
-    let endPage = startPage;
-    let lastGoodChunk: Uint8Array | null = null;
+    const pagesRemaining = totalPages - startPage;
+    const pagesInChunk = Math.min(pagesRemaining, VISION_MAX_PDF_PAGES);
+    let endPage = startPage + pagesInChunk;
 
-    while (endPage < totalPages) {
-      const chunkDoc = await PDFDocument.create();
-      const pageIndices = Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i);
-      const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
-      copiedPages.forEach(p => chunkDoc.addPage(p));
-      const chunkBytes = await chunkDoc.save();
+    const chunkDoc = await PDFDocument.create();
+    const pageIndices = Array.from({ length: endPage - startPage }, (_, i) => startPage + i);
+    const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
+    copiedPages.forEach(p => chunkDoc.addPage(p));
+    let chunkBytes = await chunkDoc.save();
 
-      if (chunkBytes.length > VISION_MAX_RAW_BYTES) {
-        if (lastGoodChunk) break;
-        lastGoodChunk = chunkBytes;
-        endPage++;
-        break;
-      }
-      lastGoodChunk = chunkBytes;
-      endPage++;
+    if (chunkBytes.length > VISION_MAX_RAW_BYTES && pagesInChunk > 1) {
+      const reducedPages = Math.max(1, Math.floor(pagesInChunk * (VISION_MAX_RAW_BYTES / chunkBytes.length) * 0.9));
+      endPage = startPage + reducedPages;
+      const smallDoc = await PDFDocument.create();
+      const smallIndices = Array.from({ length: endPage - startPage }, (_, i) => startPage + i);
+      const smallCopied = await smallDoc.copyPages(pdfDoc, smallIndices);
+      smallCopied.forEach(p => smallDoc.addPage(p));
+      chunkBytes = await smallDoc.save();
     }
 
-    if (lastGoodChunk) {
-      chunks.push(Buffer.from(lastGoodChunk));
-    }
+    chunks.push(Buffer.from(chunkBytes));
+    console.log(`[vision] Chunk ${chunks.length}: pages ${startPage + 1}-${endPage} (${(chunkBytes.length / 1024 / 1024).toFixed(1)}MB)`);
     startPage = endPage;
   }
 
@@ -292,7 +405,7 @@ async function extractWithVisionChunked(
       batchSlice.map((chunk, batchIdx) => {
         const chunkIdx = batch + batchIdx;
         console.log(`[vision] Processing chunk ${chunkIdx + 1}/${chunks.length} (${(chunk.length / 1024 / 1024).toFixed(1)}MB)`);
-        return extractWithVision(
+        return extractSingleChunk(
           chunk, skill, catalogFields, classifierConfidence, fileExt,
           { langfuseParent: chunkSpan },
         );

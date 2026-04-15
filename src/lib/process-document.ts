@@ -357,6 +357,15 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       }
       timing.storage_upload = Date.now() - tStep;
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.startsWith('FILE_TOO_LARGE:')) {
+        console.warn(`[process] ${errMsg} — marking stored_only: ${recordId}`);
+        await sb.from('pipeline_log').update({
+          status: 'stored_only',
+          validation_flags: [{ field: '_system', issue: errMsg, severity: 'info' }],
+        }).eq('id', recordId);
+        return { success: true, recordId, status: 'stored_only', timing };
+      }
       console.error(`[process] Drive raw download failed for ${recordId}:`, err);
     }
 
