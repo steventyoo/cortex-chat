@@ -17,12 +17,17 @@ export async function GET(request: NextRequest) {
   const sb = getSupabase();
   const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
+  const includeFailed = request.nextUrl.searchParams.get('includeFailed') === 'true';
+  const statuses = includeFailed
+    ? ['processing', 'queued', 'failed']
+    : ['processing', 'queued'];
+
   const { data: stuck, error } = await sb
     .from('pipeline_log')
     .select('id, org_id, project_id, file_name, file_url, status, created_at, drive_file_id, drive_modified_time, drive_web_view_link, drive_folder_path, storage_path')
-    .in('status', ['processing', 'queued'])
+    .in('status', statuses)
     .lt('created_at', tenMinutesAgo)
-    .limit(20);
+    .limit(50);
 
   if (error) {
     console.error('[recover] Failed to query stuck records:', error.message);
