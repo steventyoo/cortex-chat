@@ -2,6 +2,7 @@ import { getSupabase } from './supabase';
 import { searchByEmbedding, generateEmbedding } from './embeddings';
 import { SandboxSession } from './sandbox';
 import { validateToolInput, CalcResultSchema } from './tool-schemas';
+import { getBaseUrl } from './base-url';
 import {
   listActiveChatTools,
   listActiveChatTemplates,
@@ -886,9 +887,7 @@ async function executeApiCall(
   }
 
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000';
+    const baseUrl = getBaseUrl();
 
     const url = `${baseUrl}${endpoint}`;
     const fetchOpts: RequestInit = {

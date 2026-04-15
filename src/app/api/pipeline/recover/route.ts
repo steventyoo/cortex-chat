@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { publishProcessJob, ProcessPayload } from '@/lib/qstash';
+import { getBaseUrl } from '@/lib/base-url';
 
 export const maxDuration = 60;
 
@@ -90,13 +91,3 @@ export async function GET(request: NextRequest) {
   return Response.json({ recovered, total: stuck.length, errors });
 }
 
-function getBaseUrl(request: NextRequest): string {
-  const forwardedHost = request.headers.get('x-forwarded-host');
-  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
-  if (forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}`;
-  }
-  const host = request.headers.get('host') || 'localhost:3000';
-  const proto = host.includes('localhost') ? 'http' : 'https';
-  return `${proto}://${host}`;
-}

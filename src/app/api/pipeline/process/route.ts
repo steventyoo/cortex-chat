@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getQStashReceiver, ProcessPayload } from '@/lib/qstash';
 import { processDocument } from '@/lib/process-document';
+import { getBaseUrl } from '@/lib/base-url';
 
 export const maxDuration = 300;
 
@@ -30,15 +31,4 @@ export async function POST(request: NextRequest) {
   }
 
   return Response.json(result);
-}
-
-function getBaseUrl(request: NextRequest): string {
-  const forwardedHost = request.headers.get('x-forwarded-host');
-  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
-  if (forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}`;
-  }
-  const host = request.headers.get('host') || 'localhost:3000';
-  const proto = host.includes('localhost') ? 'http' : 'https';
-  return `${proto}://${host}`;
 }

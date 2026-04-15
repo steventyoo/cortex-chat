@@ -12,9 +12,11 @@ import {
 import { parseJobCostReport, ParsedLineItem } from '@/lib/job-cost-parser';
 
 const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false });
+const ReconciliationPanel = dynamic(() => import('./ReconciliationPanel'), { ssr: false });
+const ProjectProfilePanel = dynamic(() => import('./ProjectProfilePanel'), { ssr: false });
 
 type ViewMode = 'list' | 'review';
-type ListView = 'recent' | 'categories' | 'drive' | 'coverage';
+type ListView = 'recent' | 'categories' | 'drive' | 'coverage' | 'reconciliation' | 'profile';
 
 interface CategoryInfo {
   id: string;
@@ -352,6 +354,9 @@ export default function PipelineReview() {
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
 
+  // Global project selector (persists across all tabs, used by Reconciliation + Profile)
+  const [globalProjectId, setGlobalProjectId] = useState<string | null>(null);
+
   // Drive folder drill-down state (for Drive Folders tab)
   const [selectedDrivePath, setSelectedDrivePath] = useState<string | null>(null);
 
@@ -468,6 +473,13 @@ export default function PipelineReview() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listView]);
+
+  // Fall back to 'recent' if on a project-scoped tab and project is deselected
+  useEffect(() => {
+    if (!globalProjectId && (listView === 'reconciliation' || listView === 'profile')) {
+      setListView('recent');
+    }
+  }, [globalProjectId, listView]);
 
   useEffect(() => {
     fetch('/api/skills').then(r => r.json()).then(d => {
@@ -1824,7 +1836,13 @@ export default function PipelineReview() {
         )}
 
         {/* View toggle */}
-        <ViewToggle value={listView} onChange={setListView} />
+        <ViewToggle
+          value={listView}
+          onChange={setListView}
+          projectId={globalProjectId}
+          projectOptions={projectOptions}
+          onProjectChange={setGlobalProjectId}
+        />
       </div>
 
       {/* Drive setup panel */}
@@ -2320,6 +2338,10 @@ export default function PipelineReview() {
             cachedAt={coverageCachedAt}
             onRefresh={() => fetchCoverage(true)}
           />
+        ) : listView === 'reconciliation' ? (
+          <ReconciliationPanel projectId={globalProjectId} />
+        ) : listView === 'profile' ? (
+          <ProjectProfilePanel projectId={globalProjectId} />
         ) : listView === 'drive' ? (
           selectedDrivePath ? (
             <div>
@@ -2413,7 +2435,9 @@ export default function PipelineReview() {
       {pagination && pagination.totalPages > 1 && !(
         (listView === 'categories' && !selectedCategoryId) ||
         (listView === 'drive' && !selectedDrivePath) ||
-        listView === 'coverage'
+        listView === 'coverage' ||
+        listView === 'reconciliation' ||
+        listView === 'profile'
       ) && (
         <PaginationControls
           pagination={pagination}
@@ -2510,29 +2534,72 @@ function StatPill({
   );
 }
 
-function ViewToggle({ value, onChange }: { value: ListView; onChange: (v: ListView) => void }) {
-  const options: { key: ListView; label: string }[] = [
+function ViewToggle({ value, onChange, projectId, projectOptions, onProjectChange }: {
+  value: ListView; onChange: (v: ListView) => void;
+  projectId: string | null;
+  projectOptions: Array<{ projectId: string; projectName: string }>;
+  onProjectChange: (id: string | null) => void;
+}) {
+  const baseOptions: { key: ListView; label: string }[] = [
     { key: 'recent', label: 'Recent' },
     { key: 'categories', label: 'Categories' },
     { key: 'drive', label: 'Drive Folders' },
     { key: 'coverage', label: 'Coverage' },
   ];
+  const projectOptions_: { key: ListView; label: string }[] = [
+    { key: 'reconciliation', label: 'Reconciliation' },
+    { key: 'profile', label: 'Profile' },
+  ];
 
   return (
-    <div className="flex gap-1 p-0.5 bg-[#f5f5f5] rounded-lg w-fit">
-      {options.map((opt) => (
-        <button
-          key={opt.key}
-          onClick={() => onChange(opt.key)}
-          className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
-            value === opt.key
-              ? 'bg-white text-[#1a1a1a] shadow-sm'
-              : 'text-[#999] hover:text-[#666]'
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
+    <div className="flex items-center gap-3">
+      <div className="flex gap-1 p-0.5 bg-[#f5f5f5] rounded-lg w-fit">
+        {baseOptions.map((opt) => (
+          <button
+            key={opt.key}
+            onClick={() => onChange(opt.key)}
+            className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
+              value === opt.key
+                ? 'bg-white text-[#1a1a1a] shadow-sm'
+                : 'text-[#999] hover:text-[#666]'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+        <div className="w-px bg-[#ddd] mx-0.5 my-1" />
+        {projectOptions_.map((opt) => (
+          <button
+            key={opt.key}
+            onClick={() => {
+              if (!projectId) return;
+              onChange(opt.key);
+            }}
+            className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
+              value === opt.key
+                ? 'bg-white text-[#1a1a1a] shadow-sm'
+                : !projectId
+                  ? 'text-[#ccc] cursor-not-allowed'
+                  : 'text-[#999] hover:text-[#666]'
+            }`}
+            title={!projectId ? 'Select a project first' : undefined}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Global project selector */}
+      <select
+        value={projectId || ''}
+        onChange={e => onProjectChange(e.target.value || null)}
+        className="px-2.5 py-1.5 border border-[#ddd] rounded-lg text-[12px] text-[#444] bg-white focus:outline-none focus:border-[#999] transition-colors max-w-[200px]"
+      >
+        <option value="">All Projects</option>
+        {projectOptions.map(p => (
+          <option key={p.projectId} value={p.projectId}>{p.projectName}</option>
+        ))}
+      </select>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
 import { getSupabase } from '@/lib/supabase';
 import { publishProcessBatch, ProcessPayload } from '@/lib/qstash';
+import { getBaseUrl } from '@/lib/base-url';
 
 export const maxDuration = 120;
 
@@ -168,13 +169,4 @@ export async function POST(request: NextRequest) {
       return acc;
     }, {} as Record<string, number>),
   });
-}
-
-function getBaseUrl(request: NextRequest): string {
-  const forwardedHost = request.headers.get('x-forwarded-host');
-  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https';
-  if (forwardedHost) return `${forwardedProto}://${forwardedHost}`;
-  const host = request.headers.get('host') || 'localhost:3000';
-  const proto = host.includes('localhost') ? 'http' : 'https';
-  return `${proto}://${host}`;
 }
