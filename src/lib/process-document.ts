@@ -328,6 +328,17 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       timing.drive_raw_download = Date.now() - tStep;
       console.log(`[process] Drive raw download complete: ${buffer.length} bytes, effectiveMime=${effectiveMimeType}`);
 
+      const MAX_FILE_BYTES = 200 * 1024 * 1024; // 200 MB
+      if (buffer.length > MAX_FILE_BYTES) {
+        console.warn(`[process] File too large (${(buffer.length / 1024 / 1024).toFixed(0)} MB) — marking stored_only: ${recordId}`);
+        await sb.from('pipeline_log').update({
+          status: 'stored_only',
+          storage_path: finalStoragePath || undefined,
+          validation_flags: [{ field: '_system', issue: `File too large for processing (${(buffer.length / 1024 / 1024).toFixed(0)} MB, limit 200 MB)`, severity: 'info' }],
+        }).eq('id', recordId);
+        return { success: true, recordId, status: 'stored_only', timing };
+      }
+
       tStep = Date.now();
       const ext = fileName.includes('.') ? fileName.split('.').pop() : 'bin';
       const storageDest = `${orgId}/drive/${driveFileId}/${Date.now()}.${ext}`;
