@@ -191,7 +191,7 @@ export default function ProjectProfilePanel({ projectId }: ProjectProfilePanelPr
           {/* Financial KPIs */}
           <Section title="Financial Overview">
             <div className="grid grid-cols-4 gap-3">
-              <KpiCard label="Contract Value" value={fmtCurrency(profile.contract_value)} prev={prev ? fmtCurrency(prev.contract_value) : undefined} />
+              <KpiCard label="Contract Value" value={fmtCurrency(profile.contract_value)} delta={computeDelta(profile.contract_value, prev?.contract_value)} />
               <KpiCard label="Revised Budget" value={fmtCurrency(profile.revised_budget)} />
               <KpiCard label="Job to Date Cost" value={fmtCurrency(profile.job_to_date_cost)} delta={computeDelta(profile.job_to_date_cost, prev?.job_to_date_cost)} />
               <KpiCard label="% Complete" value={profile.percent_complete ? `${profile.percent_complete.toFixed(1)}%` : '—'} delta={computeDelta(profile.percent_complete, prev?.percent_complete)} />
