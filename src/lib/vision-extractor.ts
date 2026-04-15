@@ -223,9 +223,12 @@ export async function extractWithVision(
 
 /**
  * Chunked vision extraction: splits a large PDF into page-range chunks
- * that each fit under Claude's request size limit, extracts from each,
- * then merges results (highest confidence wins for field conflicts).
+ * that each fit under Claude's request size limit, extracts from each
+ * in parallel batches, then merges results (highest confidence wins for
+ * field conflicts, records concatenate).
  */
+const VISION_PARALLEL_CHUNKS = 3;
+
 async function extractWithVisionChunked(
   rawBuffer: Buffer,
   skill: DocumentSkill,
@@ -254,7 +257,6 @@ async function extractWithVisionChunked(
 
       if (chunkBytes.length > VISION_MAX_RAW_BYTES) {
         if (lastGoodChunk) break;
-        // Single page exceeds limit — include it anyway, it'll be the best we can do
         lastGoodChunk = chunkBytes;
         endPage++;
         break;
@@ -269,7 +271,7 @@ async function extractWithVisionChunked(
     startPage = endPage;
   }
 
-  console.log(`[vision] Split ${totalPages}-page PDF into ${chunks.length} chunks`);
+  console.log(`[vision] Split ${totalPages}-page PDF into ${chunks.length} chunks (parallelism=${VISION_PARALLEL_CHUNKS})`);
 
   const mergedFields: Record<string, ExtractedField> = {};
   const mergedDiscovered: Record<string, unknown> = {};
@@ -279,36 +281,50 @@ async function extractWithVisionChunked(
 
   const chunkSpan = options?.langfuseParent?.span({
     name: 'vision-chunked',
-    input: { totalPages, chunkCount: chunks.length, rawSizeMB: (rawBuffer.length / 1024 / 1024).toFixed(1) },
+    input: { totalPages, chunkCount: chunks.length, parallelism: VISION_PARALLEL_CHUNKS, rawSizeMB: (rawBuffer.length / 1024 / 1024).toFixed(1) },
   });
 
-  for (let i = 0; i < chunks.length; i++) {
-    console.log(`[vision] Processing chunk ${i + 1}/${chunks.length} (${(chunks[i].length / 1024 / 1024).toFixed(1)}MB)`);
-    try {
-      const chunkResult = await extractWithVision(
-        chunks[i], skill, catalogFields, classifierConfidence, fileExt,
-        { langfuseParent: chunkSpan },
-      );
+  for (let batch = 0; batch < chunks.length; batch += VISION_PARALLEL_CHUNKS) {
+    const batchSlice = chunks.slice(batch, batch + VISION_PARALLEL_CHUNKS);
+    const batchT0 = Date.now();
 
-      for (const [key, val] of Object.entries(chunkResult.extraction.fields)) {
-        if (!mergedFields[key] || val.confidence > mergedFields[key].confidence) {
-          mergedFields[key] = val;
-        }
-      }
-      for (const [key, val] of Object.entries(chunkResult.discoveredFields)) {
-        if (!(key in mergedDiscovered)) {
-          mergedDiscovered[key] = val;
-        }
-      }
-      if (chunkResult.extraction.records) {
-        allRecords.push(...chunkResult.extraction.records);
-      }
+    const results = await Promise.allSettled(
+      batchSlice.map((chunk, batchIdx) => {
+        const chunkIdx = batch + batchIdx;
+        console.log(`[vision] Processing chunk ${chunkIdx + 1}/${chunks.length} (${(chunk.length / 1024 / 1024).toFixed(1)}MB)`);
+        return extractWithVision(
+          chunk, skill, catalogFields, classifierConfidence, fileExt,
+          { langfuseParent: chunkSpan },
+        );
+      })
+    );
 
-      totalInputTokens += chunkResult.metadata.inputTokens;
-      totalOutputTokens += chunkResult.metadata.outputTokens;
-    } catch (err) {
-      console.warn(`[vision] Chunk ${i + 1} failed: ${err instanceof Error ? err.message : err}`);
+    for (let batchIdx = 0; batchIdx < results.length; batchIdx++) {
+      const result = results[batchIdx];
+      const chunkIdx = batch + batchIdx;
+      if (result.status === 'fulfilled') {
+        const chunkResult = result.value;
+        for (const [key, val] of Object.entries(chunkResult.extraction.fields)) {
+          if (!mergedFields[key] || val.confidence > mergedFields[key].confidence) {
+            mergedFields[key] = val;
+          }
+        }
+        for (const [key, val] of Object.entries(chunkResult.discoveredFields)) {
+          if (!(key in mergedDiscovered)) {
+            mergedDiscovered[key] = val;
+          }
+        }
+        if (chunkResult.extraction.records) {
+          allRecords.push(...chunkResult.extraction.records);
+        }
+        totalInputTokens += chunkResult.metadata.inputTokens;
+        totalOutputTokens += chunkResult.metadata.outputTokens;
+      } else {
+        console.warn(`[vision] Chunk ${chunkIdx + 1} failed: ${result.reason instanceof Error ? result.reason.message : result.reason}`);
+      }
     }
+
+    console.log(`[vision] Batch ${Math.floor(batch / VISION_PARALLEL_CHUNKS) + 1}/${Math.ceil(chunks.length / VISION_PARALLEL_CHUNKS)} done in ${Date.now() - batchT0}ms`);
   }
 
   const elapsed = Date.now() - t0;
@@ -336,7 +352,7 @@ async function extractWithVisionChunked(
     metadata: { totalInputTokens, totalOutputTokens, elapsedMs: elapsed, chunkCount: chunks.length },
   });
 
-  console.log(`[vision] Chunked extraction complete: ${Object.keys(mergedFields).length} fields, ${allRecords.length} records, ${elapsed}ms`);
+  console.log(`[vision] Chunked extraction complete: ${Object.keys(mergedFields).length} fields, ${allRecords.length} records, ${chunks.length} chunks, ${elapsed}ms`);
 
   return {
     extraction,

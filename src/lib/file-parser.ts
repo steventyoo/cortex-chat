@@ -238,52 +238,96 @@ export async function extractTextWithClaude(
 }
 
 /**
- * Split a large PDF into individual pages and OCR each one separately.
- * Used when the full PDF exceeds Claude's request size limit.
+ * Split a large PDF into multi-page chunks and OCR them in parallel.
+ * Each chunk contains up to CHUNK_PAGES pages (kept under Claude's size limit).
+ * Chunks are processed with PARALLEL_CHUNKS concurrent Claude requests.
  */
 export async function extractTextFromLargePdf(
   pdfBuffer: Buffer,
   maxPages?: number,
 ): Promise<string> {
   const t0 = Date.now();
+  const CHUNK_PAGES = 10;
+  const PARALLEL_CHUNKS = 3;
+
   const pdfDoc = await PDFDocument.load(pdfBuffer);
   const totalPages = pdfDoc.getPageCount();
   const pagesToProcess = maxPages ? Math.min(totalPages, maxPages) : totalPages;
 
-  console.log(`[extractTextFromLargePdf] Splitting ${totalPages} pages (processing ${pagesToProcess}), buffer=${(pdfBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+  console.log(`[extractTextFromLargePdf] Splitting ${totalPages} pages (processing ${pagesToProcess}) into chunks of ${CHUNK_PAGES}, parallelism=${PARALLEL_CHUNKS}, buffer=${(pdfBuffer.length / 1024 / 1024).toFixed(1)}MB`);
 
-  const pageTexts: string[] = [];
+  const chunks: { startPage: number; endPage: number }[] = [];
+  for (let i = 0; i < pagesToProcess; i += CHUNK_PAGES) {
+    chunks.push({ startPage: i, endPage: Math.min(i + CHUNK_PAGES, pagesToProcess) });
+  }
 
-  for (let i = 0; i < pagesToProcess; i++) {
-    const singlePageDoc = await PDFDocument.create();
-    const [copiedPage] = await singlePageDoc.copyPages(pdfDoc, [i]);
-    singlePageDoc.addPage(copiedPage);
-    const singlePageBytes = await singlePageDoc.save();
-    const singleBase64 = Buffer.from(singlePageBytes).toString('base64');
+  const chunkTexts: string[] = new Array(chunks.length).fill('');
 
-    if (singleBase64.length > CLAUDE_MAX_BASE64_BYTES) {
-      console.warn(`[extractTextFromLargePdf] Page ${i + 1} is ${(singleBase64.length / 1024 / 1024).toFixed(1)}MB base64 — skipping (too large even as single page)`);
-      pageTexts.push(`[Page ${i + 1}: skipped — exceeds size limit]`);
-      continue;
-    }
+  for (let batch = 0; batch < chunks.length; batch += PARALLEL_CHUNKS) {
+    const batchSlice = chunks.slice(batch, batch + PARALLEL_CHUNKS);
+    const batchT0 = Date.now();
 
-    try {
-      const text = await extractTextWithClaude(singleBase64, 'application/pdf', 'pdf');
-      pageTexts.push(`=== Page ${i + 1} ===\n${text}`);
-      console.log(`[extractTextFromLargePdf] Page ${i + 1}/${pagesToProcess}: ${text.length} chars`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[extractTextFromLargePdf] Page ${i + 1} OCR failed: ${msg}`);
-      pageTexts.push(`[Page ${i + 1}: OCR failed — ${msg}]`);
-    }
+    const results = await Promise.allSettled(
+      batchSlice.map(async (chunk, batchIdx) => {
+        const chunkIdx = batch + batchIdx;
+        const pageCount = chunk.endPage - chunk.startPage;
+        const chunkDoc = await PDFDocument.create();
+        const pageIndices = Array.from({ length: pageCount }, (_, j) => chunk.startPage + j);
+        const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
+        copiedPages.forEach(p => chunkDoc.addPage(p));
+        const chunkBytes = await chunkDoc.save();
+        const chunkBase64 = Buffer.from(chunkBytes).toString('base64');
+
+        if (chunkBase64.length > CLAUDE_MAX_BASE64_BYTES) {
+          console.warn(`[extractTextFromLargePdf] Chunk ${chunkIdx + 1} (pages ${chunk.startPage + 1}-${chunk.endPage}) is ${(chunkBase64.length / 1024 / 1024).toFixed(1)}MB — falling back to single-page OCR`);
+          const singlePageTexts: string[] = [];
+          for (let p = chunk.startPage; p < chunk.endPage; p++) {
+            const singleDoc = await PDFDocument.create();
+            const [cp] = await singleDoc.copyPages(pdfDoc, [p]);
+            singleDoc.addPage(cp);
+            const singleBytes = await singleDoc.save();
+            const singleBase64 = Buffer.from(singleBytes).toString('base64');
+            if (singleBase64.length > CLAUDE_MAX_BASE64_BYTES) {
+              singlePageTexts.push(`[Page ${p + 1}: skipped — exceeds size limit]`);
+              continue;
+            }
+            try {
+              const text = await extractTextWithClaude(singleBase64, 'application/pdf', 'pdf');
+              singlePageTexts.push(`=== Page ${p + 1} ===\n${text}`);
+            } catch (err) {
+              singlePageTexts.push(`[Page ${p + 1}: OCR failed — ${err instanceof Error ? err.message : String(err)}]`);
+            }
+          }
+          return singlePageTexts.join('\n\n');
+        }
+
+        const text = await extractTextWithClaude(chunkBase64, 'application/pdf', 'pdf');
+        console.log(`[extractTextFromLargePdf] Chunk ${chunkIdx + 1}/${chunks.length} (pages ${chunk.startPage + 1}-${chunk.endPage}): ${text.length} chars`);
+        return `=== Pages ${chunk.startPage + 1}–${chunk.endPage} ===\n${text}`;
+      })
+    );
+
+    results.forEach((result, batchIdx) => {
+      const chunkIdx = batch + batchIdx;
+      if (result.status === 'fulfilled') {
+        chunkTexts[chunkIdx] = result.value;
+      } else {
+        const chunk = chunks[chunkIdx];
+        const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        console.warn(`[extractTextFromLargePdf] Chunk ${chunkIdx + 1} (pages ${chunk.startPage + 1}-${chunk.endPage}) failed: ${msg}`);
+        chunkTexts[chunkIdx] = `[Pages ${chunk.startPage + 1}–${chunk.endPage}: OCR failed — ${msg}]`;
+      }
+    });
+
+    console.log(`[extractTextFromLargePdf] Batch ${Math.floor(batch / PARALLEL_CHUNKS) + 1}/${Math.ceil(chunks.length / PARALLEL_CHUNKS)} done in ${Date.now() - batchT0}ms`);
   }
 
   if (pagesToProcess < totalPages) {
-    pageTexts.push(`[${totalPages - pagesToProcess} additional pages not processed]`);
+    chunkTexts.push(`[${totalPages - pagesToProcess} additional pages not processed]`);
   }
 
-  const combined = pageTexts.join('\n\n');
-  console.log(`[extractTextFromLargePdf] Done: ${pagesToProcess} pages, ${combined.length} chars, elapsed=${Date.now() - t0}ms`);
+  const combined = chunkTexts.join('\n\n');
+  console.log(`[extractTextFromLargePdf] Done: ${pagesToProcess} pages in ${chunks.length} chunks, ${combined.length} chars, elapsed=${Date.now() - t0}ms`);
   return combined;
 }
 

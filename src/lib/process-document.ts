@@ -4,7 +4,7 @@ import { extractWithCodegen, type CodegenExtractionResult } from '@/lib/codegen-
 import { extractWithVision, type VisionExtractionResult } from '@/lib/vision-extractor';
 import { getContextCardFieldsForSkill } from '@/lib/stores/context-cards.store';
 import { parseFileBuffer, extractTextWithClaude, extractTextFromLargePdf, CLAUDE_MAX_BASE64_BYTES, getPdfPageCount } from '@/lib/file-parser';
-import { ValidationFlag, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
+import { ValidationFlag, ExtractionResult, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
 import { ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
 import { getLangfuse } from '@/lib/langfuse';
@@ -13,6 +13,9 @@ import { countPdfPagesSync } from 'pdf-pages-count';
 
 const DOCUMENTS_BUCKET = 'documents';
 const LARGE_PDF_PAGE_THRESHOLD = 100;
+const LARGE_PDF_SAMPLE_PAGES = 20;
+
+const JCR_SKILL_ID = 'job_cost_report';
 
 const ALWAYS_PROCESS_PATTERNS = [
   /job\s*(cost|detail)\s*report/i,
@@ -83,6 +86,209 @@ async function markFailed(
   }).eq('id', recordId);
 }
 
+/**
+ * Fast path for large PDFs (>100 pages): routes directly to vision chunked
+ * extraction, bypassing the text OCR step entirely.
+ *
+ * For JCRs (detected by filename), skips classification too.
+ * For unknown document types, OCRs a small sample for classification,
+ * then uses vision chunked extraction for the actual field extraction.
+ */
+async function processLargePdfVision(opts: {
+  rawBuffer: Buffer;
+  pageCount: number;
+  recordId: string;
+  orgId: string;
+  projectId: string | null;
+  fileName: string;
+  mimeType: string;
+  finalStoragePath?: string | null;
+  driveFileId?: string;
+  driveModifiedTime?: string;
+  driveWebViewLink?: string;
+  driveFolderPath?: string;
+  trace: ReturnType<ReturnType<typeof getLangfuse>['trace']>;
+  sb: ReturnType<typeof getSupabase>;
+  timing: Record<string, number>;
+  t0: number;
+}): Promise<ProcessResult> {
+  const {
+    rawBuffer, pageCount, recordId, orgId, projectId, fileName,
+    finalStoragePath, driveFileId, driveModifiedTime, driveWebViewLink, driveFolderPath,
+    trace, sb, timing, t0,
+  } = opts;
+  const langfuse = getLangfuse();
+
+  let tStep = Date.now();
+  const isJcr = isJobCostReport(fileName, driveFolderPath);
+  let skill;
+  let classifierConfidence: number;
+
+  if (isJcr) {
+    console.log(`[process:large-pdf] JCR pattern detected — skipping classification, using skill=${JCR_SKILL_ID}`);
+    skill = await getSkill(JCR_SKILL_ID);
+    classifierConfidence = 0.95;
+    if (!skill) {
+      console.error(`[process:large-pdf] JCR skill ${JCR_SKILL_ID} not found — falling back to stored_only`);
+      await markFailed(sb, recordId, 'large_pdf_vision', new Error('JCR skill not found'));
+      return { success: false, recordId, status: 'failed', timing, error: 'JCR skill not found' };
+    }
+  } else {
+    console.log(`[process:large-pdf] Unknown type — sampling first ${LARGE_PDF_SAMPLE_PAGES} pages for classification`);
+    const sampleSpan = trace.span({ name: 'large-pdf-sample-ocr', input: { pageCount, samplePages: LARGE_PDF_SAMPLE_PAGES } });
+    try {
+      const sampleText = await extractTextFromLargePdf(rawBuffer, LARGE_PDF_SAMPLE_PAGES);
+      sampleSpan.end({ output: { sampleChars: sampleText.length } });
+
+      await sb.from('pipeline_log').update({
+        source_text: sampleText.substring(0, 500000),
+      }).eq('id', recordId);
+
+      const classifySpan = trace.span({ name: 'classify', input: { textLength: sampleText.length } });
+      const skills = await listActiveSkills();
+      const classification = await classifyDocument(sampleText, skills, orgId, { langfuseParent: classifySpan });
+      skill = classification.skillId ? await getSkill(classification.skillId) : null;
+      classifierConfidence = classification.confidence;
+      classifySpan.end({ output: { skillId: classification.skillId, confidence: classification.confidence } });
+      console.log(`[process:large-pdf] Classification: skill=${classification.skillId || 'none'} confidence=${classification.confidence}`);
+    } catch (err) {
+      sampleSpan.end({ level: 'ERROR', statusMessage: err instanceof Error ? err.message : String(err) });
+      console.error(`[process:large-pdf] Sample OCR / classification failed:`, err);
+      await markFailed(sb, recordId, 'large_pdf_classification', err);
+      return { success: false, recordId, status: 'failed', timing, error: 'Large PDF classification failed' };
+    }
+  }
+  timing.classification = Date.now() - tStep;
+
+  if (!skill || skill.extractionMethod === 'llm') {
+    console.log(`[process:large-pdf] No vision/codegen skill matched — falling back to stored_only`);
+    await sb.from('pipeline_log').update({
+      status: 'stored_only',
+      validation_flags: [{
+        field: 'page_count',
+        issue: `Large document (${pageCount} pages). No vision skill matched; stored for manual review.`,
+        severity: 'info',
+      }],
+    }).eq('id', recordId);
+    timing.total = Date.now() - t0;
+    return { success: true, recordId, status: 'stored_only', pageCount, timing };
+  }
+
+  tStep = Date.now();
+  const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+  const visionSpan = trace.span({
+    name: 'large-pdf-vision-extraction',
+    input: { skillId: skill.skillId, pageCount, fileSizeBytes: rawBuffer.length },
+  });
+
+  let extraction: ExtractionResult;
+  let discoveredFields: Record<string, unknown> = {};
+  let overallConfidence: number;
+  let flags: ValidationFlag[];
+
+  try {
+    console.log(`[process:large-pdf] Starting vision chunked extraction: skill=${skill.skillId} pages=${pageCount}`);
+    const visionResult: VisionExtractionResult = await extractWithVision(
+      rawBuffer, skill, catalogFields, classifierConfidence, 'pdf',
+      { langfuseParent: visionSpan },
+    );
+    extraction = visionResult.extraction;
+    discoveredFields = visionResult.discoveredFields;
+    overallConfidence = visionResult.overallConfidence;
+    flags = visionResult.flags;
+    visionSpan.end({
+      output: {
+        fieldCount: Object.keys(extraction.fields).length,
+        recordCount: extraction.records?.length ?? 0,
+        discoveredCount: Object.keys(discoveredFields).length,
+        overallConfidence,
+      },
+      metadata: {
+        inputTokens: visionResult.metadata.inputTokens,
+        outputTokens: visionResult.metadata.outputTokens,
+        elapsedMs: visionResult.metadata.elapsedMs,
+      },
+    });
+    console.log(`[process:large-pdf] Vision extraction complete: fields=${Object.keys(extraction.fields).length} records=${extraction.records?.length ?? 0} confidence=${overallConfidence}`);
+  } catch (err) {
+    visionSpan.end({ level: 'ERROR', statusMessage: err instanceof Error ? err.message : String(err) });
+    console.error(`[process:large-pdf] Vision extraction failed:`, err);
+    await markFailed(sb, recordId, 'large_pdf_vision', err);
+    return { success: false, recordId, status: 'failed', timing, error: 'Large PDF vision extraction failed' };
+  }
+  timing.ai_extraction = Date.now() - tStep;
+
+  const hasErrors = flags.some(f => f.severity === 'error');
+  const hasWarnings = flags.some(f => f.severity === 'warning');
+  const autoApproveEligible = overallConfidence >= 0.95 && !hasErrors && !hasWarnings;
+  const finalStatus = autoApproveEligible ? 'tier2_validated' : hasErrors ? 'tier2_flagged' : 'pending_review';
+
+  tStep = Date.now();
+  let categoryId: string | null = null;
+  let canonicalName: string | null = null;
+  try {
+    const folderName = driveFolderPath?.split(' / ').pop() || null;
+    const categoryKey = resolveCategoryKey(extraction.skillId || null, folderName);
+    categoryId = await lookupCategoryId(orgId, categoryKey);
+    if (!categoryId) categoryId = await lookupCategoryId(orgId, '17_misc');
+    canonicalName = generateCanonicalName('ORG', extraction.skillId || '_general', null, fileName);
+  } catch (err) {
+    console.warn(`[process:large-pdf] Category resolution failed (non-fatal):`, err);
+  }
+  timing.category_resolve = Date.now() - tStep;
+
+  tStep = Date.now();
+  try {
+    const extractionWithDiscovered = Object.keys(discoveredFields).length > 0
+      ? { ...extraction, discovered_fields: discoveredFields }
+      : extraction;
+
+    await sb.from('pipeline_log').update({
+      document_type: extraction.skillId || null,
+      status: finalStatus,
+      overall_confidence: overallConfidence,
+      extracted_data: extractionWithDiscovered,
+      validation_flags: flags.length > 0 ? flags : null,
+      ai_model: 'opus-vision-chunked',
+      tier1_completed_at: new Date().toISOString(),
+      tier2_completed_at: new Date().toISOString(),
+      page_count: pageCount,
+      ...(categoryId ? { category_id: categoryId } : {}),
+      ...(canonicalName ? { canonical_name: canonicalName } : {}),
+      ...(finalStoragePath ? { storage_path: finalStoragePath } : {}),
+      ...(driveModifiedTime ? { drive_modified_time: driveModifiedTime } : {}),
+      ...(driveWebViewLink ? { drive_web_view_link: driveWebViewLink } : {}),
+      ...(driveFolderPath ? { drive_folder_path: driveFolderPath } : {}),
+      ...(driveFileId ? { drive_file_id: driveFileId } : {}),
+    }).eq('id', recordId);
+    console.log(`[process:large-pdf] Final status saved: ${finalStatus}`);
+  } catch (err) {
+    console.error(`[process:large-pdf] Failed to update pipeline record:`, err);
+  }
+  timing.db_final_update = Date.now() - tStep;
+  timing.total = Date.now() - t0;
+
+  console.log(`[process:large-pdf] DONE record=${recordId} file="${fileName}" status=${finalStatus} pages=${pageCount} — ` +
+    Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
+
+  trace.update({
+    output: {
+      status: finalStatus,
+      extractionMethod: 'vision-chunked',
+      skillId: extraction.skillId,
+      overallConfidence,
+      fieldCount: Object.keys(extraction.fields).length,
+      recordCount: extraction.records?.length ?? 0,
+      flagCount: flags.length,
+      pageCount,
+    },
+    metadata: { ...timing, extractionMethod: 'vision-chunked' },
+  });
+  langfuse.flushAsync().catch(() => {});
+
+  return { success: true, recordId, status: finalStatus, pageCount, timing };
+}
+
 export async function processDocument(payload: ProcessPayload): Promise<ProcessResult> {
   const {
     recordId, orgId, projectId, fileName, mimeType, storagePath,
@@ -150,29 +356,13 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
 
         await sb.from('pipeline_log').update({ page_count: pageCount }).eq('id', recordId);
 
-        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess && !shouldAlwaysProcess(fileName, driveFolderPath)) {
-          console.log(`[process] Large PDF detected (${pageCount} pages > ${LARGE_PDF_PAGE_THRESHOLD}). Storing only, skipping AI extraction.`);
-          await sb.from('pipeline_log').update({
-            status: 'stored_only',
-            storage_path: finalStoragePath || null,
-            validation_flags: [{
-              field: 'page_count',
-              issue: `Large document (${pageCount} pages). Stored for manual processing.`,
-              severity: 'info',
-            }],
-            ...(driveModifiedTime ? { drive_modified_time: driveModifiedTime } : {}),
-            ...(driveWebViewLink ? { drive_web_view_link: driveWebViewLink } : {}),
-            ...(driveFolderPath ? { drive_folder_path: driveFolderPath } : {}),
-            ...(driveFileId ? { drive_file_id: driveFileId } : {}),
-          }).eq('id', recordId);
-          timing.total = Date.now() - t0;
-          console.log(`[process] DONE record=${recordId} file="${fileName}" status=stored_only pages=${pageCount} — ` +
-            Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
-          return { success: true, recordId, status: 'stored_only', pageCount, timing };
-        }
-
-        if (pageCount > LARGE_PDF_PAGE_THRESHOLD) {
-          console.log(`[process] Large PDF (${pageCount} pages) but matches always-process pattern — proceeding with extraction`);
+        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess) {
+          console.log(`[process] Large PDF (${pageCount} pages) — routing to vision chunked extraction (zero data loss)`);
+          return processLargePdfVision({
+            rawBuffer: rawBuffer!, pageCount, recordId, orgId, projectId, fileName, mimeType,
+            finalStoragePath, driveFileId, driveModifiedTime, driveWebViewLink, driveFolderPath,
+            trace, sb, timing, t0,
+          });
         }
       } catch (err) {
         console.warn(`[process] PDF page count failed (non-fatal):`, err);
@@ -264,20 +454,12 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
 
         await sb.from('pipeline_log').update({ page_count: pageCount }).eq('id', recordId);
 
-        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess && !shouldAlwaysProcess(fileName)) {
-          console.log(`[process] Large PDF detected (${pageCount} pages > ${LARGE_PDF_PAGE_THRESHOLD}). Storing only, skipping AI extraction.`);
-          await sb.from('pipeline_log').update({
-            status: 'stored_only',
-            validation_flags: [{
-              field: 'page_count',
-              issue: `Large document (${pageCount} pages). Stored for manual processing.`,
-              severity: 'info',
-            }],
-          }).eq('id', recordId);
-          timing.total = Date.now() - t0;
-          console.log(`[process] DONE record=${recordId} file="${fileName}" status=stored_only pages=${pageCount} — ` +
-            Object.entries(timing).map(([k, v]) => `${k}=${v}ms`).join(' '));
-          return { success: true, recordId, status: 'stored_only', pageCount, timing };
+        if (pageCount > LARGE_PDF_PAGE_THRESHOLD && !forceProcess) {
+          console.log(`[process] Large PDF (${pageCount} pages) — routing to vision chunked extraction (zero data loss)`);
+          return processLargePdfVision({
+            rawBuffer: fileBuffer, pageCount, recordId, orgId, projectId, fileName, mimeType,
+            finalStoragePath: storagePath, trace, sb, timing, t0,
+          });
         }
       } catch (err) {
         console.warn(`[process] PDF page count failed (non-fatal):`, err);
