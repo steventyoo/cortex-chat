@@ -429,7 +429,7 @@ function fmtNumber(val: number | null): string {
   return val.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
-function computeDelta(current: number | null, previous: number | null): { value: string; direction: 'up' | 'down' | 'flat' } | null {
+function computeDelta(current: number | null | undefined, previous: number | null | undefined): { value: string; direction: 'up' | 'down' | 'flat' } | null {
   if (current == null || previous == null || previous === 0) return null;
   const diff = current - previous;
   const pct = Math.abs((diff / previous) * 100);
