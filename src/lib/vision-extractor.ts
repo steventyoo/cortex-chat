@@ -48,9 +48,22 @@ function buildPromptText(skill: DocumentSkill): string {
     if (Array.isArray(skill.multiRecordConfig.secondaryTables)) {
       for (const st of skill.multiRecordConfig.secondaryTables) {
         lines.push('');
-        lines.push(`Also extract a "${st.table}" array containing one entry per worker/person found in the payroll or labor sections.`);
-        lines.push(`Each entry should contain: ${st.fields.join(', ')}.`);
-        lines.push(`If no per-worker data is present, return an empty "${st.table}" array.`);
+        if (st.table === 'payroll_transactions') {
+          lines.push(`Also extract a "${st.table}" array with one entry per INDIVIDUAL payroll transaction line (PR lines).`);
+          lines.push('Each "PR" line in the document represents one payroll transaction for one worker under one cost code.');
+          lines.push('A single worker will appear MANY times across different cost codes and pay periods — extract EVERY occurrence as a separate record.');
+          lines.push(`Each entry: ${st.fields.join(', ')}.`);
+          lines.push('"Hours Type" should be exactly "Regular", "Overtime", or "Double Time".');
+          lines.push('"Cost Code" is the 3-digit code from the section header (e.g., 011, 110, 120).');
+          lines.push('"Amount" is the dollar amount on the transaction line.');
+          lines.push('"Hours" is the numeric hours value (e.g., 7.00 from "Regular: 7.00 hours").');
+          lines.push('Extract ALL PR lines — there may be hundreds or thousands across the document. Do NOT skip or summarize.');
+          lines.push(`If no payroll transactions are found, return an empty "${st.table}" array.`);
+        } else {
+          lines.push(`Also extract a "${st.table}" array containing one entry per row found in the relevant section.`);
+          lines.push(`Each entry should contain: ${st.fields.join(', ')}.`);
+          lines.push(`If no data is present, return an empty "${st.table}" array.`);
+        }
       }
     }
   }

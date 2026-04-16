@@ -765,7 +765,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
     try {
       const jcrT = Date.now();
       const workerRecords = extraction.targetTables
-        ?.find(t => t.table === 'worker_transactions')?.records;
+        ?.find(t => t.table === 'payroll_transactions' || t.table === 'worker_transactions')?.records;
       const jcrResult = await runJcrModel(recordId, projectId || '', orgId, {
         fields: extraction.fields as Record<string, { value: string | number | null; confidence: number }>,
         records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
