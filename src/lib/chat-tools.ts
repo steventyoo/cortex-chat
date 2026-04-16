@@ -334,102 +334,13 @@ async function executeProjectOverview(
     inventory[sk] = (inventory[sk] || 0) + 1;
   }
 
-  const result: Record<string, unknown> = {
-    project: project ? {
-      project_id: project.project_id,
-      project_name: project.project_name,
-      address: project.address,
-      trade: project.trade,
-      project_status: project.project_status,
-      contract_value: project.contract_value,
-      job_to_date: project.job_to_date,
-      percent_complete: project.percent_complete_cost,
-      total_cos: project.total_cos,
-      gc_name: project.gc_name,
-      owner_name: project.owner_name,
-      project_type: project.project_type,
-      project_subtype: project.project_subtype,
-      building_type: project.building_type,
-      delivery_method: project.delivery_method,
-      gross_sf: project.gross_sf,
-      stories: project.stories,
-      geographic_market: project.geographic_market,
-    } : null,
-    document_inventory: inventory,
+  return {
+    result: {
+      project: project || null,
+      profile: profile || null,
+      document_inventory: inventory,
+    },
   };
-
-  if (profile) {
-    result.derived_kpis = {
-      snapshot_date: profile.snapshot_date,
-      financial: {
-        contract_value: profile.contract_value,
-        revised_budget: profile.revised_budget,
-        job_to_date_cost: profile.job_to_date_cost,
-        percent_complete: profile.percent_complete,
-        projected_final_cost: profile.projected_final_cost,
-        projected_margin: profile.projected_margin,
-        projected_margin_pct: profile.projected_margin_pct,
-        net_profit: profile.net_profit,
-        gross_margin_pct: profile.gross_margin_pct,
-        direct_cost_total: profile.direct_cost_total,
-        labor_cost: profile.labor_cost,
-        material_cost: profile.material_cost,
-        overhead_cost: profile.overhead_cost,
-        burden_cost: profile.burden_cost,
-        subcontract_cost: profile.subcontract_cost,
-        other_cost: profile.other_cost,
-      },
-      labor: {
-        total_budget_hours: profile.total_budget_hours,
-        total_actual_hours: profile.total_actual_hours,
-        labor_productivity_ratio: profile.labor_productivity_ratio,
-        blended_labor_rate: profile.blended_labor_rate,
-        estimated_labor_rate: profile.estimated_labor_rate,
-      },
-      project_scope: {
-        fixture_count: profile.fixture_count,
-        unit_count: profile.unit_count,
-        duration_months: profile.duration_months,
-        hours_per_fixture: profile.hours_per_fixture,
-        hours_per_unit: profile.hours_per_unit,
-        revenue_per_unit: profile.revenue_per_unit,
-        profit_per_unit: profile.profit_per_unit,
-        cost_per_unit: profile.cost_per_unit,
-        labor_per_unit: profile.labor_per_unit,
-        material_per_unit: profile.material_per_unit,
-      },
-      change_orders: {
-        total_cos: profile.total_cos,
-        total_co_value: profile.total_co_value,
-        approved_co_value: profile.approved_co_value,
-        pending_co_value: profile.pending_co_value,
-        co_absorption_rate: profile.co_absorption_rate,
-      },
-      risk: {
-        risk_score: profile.risk_score,
-        risk_level: profile.risk_level,
-        productivity_drift: profile.productivity_drift,
-        burn_gap: profile.burn_gap,
-        rate_drift: profile.rate_drift,
-      },
-      reconciliation: {
-        pass_rate: profile.reconciliation_pass_rate,
-        warnings: profile.reconciliation_warnings,
-        failures: profile.reconciliation_failures,
-      },
-      coverage: {
-        score: profile.coverage_score,
-        covered_cost_codes: profile.covered_cost_codes,
-        missing_cost_codes: profile.missing_cost_codes,
-      },
-      vendors: {
-        top_subs: profile.top_subs,
-        sub_co_rate: profile.sub_co_rate,
-      },
-    };
-  }
-
-  return { result };
 }
 
 async function executeReconciliationCheck(
@@ -966,6 +877,35 @@ async function executeJcrAnalysis(
     return { result: null, error: 'projectId is required' };
   }
 
+  const hasFilter = !!(tab || canonical || section || query);
+
+  if (!hasFilter) {
+    const { data: indexRows, error: idxErr } = await sb
+      .from('jcr_export')
+      .select('tab, section, canonical_name, display_name, data_type, value_number, value_text')
+      .eq('project_id', projectId)
+      .order('tab')
+      .order('section');
+
+    if (idxErr) return { result: null, error: idxErr.message };
+
+    const rows = indexRows || [];
+    const index: Record<string, Record<string, number>> = {};
+    for (const r of rows) {
+      if (!index[r.tab]) index[r.tab] = {};
+      index[r.tab][r.section] = (index[r.tab][r.section] || 0) + 1;
+    }
+
+    return {
+      result: {
+        total_fields: rows.length,
+        tabs: index,
+        rows,
+        hint: 'All fields returned. Filter by tab, section, or canonical_name for a focused view.',
+      },
+    };
+  }
+
   let dbQuery = sb
     .from('jcr_export')
     .select('tab, section, record_key, canonical_name, display_name, data_type, status, value_text, value_number, notes')
@@ -976,7 +916,7 @@ async function executeJcrAnalysis(
   if (canonical) dbQuery = dbQuery.eq('canonical_name', canonical);
   if (query) dbQuery = dbQuery.or(`canonical_name.ilike.%${query}%,display_name.ilike.%${query}%,value_text.ilike.%${query}%`);
 
-  const { data, error } = await dbQuery.order('tab').order('section').limit(200);
+  const { data, error } = await dbQuery.order('tab').order('section').limit(500);
   if (error) return { result: null, error: error.message };
 
   const summary: Record<string, number> = {};
