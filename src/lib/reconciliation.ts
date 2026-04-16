@@ -446,7 +446,12 @@ export async function reconcileProject(
     }
   }
 
-  const resultsToInsert = allChecks.map(c => ({
+  // Filter out noise: skip checks where both values are null (no data to compare)
+  const meaningfulChecks = allChecks.filter(c =>
+    c.sourceValue != null || c.targetValue != null || c.message.startsWith('No ')
+  );
+
+  const resultsToInsert = meaningfulChecks.map(c => ({
     org_id: orgId,
     project_id: projectId,
     rule_id: c.ruleId,
@@ -472,13 +477,13 @@ export async function reconcileProject(
     }
   }
 
-  const passed = allChecks.filter(c => c.status === 'pass').length;
-  const warnings = allChecks.filter(c => c.status === 'warning').length;
-  const failures = allChecks.filter(c => c.status === 'fail').length;
-  const noMatches = allChecks.filter(c => c.status === 'no_match').length;
+  const passed = meaningfulChecks.filter(c => c.status === 'pass').length;
+  const warnings = meaningfulChecks.filter(c => c.status === 'warning').length;
+  const failures = meaningfulChecks.filter(c => c.status === 'fail').length;
+  const noMatches = meaningfulChecks.filter(c => c.status === 'no_match').length;
 
   console.log(
-    `[reconciliation] Run complete: run=${runId} checks=${allChecks.length} ` +
+    `[reconciliation] Run complete: run=${runId} checks=${meaningfulChecks.length} ` +
     `pass=${passed} warn=${warnings} fail=${failures} no_match=${noMatches} ` +
     `elapsed=${Date.now() - t0}ms`
   );
@@ -487,12 +492,12 @@ export async function reconcileProject(
     runId,
     projectId,
     orgId,
-    totalChecks: allChecks.length,
+    totalChecks: meaningfulChecks.length,
     passed,
     warnings,
     failures,
     noMatches,
-    checks: allChecks,
+    checks: meaningfulChecks,
     elapsedMs: Date.now() - t0,
   };
 }
