@@ -33,17 +33,21 @@ export async function POST(req: NextRequest) {
       fields: Record<string, { value: string | number | null; confidence: number }>;
       records: Array<Record<string, { value: string | number | null; confidence: number }>>;
       skillId?: string;
+      targetTables?: Array<{ table: string; records: Array<Record<string, { value: string | number | null; confidence: number }>> }>;
     };
 
     if (!ed?.fields || !ed?.records?.length) {
       return NextResponse.json({ error: 'JCR document has no extracted records' }, { status: 400 });
     }
 
+    const workerRecords = ed.targetTables
+      ?.find(t => t.table === 'worker_transactions')?.records;
+
     const result = await runJcrModel(
       doc.id,
       doc.project_id,
       doc.org_id,
-      ed,
+      { ...ed, workerRecords },
     );
 
     return NextResponse.json({
@@ -51,6 +55,7 @@ export async function POST(req: NextRequest) {
       runId: result.runId,
       rowCount: result.rowCount,
       pipelineLogId: doc.id,
+      workerCount: workerRecords?.length ?? 0,
     });
   } catch (err) {
     console.error('[jcr-model/run] Error:', err);

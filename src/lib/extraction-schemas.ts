@@ -143,6 +143,27 @@ export function buildExtractionTool(
       },
     };
     required.push('records');
+
+    if (Array.isArray(skill.multiRecordConfig.secondaryTables)) {
+      for (const st of skill.multiRecordConfig.secondaryTables) {
+        const stFields: Record<string, unknown> = {};
+        for (const fieldName of st.fields) {
+          const fd = fields.find(f => f.name === fieldName);
+          stFields[fieldName] = fd
+            ? fieldTypeToJsonSchema(fd)
+            : { ...EXTRACTED_FIELD_JSON_SCHEMA, description: fieldName };
+        }
+        properties[st.table] = {
+          type: 'array',
+          description: `Secondary extraction table: ${st.table}. One entry per row found.`,
+          items: {
+            type: 'object',
+            properties: stFields,
+            additionalProperties: EXTRACTED_FIELD_JSON_SCHEMA,
+          },
+        };
+      }
+    }
   }
 
   return {
