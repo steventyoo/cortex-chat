@@ -94,6 +94,7 @@ function resolveFieldValue(
   fieldMap: Map<string, FieldMapping[]>,
 ): number | null {
   const hint = fieldName.toLowerCase();
+  const hintNorm = norm(fieldName);
 
   const skillMappings = fieldMap.get(doc.skillId);
   if (skillMappings) {
@@ -109,7 +110,8 @@ function resolveFieldValue(
   if (direct) return toNumeric(direct.value);
 
   for (const [key, val] of Object.entries(doc.fields)) {
-    if (key.toLowerCase().includes(hint) || hint.includes(key.toLowerCase())) {
+    const keyNorm = norm(key);
+    if (keyNorm.includes(hintNorm) || hintNorm.includes(keyNorm)) {
       return toNumeric(val.value);
     }
   }
@@ -123,6 +125,7 @@ function resolveMatchKeyValue(
   fieldMap: Map<string, FieldMapping[]>,
 ): string | null {
   const hint = matchKey.toLowerCase();
+  const hintNorm = norm(matchKey);
 
   const skillMappings = fieldMap.get(doc.skillId);
   if (skillMappings) {
@@ -138,12 +141,18 @@ function resolveMatchKeyValue(
   if (direct?.value != null) return String(direct.value).toLowerCase().trim();
 
   for (const [key, val] of Object.entries(doc.fields)) {
-    if (key.toLowerCase().includes(hint) || hint.includes(key.toLowerCase())) {
+    const keyNorm = norm(key);
+    if (keyNorm.includes(hintNorm) || hintNorm.includes(keyNorm)) {
       if (val.value != null) return String(val.value).toLowerCase().trim();
     }
   }
 
   return null;
+}
+
+/** Normalize for fuzzy comparison: lowercase, collapse underscores/dashes/spaces */
+function norm(s: string): string {
+  return s.toLowerCase().replace(/[_\-\s/]+/g, ' ').trim();
 }
 
 function findFieldCI(
@@ -153,6 +162,10 @@ function findFieldCI(
   const lower = name.toLowerCase();
   for (const [key, val] of Object.entries(fields)) {
     if (key.toLowerCase() === lower) return val;
+  }
+  const normalized = norm(name);
+  for (const [key, val] of Object.entries(fields)) {
+    if (norm(key) === normalized) return val;
   }
   return undefined;
 }
@@ -232,6 +245,67 @@ function compareValues(
     differencePct: Math.round(pct * 100) / 100,
     message: `Difference of ${Math.round(pct)}% ($${Math.round(absDiff).toLocaleString()}) exceeds tolerance`,
   };
+}
+
+// ── JCR Export Self-Checks ───────────────────────────────────
+// Reads pre-computed reconciliation tie-outs from the jcr_export
+// Reconciliation tab, which correctly handles filtering (code 999,
+// overhead, category splits) that the generic engine can't do.
+
+async function getJcrExportReconciliation(projectId: string): Promise<ReconciliationCheck[]> {
+  const sb = getSupabase();
+  const { data: rows } = await sb
+    .from('jcr_export')
+    .select('section, record_key, canonical_name, display_name, value_number, notes')
+    .eq('project_id', projectId)
+    .eq('tab', 'Reconciliation');
+
+  if (!rows || rows.length === 0) return [];
+
+  const checks: ReconciliationCheck[] = [];
+  const bySection = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const sec = r.section as string;
+    const arr = bySection.get(sec) || [];
+    arr.push(r);
+    bySection.set(sec, arr);
+  }
+
+  for (const [section, sectionRows] of bySection) {
+    const checkRow = sectionRows.find(r =>
+      (r.canonical_name as string).startsWith('recon_check_')
+    );
+    if (!checkRow) continue;
+
+    const val = checkRow.value_number as number | null;
+    const note = checkRow.notes as string | null;
+    const isPass = note === 'PASS' || (val != null && val < 1);
+
+    const values = sectionRows.filter(r =>
+      !(r.canonical_name as string).startsWith('recon_check_')
+    );
+
+    const sourceVal = values[0]?.value_number as number | null ?? null;
+    const targetVal = values[1]?.value_number as number | null ?? null;
+
+    checks.push({
+      ruleId: 'jcr-export-recon',
+      ruleName: `JCR Self-Check: ${section}`,
+      matchKeyValue: '*',
+      sourceRecordId: null,
+      targetRecordId: null,
+      sourceValue: sourceVal,
+      targetValue: targetVal,
+      difference: val,
+      differencePct: sourceVal && val ? Math.round(Math.abs(val / sourceVal) * 10000) / 100 : 0,
+      status: isPass ? 'pass' : 'warning',
+      message: isPass
+        ? `${checkRow.display_name}: PASS (diff=$${val?.toFixed(2) || '0'})`
+        : `${checkRow.display_name}: FAIL (diff=$${val?.toFixed(2) || '?'})`,
+    });
+  }
+
+  return checks;
 }
 
 // ── Main Entry Point ─────────────────────────────────────────
@@ -451,7 +525,13 @@ export async function reconcileProject(
     c.sourceValue != null || c.targetValue != null || c.message.startsWith('No ')
   );
 
-  const resultsToInsert = meaningfulChecks.map(c => ({
+  // Add pre-computed JCR self-checks from jcr_export Reconciliation tab
+  const jcrSelfChecks = await getJcrExportReconciliation(projectId);
+  meaningfulChecks.push(...jcrSelfChecks);
+
+  const resultsToInsert = meaningfulChecks
+    .filter(c => c.ruleId !== 'jcr-export-recon')
+    .map(c => ({
     org_id: orgId,
     project_id: projectId,
     rule_id: c.ruleId,

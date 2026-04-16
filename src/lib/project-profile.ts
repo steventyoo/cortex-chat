@@ -163,11 +163,28 @@ export async function materializeProjectProfile(
   }
   const totalDocuments = docs.length;
 
-  // 3. Financial KPIs from JCR (aggregate from line-item records + top-level)
+  // 3. Financial KPIs — prefer jcr_export canonical values (already filtered correctly)
   const jcrDocs = docs.filter(d => d.skillId === 'job_cost_report');
   let contractValue = 0, revisedBudget = 0, jobToDateCost = 0, percentComplete = 0;
 
-  if (jcrDocs.length > 0) {
+  // Try jcr_export first (these are computed with proper 999/overhead filtering)
+  const { data: baseKpis } = await sb
+    .from('jcr_export')
+    .select('canonical_name, value_number')
+    .eq('project_id', projectId)
+    .in('canonical_name', ['contract_value', 'revised_budget', 'job_to_date_cost']);
+
+  const baseMap = new Map<string, number>();
+  for (const r of baseKpis || []) {
+    if (r.value_number != null) baseMap.set(r.canonical_name, r.value_number);
+  }
+
+  contractValue = baseMap.get('contract_value') || 0;
+  revisedBudget = baseMap.get('revised_budget') || 0;
+  jobToDateCost = baseMap.get('job_to_date_cost') || 0;
+
+  // Fall back to raw extracted_data if jcr_export is empty
+  if (!contractValue && !revisedBudget && !jobToDateCost && jcrDocs.length > 0) {
     const latest = jcrDocs[jcrDocs.length - 1];
 
     contractValue = fieldVal(latest.fields, 'Contract Value', 'Original Contract', 'Contract Amount');
