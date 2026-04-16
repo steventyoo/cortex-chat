@@ -764,9 +764,16 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   if (extraction.skillId === JCR_SKILL_ID && extraction.records?.length) {
     try {
       const jcrT = Date.now();
-      const jcrResult = await runJcrModel(recordId, projectId || '', orgId, extraction as never);
+      const workerRecords = extraction.targetTables
+        ?.find(t => t.table === 'worker_transactions')?.records;
+      const jcrResult = await runJcrModel(recordId, projectId || '', orgId, {
+        fields: extraction.fields as Record<string, { value: string | number | null; confidence: number }>,
+        records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
+        skillId: extraction.skillId,
+        workerRecords: workerRecords as Array<Record<string, { value: string | number | null; confidence: number }>> | undefined,
+      });
       timing.jcr_model = Date.now() - jcrT;
-      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} elapsed=${timing.jcr_model}ms`);
+      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
     } catch (err) {
       console.warn(`[process] JCR model failed (non-fatal):`, err);
     }

@@ -45,6 +45,14 @@ function buildPromptText(skill: DocumentSkill): string {
     lines.push(`Each record should contain: ${skill.multiRecordConfig.fields.join(', ')}.`);
     lines.push('The "fields" object should contain document-level summary data (totals, project info, report metadata).');
     lines.push('Extract ALL line items — do not summarize or skip any, even if there are hundreds.');
+    if (Array.isArray(skill.multiRecordConfig.secondaryTables)) {
+      for (const st of skill.multiRecordConfig.secondaryTables) {
+        lines.push('');
+        lines.push(`Also extract a "${st.table}" array containing one entry per worker/person found in the payroll or labor sections.`);
+        lines.push(`Each entry should contain: ${st.fields.join(', ')}.`);
+        lines.push(`If no per-worker data is present, return an empty "${st.table}" array.`);
+      }
+    }
   }
 
   return lines.join('\n');
@@ -144,13 +152,7 @@ export async function extractWithVision(
     throw new Error('[vision] No tool_use block in Claude response');
   }
 
-  const raw = toolBlock.input as {
-    documentType: string;
-    documentTypeConfidence: number;
-    fields: Record<string, { value: string | number | null; confidence: number }>;
-    extra_fields?: Record<string, { value: string | number | null; confidence: number }>;
-    records?: Array<Record<string, { value: string | number | null; confidence: number }>>;
-  };
+  const raw = toolBlock.input as RawToolOutput;
 
   generation?.end({
     output: raw,
@@ -173,11 +175,21 @@ export async function extractWithVision(
     delete raw.extra_fields;
   }
 
+  const secondaryTableNames = getSecondaryTableNames(skill);
+  const targetTables: Array<{ table: string; records: Array<Record<string, ExtractedField>> }> = [];
+  for (const tableName of secondaryTableNames) {
+    const tableData = raw[tableName];
+    if (Array.isArray(tableData) && tableData.length > 0) {
+      targetTables.push({ table: tableName, records: tableData as Array<Record<string, ExtractedField>> });
+    }
+  }
+
   const extraction: ExtractionResult = {
     documentType: raw.documentType,
     documentTypeConfidence: raw.documentTypeConfidence,
     fields: raw.fields,
     records: raw.records,
+    targetTables: targetTables.length > 0 ? targetTables : undefined,
     skillId: skill.skillId,
     skillVersion: skill.version,
     classifierConfidence,
@@ -285,13 +297,7 @@ async function extractSingleChunk(
     throw new Error('[vision-chunk] No tool_use block in Claude response');
   }
 
-  const raw = toolBlock.input as {
-    documentType: string;
-    documentTypeConfidence: number;
-    fields: Record<string, { value: string | number | null; confidence: number }>;
-    extra_fields?: Record<string, { value: string | number | null; confidence: number }>;
-    records?: Array<Record<string, { value: string | number | null; confidence: number }>>;
-  };
+  const raw = toolBlock.input as RawToolOutput;
 
   generation?.end({
     output: raw,
@@ -308,11 +314,21 @@ async function extractSingleChunk(
     delete raw.extra_fields;
   }
 
+  const secondaryTableNames = getSecondaryTableNames(skill);
+  const targetTables: Array<{ table: string; records: Array<Record<string, ExtractedField>> }> = [];
+  for (const tableName of secondaryTableNames) {
+    const tableData = raw[tableName];
+    if (Array.isArray(tableData) && tableData.length > 0) {
+      targetTables.push({ table: tableName, records: tableData as Array<Record<string, ExtractedField>> });
+    }
+  }
+
   const extraction: ExtractionResult = {
     documentType: raw.documentType,
     documentTypeConfidence: raw.documentTypeConfidence,
     fields: raw.fields,
     records: raw.records,
+    targetTables: targetTables.length > 0 ? targetTables : undefined,
     skillId: skill.skillId,
     skillVersion: skill.version,
     classifierConfidence,
@@ -342,6 +358,20 @@ async function extractSingleChunk(
  * field conflicts, records concatenate).
  */
 const VISION_PARALLEL_CHUNKS = 3;
+
+function getSecondaryTableNames(skill: DocumentSkill): string[] {
+  if (!skill.multiRecordConfig?.secondaryTables) return [];
+  return skill.multiRecordConfig.secondaryTables.map(st => st.table);
+}
+
+type RawToolOutput = {
+  documentType: string;
+  documentTypeConfidence: number;
+  fields: Record<string, { value: string | number | null; confidence: number }>;
+  extra_fields?: Record<string, { value: string | number | null; confidence: number }>;
+  records?: Array<Record<string, { value: string | number | null; confidence: number }>>;
+  [key: string]: unknown;
+};
 
 async function extractWithVisionChunked(
   rawBuffer: Buffer,
@@ -389,6 +419,7 @@ async function extractWithVisionChunked(
   const mergedFields: Record<string, ExtractedField> = {};
   const mergedDiscovered: Record<string, unknown> = {};
   const allRecords: Array<Record<string, ExtractedField>> = [];
+  const mergedTargetTables: Map<string, Array<Record<string, ExtractedField>>> = new Map();
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
@@ -430,6 +461,13 @@ async function extractWithVisionChunked(
         if (chunkResult.extraction.records) {
           allRecords.push(...chunkResult.extraction.records);
         }
+        if (chunkResult.extraction.targetTables) {
+          for (const tt of chunkResult.extraction.targetTables) {
+            const existing = mergedTargetTables.get(tt.table) ?? [];
+            existing.push(...tt.records);
+            mergedTargetTables.set(tt.table, existing);
+          }
+        }
         totalInputTokens += chunkResult.metadata.inputTokens;
         totalOutputTokens += chunkResult.metadata.outputTokens;
       } else {
@@ -442,11 +480,14 @@ async function extractWithVisionChunked(
 
   const elapsed = Date.now() - t0;
 
+  const mergedTargetTablesArray = Array.from(mergedTargetTables.entries()).map(([table, records]) => ({ table, records }));
+
   const extraction: ExtractionResult = {
     documentType: skill.skillId,
     documentTypeConfidence: classifierConfidence,
     fields: mergedFields,
     records: allRecords.length > 0 ? allRecords : undefined,
+    targetTables: mergedTargetTablesArray.length > 0 ? mergedTargetTablesArray : undefined,
     skillId: skill.skillId,
     skillVersion: skill.version,
     classifierConfidence,
@@ -465,7 +506,7 @@ async function extractWithVisionChunked(
     metadata: { totalInputTokens, totalOutputTokens, elapsedMs: elapsed, chunkCount: chunks.length },
   });
 
-  console.log(`[vision] Chunked extraction complete: ${Object.keys(mergedFields).length} fields, ${allRecords.length} records, ${chunks.length} chunks, ${elapsed}ms`);
+  console.log(`[vision] Chunked extraction complete: ${Object.keys(mergedFields).length} fields, ${allRecords.length} records, ${mergedTargetTablesArray.length} secondary tables, ${chunks.length} chunks, ${elapsed}ms`);
 
   return {
     extraction,
