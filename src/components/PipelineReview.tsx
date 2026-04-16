@@ -14,9 +14,10 @@ import { parseJobCostReport, ParsedLineItem } from '@/lib/job-cost-parser';
 const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false });
 const ReconciliationPanel = dynamic(() => import('./ReconciliationPanel'), { ssr: false });
 const ProjectProfilePanel = dynamic(() => import('./ProjectProfilePanel'), { ssr: false });
+const JcrAnalysisPanel = dynamic(() => import('./JcrAnalysisPanel'), { ssr: false });
 
 type ViewMode = 'list' | 'review';
-type ListView = 'recent' | 'categories' | 'drive' | 'coverage' | 'reconciliation' | 'profile';
+type ListView = 'recent' | 'categories' | 'drive' | 'coverage' | 'reconciliation' | 'profile' | 'jcr_analysis';
 
 interface CategoryInfo {
   id: string;
@@ -476,7 +477,7 @@ export default function PipelineReview() {
 
   // Fall back to 'recent' if on a project-scoped tab and project is deselected
   useEffect(() => {
-    if (!globalProjectId && (listView === 'reconciliation' || listView === 'profile')) {
+    if (!globalProjectId && (listView === 'reconciliation' || listView === 'profile' || listView === 'jcr_analysis')) {
       setListView('recent');
     }
   }, [globalProjectId, listView]);
@@ -2342,6 +2343,8 @@ export default function PipelineReview() {
           <ReconciliationPanel projectId={globalProjectId} />
         ) : listView === 'profile' ? (
           <ProjectProfilePanel projectId={globalProjectId} />
+        ) : listView === 'jcr_analysis' ? (
+          <JcrAnalysisPanel projectId={globalProjectId} />
         ) : listView === 'drive' ? (
           selectedDrivePath ? (
             <div>
@@ -2437,7 +2440,8 @@ export default function PipelineReview() {
         (listView === 'drive' && !selectedDrivePath) ||
         listView === 'coverage' ||
         listView === 'reconciliation' ||
-        listView === 'profile'
+        listView === 'profile' ||
+        listView === 'jcr_analysis'
       ) && (
         <PaginationControls
           pagination={pagination}
@@ -2549,6 +2553,7 @@ function ViewToggle({ value, onChange, projectId, projectOptions, onProjectChang
   const projectOptions_: { key: ListView; label: string }[] = [
     { key: 'reconciliation', label: 'Reconciliation' },
     { key: 'profile', label: 'Profile' },
+    { key: 'jcr_analysis', label: 'JCR Analysis' },
   ];
 
   return (

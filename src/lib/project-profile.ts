@@ -49,6 +49,41 @@ export interface ProjectProfile {
   missingCostCodes: number;
   topSubs: Array<{ name: string; bidAmount: number; coCount: number }>;
   subCoRate: number | null;
+  // Enriched KPIs from jcr_export
+  netProfit: number | null;
+  grossMarginPct: number | null;
+  directCostTotal: number | null;
+  laborCost: number | null;
+  materialCost: number | null;
+  overheadCost: number | null;
+  burdenCost: number | null;
+  subcontractCost: number | null;
+  otherCost: number | null;
+  revenuePerUnit: number | null;
+  profitPerUnit: number | null;
+  costPerUnit: number | null;
+  laborPerUnit: number | null;
+  materialPerUnit: number | null;
+  hoursPerUnit: number | null;
+  hoursPerFixture: number | null;
+  blendedGrossWage: number | null;
+  fullyLoadedWage: number | null;
+  burdenMultiplier: number | null;
+  totalWorkers: number | null;
+  unitCount: number | null;
+  fixtureCount: number | null;
+  durationMonths: number | null;
+  revenuePerHour: number | null;
+  profitPerHour: number | null;
+  unitsPerMonth: number | null;
+  vendorCount: number | null;
+  apTotal: number | null;
+  laborMaterialRatio: number | null;
+  laborPctOfRevenue: number | null;
+  materialPctOfRevenue: number | null;
+  totalLaborHours: number | null;
+  totalOtHours: number | null;
+  otRatio: number | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -343,6 +378,34 @@ export async function materializeProjectProfile(
 
   // 8. Sub/vendor KPIs
   const subDocs = docs.filter(d => d.skillId === 'sub_bid');
+
+  // 8b. JCR Export enrichment — read canonical KPIs from jcr_export
+  type JcrRow = { canonical_name: string; value_number: number | null; value_text: string | null };
+  const { data: jcrExportRows } = await sb
+    .from('jcr_export')
+    .select('canonical_name, value_number, value_text')
+    .eq('project_id', projectId)
+    .in('canonical_name', [
+      'net_profit', 'gross_margin_pct', 'direct_cost_total',
+      'labor_cost', 'material_cost', 'overhead_cost', 'burden_cost',
+      'subcontract_cost', 'other_cost',
+      'revenue_per_unit', 'profit_per_unit', 'cost_per_unit',
+      'labor_per_unit', 'material_per_unit',
+      'hours_per_unit', 'hours_per_fixture',
+      'blended_gross_wage', 'fully_loaded_wage', 'burden_multiplier',
+      'unit_count', 'fixture_count', 'duration_months',
+      'revenue_per_hour', 'kpi_profit_per_hour',
+      'units_per_month', 'vendor_count', 'ap_total',
+      'labor_material_ratio', 'labor_pct_of_revenue', 'material_pct_of_revenue',
+      'crew_total_hours', 'crew_total_ot_hours', 'crew_ot_ratio',
+      'total_labor_hours', 'source_pr', 'source_ap',
+    ]);
+
+  const jcrMap = new Map<string, JcrRow>();
+  for (const r of (jcrExportRows || []) as JcrRow[]) {
+    jcrMap.set(r.canonical_name, r);
+  }
+  const jn = (name: string): number | null => jcrMap.get(name)?.value_number ?? null;
   const topSubs: Array<{ name: string; bidAmount: number; coCount: number }> = [];
   for (const doc of subDocs) {
     const name = String(doc.fields['Subcontractor']?.value || doc.fields['Vendor Name']?.value || 'Unknown');
@@ -395,6 +458,41 @@ export async function materializeProjectProfile(
     missingCostCodes,
     topSubs: topSubs.slice(0, 10),
     subCoRate: subCoRate ? Math.round(subCoRate * 100) / 100 : null,
+    // Enriched from jcr_export
+    netProfit: jn('net_profit'),
+    grossMarginPct: jn('gross_margin_pct'),
+    directCostTotal: jn('direct_cost_total'),
+    laborCost: jn('labor_cost'),
+    materialCost: jn('material_cost'),
+    overheadCost: jn('overhead_cost'),
+    burdenCost: jn('burden_cost'),
+    subcontractCost: jn('subcontract_cost'),
+    otherCost: jn('other_cost'),
+    revenuePerUnit: jn('revenue_per_unit'),
+    profitPerUnit: jn('profit_per_unit'),
+    costPerUnit: jn('cost_per_unit'),
+    laborPerUnit: jn('labor_per_unit'),
+    materialPerUnit: jn('material_per_unit'),
+    hoursPerUnit: jn('hours_per_unit'),
+    hoursPerFixture: jn('hours_per_fixture'),
+    blendedGrossWage: jn('blended_gross_wage'),
+    fullyLoadedWage: jn('fully_loaded_wage'),
+    burdenMultiplier: jn('burden_multiplier'),
+    totalWorkers: null,
+    unitCount: jn('unit_count') ? Math.round(jn('unit_count')!) : null,
+    fixtureCount: jn('fixture_count') ? Math.round(jn('fixture_count')!) : null,
+    durationMonths: jn('duration_months'),
+    revenuePerHour: jn('revenue_per_hour'),
+    profitPerHour: jn('kpi_profit_per_hour'),
+    unitsPerMonth: jn('units_per_month'),
+    vendorCount: jn('vendor_count') ? Math.round(jn('vendor_count')!) : null,
+    apTotal: jn('ap_total') ?? jn('source_ap'),
+    laborMaterialRatio: jn('labor_material_ratio'),
+    laborPctOfRevenue: jn('labor_pct_of_revenue'),
+    materialPctOfRevenue: jn('material_pct_of_revenue'),
+    totalLaborHours: jn('total_labor_hours') ?? jn('crew_total_hours'),
+    totalOtHours: jn('crew_total_ot_hours'),
+    otRatio: jn('crew_ot_ratio'),
   };
 
   // 9. Upsert into project_profiles
@@ -436,6 +534,40 @@ export async function materializeProjectProfile(
       missing_cost_codes: profile.missingCostCodes,
       top_subs: profile.topSubs,
       sub_co_rate: profile.subCoRate,
+      net_profit: profile.netProfit,
+      gross_margin_pct: profile.grossMarginPct,
+      direct_cost_total: profile.directCostTotal,
+      labor_cost: profile.laborCost,
+      material_cost: profile.materialCost,
+      overhead_cost: profile.overheadCost,
+      burden_cost: profile.burdenCost,
+      subcontract_cost: profile.subcontractCost,
+      other_cost: profile.otherCost,
+      revenue_per_unit: profile.revenuePerUnit,
+      profit_per_unit: profile.profitPerUnit,
+      cost_per_unit: profile.costPerUnit,
+      labor_per_unit: profile.laborPerUnit,
+      material_per_unit: profile.materialPerUnit,
+      hours_per_unit: profile.hoursPerUnit,
+      hours_per_fixture: profile.hoursPerFixture,
+      blended_gross_wage: profile.blendedGrossWage,
+      fully_loaded_wage: profile.fullyLoadedWage,
+      burden_multiplier: profile.burdenMultiplier,
+      total_workers: profile.totalWorkers,
+      unit_count: profile.unitCount,
+      fixture_count: profile.fixtureCount,
+      duration_months: profile.durationMonths,
+      revenue_per_hour: profile.revenuePerHour,
+      profit_per_hour: profile.profitPerHour,
+      units_per_month: profile.unitsPerMonth,
+      vendor_count: profile.vendorCount,
+      ap_total: profile.apTotal,
+      labor_material_ratio: profile.laborMaterialRatio,
+      labor_pct_of_revenue: profile.laborPctOfRevenue,
+      material_pct_of_revenue: profile.materialPctOfRevenue,
+      total_labor_hours: profile.totalLaborHours,
+      total_ot_hours: profile.totalOtHours,
+      ot_ratio: profile.otRatio,
     }, {
       onConflict: 'org_id,project_id,snapshot_date',
     });

@@ -7,6 +7,7 @@ import { parseFileBuffer, extractTextWithClaude, extractTextFromLargePdf, CLAUDE
 import { ValidationFlag, ExtractionResult, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
 import { ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
+import { runJcrModel } from '@/lib/jcr-model';
 import { getLangfuse } from '@/lib/langfuse';
 import { extractText as pdfExtractText } from 'unpdf';
 import { countPdfPagesSync } from 'pdf-pages-count';
@@ -758,6 +759,19 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
     console.error(`[process] Failed to update pipeline record ${recordId}:`, err);
   }
   timing.db_final_update = Date.now() - tStep;
+
+  // Run JCR Model Engine if this is a job cost report with records
+  if (extraction.skillId === JCR_SKILL_ID && extraction.records?.length) {
+    try {
+      const jcrT = Date.now();
+      const jcrResult = await runJcrModel(recordId, projectId || '', orgId, extraction as never);
+      timing.jcr_model = Date.now() - jcrT;
+      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} elapsed=${timing.jcr_model}ms`);
+    } catch (err) {
+      console.warn(`[process] JCR model failed (non-fatal):`, err);
+    }
+  }
+
   timing.total = Date.now() - t0;
 
   console.log(`[process] DONE record=${recordId} file="${fileName}" status=${finalStatus} — ` +

@@ -35,7 +35,8 @@ export interface ChatTool {
     | 'context_retrieval'
     | 'field_catalog'
     | 'calc_function'
-    | 'reconciliation_check';
+    | 'reconciliation_check'
+    | 'jcr_analysis';
   implementation_config: Record<string, unknown>;
   sample_prompts: string[];
   is_active: boolean;
@@ -926,6 +927,51 @@ async function executeComposite(
   return { result: currentInput };
 }
 
+/* ── JCR Analysis ──────────────────────────────────────────── */
+
+async function executeJcrAnalysis(
+  _config: Record<string, unknown>,
+  input: Record<string, unknown>,
+  ctx: ToolExecContext,
+): Promise<ToolExecResult> {
+  const sb = getSupabase();
+  const projectId = (input.projectId || ctx.projectId) as string | undefined;
+  const tab = input.tab as string | undefined;
+  const canonical = input.canonical_name as string | undefined;
+  const section = input.section as string | undefined;
+  const query = input.query as string | undefined;
+
+  if (!projectId) {
+    return { result: null, error: 'projectId is required' };
+  }
+
+  let dbQuery = sb
+    .from('jcr_export')
+    .select('tab, section, record_key, canonical_name, display_name, data_type, status, value_text, value_number, notes')
+    .eq('project_id', projectId);
+
+  if (tab) dbQuery = dbQuery.eq('tab', tab);
+  if (section) dbQuery = dbQuery.eq('section', section);
+  if (canonical) dbQuery = dbQuery.eq('canonical_name', canonical);
+  if (query) dbQuery = dbQuery.or(`canonical_name.ilike.%${query}%,display_name.ilike.%${query}%,value_text.ilike.%${query}%`);
+
+  const { data, error } = await dbQuery.order('tab').order('section').limit(200);
+  if (error) return { result: null, error: error.message };
+
+  const summary: Record<string, number> = {};
+  for (const row of data || []) {
+    summary[row.tab] = (summary[row.tab] || 0) + 1;
+  }
+
+  return {
+    result: {
+      rows: data || [],
+      count: data?.length || 0,
+      tabs: summary,
+    },
+  };
+}
+
 /* ── Main dispatcher ─────────────────────────────────────────── */
 
 async function executeTool(
@@ -945,6 +991,7 @@ async function executeTool(
     case 'context_retrieval': return executeContextRetrieval(config, input, ctx);
     case 'calc_function': return executeCalcFunction(config, input, ctx);
     case 'reconciliation_check': return executeReconciliationCheck(config, input, ctx);
+    case 'jcr_analysis': return executeJcrAnalysis(config, input, ctx);
     case 'api_call': return executeApiCall(config, input, ctx);
     case 'composite': return executeComposite(config, input, ctx);
     default: return { result: null, error: `Unknown implementation type: ${type}` };
