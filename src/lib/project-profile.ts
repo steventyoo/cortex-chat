@@ -415,6 +415,8 @@ export async function materializeProjectProfile(
       'units_per_month', 'vendor_count', 'ap_total',
       'labor_material_ratio', 'labor_pct_of_revenue', 'material_pct_of_revenue',
       'crew_total_hours', 'crew_total_ot_hours', 'crew_ot_ratio',
+      'crew_total_hours_pr', 'crew_total_ot_hours_pr', 'crew_ot_ratio_pr',
+      'blended_gross_wage_pr', 'total_workers',
       'total_labor_hours', 'source_pr', 'source_ap',
     ]);
 
@@ -492,10 +494,10 @@ export async function materializeProjectProfile(
     materialPerUnit: jn('material_per_unit'),
     hoursPerUnit: jn('hours_per_unit'),
     hoursPerFixture: jn('hours_per_fixture'),
-    blendedGrossWage: jn('blended_gross_wage'),
+    blendedGrossWage: jn('blended_gross_wage_pr') ?? jn('blended_gross_wage'),
     fullyLoadedWage: jn('fully_loaded_wage'),
     burdenMultiplier: jn('burden_multiplier'),
-    totalWorkers: null,
+    totalWorkers: jn('total_workers') ? Math.round(jn('total_workers')!) : null,
     unitCount: jn('unit_count') ? Math.round(jn('unit_count')!) : null,
     fixtureCount: jn('fixture_count') ? Math.round(jn('fixture_count')!) : null,
     durationMonths: jn('duration_months'),
@@ -507,9 +509,9 @@ export async function materializeProjectProfile(
     laborMaterialRatio: jn('labor_material_ratio'),
     laborPctOfRevenue: jn('labor_pct_of_revenue'),
     materialPctOfRevenue: jn('material_pct_of_revenue'),
-    totalLaborHours: jn('total_labor_hours') ?? jn('crew_total_hours'),
-    totalOtHours: jn('crew_total_ot_hours'),
-    otRatio: jn('crew_ot_ratio'),
+    totalLaborHours: jn('crew_total_hours_pr') ?? jn('total_labor_hours') ?? jn('crew_total_hours'),
+    totalOtHours: jn('crew_total_ot_hours_pr') ?? jn('crew_total_ot_hours'),
+    otRatio: jn('crew_ot_ratio_pr') ?? jn('crew_ot_ratio'),
   };
 
   // 9. Upsert into project_profiles

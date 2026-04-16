@@ -956,12 +956,23 @@ function buildCrewTiers(workers: WorkerRecord[], meta: ProjectMeta): ExportRow[]
   const totalWorkers = workers.length;
   rows.push(row(t, 'Rate Tier', 'tier_total', 'total_crew_workers', 'tier_total_crew_workers', 'TOTAL CREW', 'integer', 'Derived', totalWorkers, null));
 
-  // Blended summary metrics
   const totalHrs = workers.reduce((s, w) => s + w.totalHours, 0);
+  const totalReg = workers.reduce((s, w) => s + w.regHours, 0);
+  const totalOt = workers.reduce((s, w) => s + w.totalHours - w.regHours, 0);
   const totalWages = workers.reduce((s, w) => s + w.wages, 0);
   const blendedGross = totalHrs > 0 ? totalWages / totalHrs : 0;
 
   rows.push(row(t, 'Blended Labor Metrics', 'blended', 'gross_wages_rate', 'tier_gross_wages_rate', 'Gross Wages $/hr', 'currency', 'Derived', rd(blendedGross), null));
+
+  // Emit standard summary canonical names so project-profile can read them.
+  // These override the cost-code-derived zeros from buildCrewAnalytics when
+  // accurate payroll transaction data is available.
+  rows.push(row(t, 'Summary', 'crew_summary_pr', 'total_labor_hours_pr', 'crew_total_hours_pr', 'Total Labor Hours (PR)', 'number', 'Derived', rd(totalHrs), null));
+  rows.push(row(t, 'Summary', 'crew_summary_pr', 'total_reg_hours_pr', 'crew_total_reg_hours_pr', 'Total Regular Hours (PR)', 'number', 'Derived', rd(totalReg), null));
+  rows.push(row(t, 'Summary', 'crew_summary_pr', 'total_ot_hours_pr', 'crew_total_ot_hours_pr', 'Total OT Hours (PR)', 'number', 'Derived', rd(totalOt), null));
+  rows.push(row(t, 'Summary', 'crew_summary_pr', 'ot_ratio_pr', 'crew_ot_ratio_pr', 'OT Ratio (PR)', 'percent', 'Derived', totalHrs > 0 ? rd((totalOt / totalHrs) * 100) : 0, null));
+  rows.push(row(t, 'Summary', 'crew_summary_pr', 'blended_gross_wage_pr', 'blended_gross_wage_pr', 'Blended Gross Wage (PR)', 'currency', 'Derived', rd(blendedGross), null));
+  rows.push(row(t, 'Summary', 'crew_summary_pr', 'total_workers', 'total_workers', 'Total Workers', 'integer', 'Derived', totalWorkers, null));
 
   if (meta.unitCount && totalHrs > 0) {
     rows.push(row(t, 'Blended Labor Metrics', 'blended', 'hours_per_unit', 'tier_hours_per_unit', 'Hours per Unit', 'number', 'Derived', rd(totalHrs / meta.unitCount), null));
