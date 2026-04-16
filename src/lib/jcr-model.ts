@@ -863,36 +863,66 @@ function buildWorkerCrewAnalytics(workers: WorkerRecord[]): ExportRow[] {
 }
 
 function buildWorkerCrewAnalyticsFromSecondary(workerRows: RecordRow[]): { rows: ExportRow[]; workers: WorkerRecord[] } {
-  const exportRows: ExportRow[] = [];
-  const workers: WorkerRecord[] = [];
-  const t = 'Crew Analytics';
+  const workerMap = new Map<string, { name: string; regHrs: number; otHrs: number; dtHrs: number; wages: number; codes: Set<string> }>();
 
   for (const rec of workerRows) {
     const name = str(fv(rec, 'Worker Name', 'Employee Name', 'Name'));
     const id = str(fv(rec, 'Worker ID', 'Employee ID', 'ID')) || name.replace(/\s/g, '').slice(0, 4).toUpperCase();
-    const regHours = num(fv(rec, 'Regular Hours', 'Reg Hours', 'REG HRS'));
-    const otHours = num(fv(rec, 'OT Hours', 'Overtime Hours', 'OT HRS'));
-    const totalHours = regHours + otHours || num(fv(rec, 'Total Hours', 'TOTAL HRS'));
-    const wages = num(fv(rec, 'Wages', 'Total Wages', 'WAGES'));
-    const rate = totalHours > 0 ? wages / totalHours : num(fv(rec, 'Rate', 'Hourly Rate', '$/HR'));
-    const codes = num(fv(rec, 'Cost Codes Worked', 'Codes', 'CODES'));
-    const tier = classifyTier(rate);
+    if (!name && !id) continue;
 
-    const k = `worker=${id}`;
-    const s = 'Worker Detail';
-    exportRows.push(row(t, s, k, 'worker_reg_hrs', `worker_reg_hrs`, `${name} — REG HRS`, 'number', 'Extracted', rd(regHours), null));
-    exportRows.push(row(t, s, k, 'worker_ot_hrs', `worker_ot_hrs`, `${name} — OT HRS`, 'number', 'Extracted', rd(otHours), null));
-    exportRows.push(row(t, s, k, 'worker_total_hrs', `worker_total_hrs`, `${name} — TOTAL HRS`, 'number', 'Derived', rd(totalHours), null));
-    exportRows.push(row(t, s, k, 'worker_ot_pct', `worker_ot`, `${name} — OT %`, 'percent', 'Derived', totalHours > 0 ? rd((otHours / totalHours) * 100) : 0, null));
-    exportRows.push(row(t, s, k, 'worker_wages', `worker_wages`, `${name} — WAGES ($)`, 'currency', 'Extracted', rd(wages), null));
-    exportRows.push(row(t, s, k, 'worker_rate', `worker__per_hr`, `${name} — $/HR`, 'currency', 'Derived', rd(rate), null));
-    exportRows.push(row(t, s, k, 'worker_codes', `worker_codes`, `${name} — CODES`, 'integer', 'Derived', codes || 0, null));
-    exportRows.push(row(t, s, k, 'worker_tier', `worker_tier`, `${name} — TIER`, 'string', 'Derived', null, tier));
+    const key = id || name;
+    if (!workerMap.has(key)) {
+      workerMap.set(key, { name, regHrs: 0, otHrs: 0, dtHrs: 0, wages: 0, codes: new Set() });
+    }
+    const w = workerMap.get(key)!;
 
-    workers.push({ name, id, regHours, otHours, totalHours, wages, rate, codesWorked: codes || 0, tier });
+    const hours = num(fv(rec, 'Hours', 'Total Hours', 'Hrs'));
+    const amount = num(fv(rec, 'Amount', 'Wages', 'Pay'));
+    const hoursType = str(fv(rec, 'Hours Type', 'Type', 'Pay Type')).toLowerCase();
+    const costCode = str(fv(rec, 'Cost Code', 'Cost_Code', 'Code'));
+
+    if (hoursType.includes('over')) {
+      w.otHrs += hours;
+    } else if (hoursType.includes('double')) {
+      w.dtHrs += hours;
+    } else {
+      w.regHrs += hours;
+    }
+    w.wages += amount;
+    if (costCode) w.codes.add(costCode);
   }
 
-  workers.sort((a, b) => b.totalHours - a.totalHours);
+  const workers: WorkerRecord[] = Array.from(workerMap.entries()).map(([id, w]) => {
+    const totalHours = w.regHrs + w.otHrs + w.dtHrs;
+    const rate = totalHours > 0 ? w.wages / totalHours : 0;
+    return {
+      name: w.name,
+      id,
+      regHours: w.regHrs,
+      otHours: w.otHrs + w.dtHrs,
+      totalHours,
+      wages: w.wages,
+      rate,
+      codesWorked: w.codes.size,
+      tier: classifyTier(rate),
+    };
+  }).sort((a, b) => b.totalHours - a.totalHours);
+
+  const exportRows: ExportRow[] = [];
+  const t = 'Crew Analytics';
+  for (const w of workers) {
+    const k = `worker=${w.id}`;
+    const s = 'Worker Detail';
+    exportRows.push(row(t, s, k, 'worker_reg_hrs', `worker_reg_hrs`, `${w.name} — REG HRS`, 'number', 'Derived', rd(w.regHours), null));
+    exportRows.push(row(t, s, k, 'worker_ot_hrs', `worker_ot_hrs`, `${w.name} — OT HRS`, 'number', 'Derived', rd(w.otHours), null));
+    exportRows.push(row(t, s, k, 'worker_total_hrs', `worker_total_hrs`, `${w.name} — TOTAL HRS`, 'number', 'Derived', rd(w.totalHours), null));
+    exportRows.push(row(t, s, k, 'worker_ot_pct', `worker_ot`, `${w.name} — OT %`, 'percent', 'Derived', w.totalHours > 0 ? rd((w.otHours / w.totalHours) * 100) : 0, null));
+    exportRows.push(row(t, s, k, 'worker_wages', `worker_wages`, `${w.name} — WAGES ($)`, 'currency', 'Derived', rd(w.wages), null));
+    exportRows.push(row(t, s, k, 'worker_rate', `worker__per_hr`, `${w.name} — $/HR`, 'currency', 'Derived', rd(w.rate), null));
+    exportRows.push(row(t, s, k, 'worker_codes', `worker_codes`, `${w.name} — CODES`, 'integer', 'Derived', w.codesWorked, null));
+    exportRows.push(row(t, s, k, 'worker_tier', `worker_tier`, `${w.name} — TIER`, 'string', 'Derived', null, w.tier));
+  }
+
   return { rows: exportRows, workers };
 }
 

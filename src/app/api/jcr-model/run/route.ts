@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     }
 
     const workerRecords = ed.targetTables
-      ?.find(t => t.table === 'worker_transactions')?.records;
+      ?.find(t => t.table === 'payroll_transactions' || t.table === 'worker_transactions')?.records;
 
     const result = await runJcrModel(
       doc.id,
