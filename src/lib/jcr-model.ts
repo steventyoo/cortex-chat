@@ -38,6 +38,33 @@ interface FieldVal {
 type RecordRow = Record<string, FieldVal>;
 type FieldsMap = Record<string, FieldVal>;
 
+export interface WorkerRecord {
+  name: string;
+  id: string;
+  regHours: number;
+  otHours: number;
+  totalHours: number;
+  wages: number;
+  rate: number;
+  codesWorked: number;
+  tier: string;
+}
+
+const TIER_BANDS: Array<{ tier: string; minRate: number }> = [
+  { tier: 'Superintendent', minRate: 33 },
+  { tier: 'Lead Journeyman', minRate: 28 },
+  { tier: 'Journeyman', minRate: 20 },
+  { tier: 'Apprentice', minRate: 15 },
+  { tier: 'Helper', minRate: 0 },
+];
+
+function classifyTier(rate: number): string {
+  for (const band of TIER_BANDS) {
+    if (rate >= band.minRate) return band.tier;
+  }
+  return 'Helper';
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 
 function num(f: FieldVal | undefined): number {
@@ -465,6 +492,12 @@ function buildBenchmarkKPIs(records: RecordRow[], fields: FieldsMap, meta: Proje
   const totalHours = records.filter(r => cat(r) === 'labor')
     .reduce((s, r) => s + parseHours(fv(r, 'Quantity (labor hours or units)')).total, 0);
   const netProfit = revenue - totalJtd;
+  const matRecords = records.filter(r => cat(r) === 'material');
+
+  // Profile KPIs
+  if (meta.fixtureCount && meta.unitCount) {
+    rows.push(row(t, 'Profile', k, 'fixtures_per_unit', 'fixtures_per_unit', 'Fixtures per Unit', 'number', 'Derived', rd(meta.fixtureCount / meta.unitCount), null));
+  }
 
   // Financial KPIs
   rows.push(row(t, 'Financial', k, 'gross_margin_pct', 'kpi_gross_margin_pct', 'Gross Margin %', 'percent', 'Derived', revenue > 0 ? rd((netProfit / revenue) * 100) : null, null));
@@ -477,8 +510,20 @@ function buildBenchmarkKPIs(records: RecordRow[], fields: FieldsMap, meta: Proje
   if (meta.unitCount) {
     rows.push(row(t, 'Per Unit', k, 'cost_per_unit', 'cost_per_unit', 'Cost/Unit', 'currency', 'Derived', rd(totalJtd / meta.unitCount), null));
     rows.push(row(t, 'Per Unit', k, 'profit_per_unit', 'profit_per_unit', 'Profit/Unit', 'currency', 'Derived', rd(netProfit / meta.unitCount), null));
+    rows.push(row(t, 'Per Unit', k, 'revenue_per_unit', 'revenue_per_unit', 'Revenue/Unit', 'currency', 'Derived', rd(revenue / meta.unitCount), null));
     rows.push(row(t, 'Per Unit', k, 'labor_per_unit', 'kpi_labor_per_unit', 'Labor/Unit', 'currency', 'Derived', rd(laborCost / meta.unitCount), null));
     rows.push(row(t, 'Per Unit', k, 'material_per_unit', 'kpi_material_per_unit', 'Material/Unit', 'currency', 'Derived', rd(materialCost / meta.unitCount), null));
+  }
+
+  // Per-fixture KPIs
+  if (meta.fixtureCount) {
+    rows.push(row(t, 'Per Fixture', k, 'profit_per_fixture', 'profit_per_fixture', 'Profit/Fixture', 'currency', 'Derived', rd(netProfit / meta.fixtureCount), null));
+    rows.push(row(t, 'Per Fixture', k, 'revenue_per_fixture', 'revenue_per_fixture', 'Revenue/Fixture', 'currency', 'Derived', rd(revenue / meta.fixtureCount), null));
+    rows.push(row(t, 'Per Fixture', k, 'cost_per_fixture', 'cost_per_fixture', 'Cost/Fixture', 'currency', 'Derived', rd(totalJtd / meta.fixtureCount), null));
+    if (totalHours > 0) {
+      rows.push(row(t, 'Per Fixture', k, 'labor_cost_per_fixture', 'labor_cost_per_fixture', 'Labor $/Fixture', 'currency', 'Derived', rd(laborCost / meta.fixtureCount), null));
+      rows.push(row(t, 'Per Fixture', k, 'material_cost_per_fixture', 'material_cost_per_fixture', 'Material $/Fixture', 'currency', 'Derived', rd(materialCost / meta.fixtureCount), null));
+    }
   }
 
   // Per-hour KPIs
@@ -486,6 +531,145 @@ function buildBenchmarkKPIs(records: RecordRow[], fields: FieldsMap, meta: Proje
     rows.push(row(t, 'Per Hour', k, 'revenue_per_hour', 'kpi_revenue_per_hour', 'Revenue/Hour', 'currency', 'Derived', rd(revenue / totalHours), null));
     rows.push(row(t, 'Per Hour', k, 'profit_per_hour', 'kpi_profit_per_hour', 'Profit/Hour', 'currency', 'Derived', rd(netProfit / totalHours), null));
     rows.push(row(t, 'Per Hour', k, 'cost_per_hour', 'kpi_cost_per_hour', 'Cost/Hour', 'currency', 'Derived', rd(totalJtd / totalHours), null));
+    if (meta.unitCount) {
+      rows.push(row(t, 'Labor', k, 'labor_cost_per_unit', 'labor_cost_per_unit', 'Labor $/Unit', 'currency', 'Derived', rd(laborCost / meta.unitCount), null));
+    }
+    if (meta.fixtureCount) {
+      rows.push(row(t, 'Labor', k, 'labor_cost_per_fixture', 'kpi_labor_cost_per_fixture', 'Labor $/Fixture', 'currency', 'Derived', rd(laborCost / meta.fixtureCount), null));
+    }
+  }
+
+  // Throughput KPIs
+  if (meta.durationMonths) {
+    if (meta.fixtureCount) {
+      rows.push(row(t, 'Throughput', k, 'fixtures_per_month', 'fixtures_per_month', 'Fixtures/Month', 'number', 'Derived', rd(meta.fixtureCount / meta.durationMonths), null));
+    }
+    if (totalHours > 0) {
+      rows.push(row(t, 'Throughput', k, 'hours_per_month', 'hours_per_month', 'Hours/Month', 'number', 'Derived', rd(totalHours / meta.durationMonths), null));
+    }
+  }
+
+  // Cost Mix KPIs
+  if (revenue > 0) {
+    rows.push(row(t, 'Cost Mix', k, 'labor_pct_of_revenue', 'kpi_labor_pct_of_revenue', 'Labor as % of Revenue', 'percent', 'Derived', rd((laborCost / revenue) * 100), null));
+    rows.push(row(t, 'Cost Mix', k, 'material_pct_of_revenue', 'kpi_material_pct_of_revenue', 'Material as % of Revenue', 'percent', 'Derived', rd((materialCost / revenue) * 100), null));
+    const glCost = num(fields['source_gl']);
+    if (glCost > 0) {
+      rows.push(row(t, 'Cost Mix', k, 'gl_pct_of_revenue', 'gl_pct_of_revenue', 'GL as % of Revenue', 'percent', 'Derived', rd((glCost / revenue) * 100), null));
+    }
+    if (materialCost > 0) {
+      rows.push(row(t, 'Cost Mix', k, 'labor_to_material_ratio', 'kpi_labor_to_material_ratio', 'Labor : Material Ratio', 'ratio', 'Derived', rd(laborCost / materialCost), null));
+    }
+  }
+
+  // Estimating KPIs
+  const overBudget = workRecords.filter(r => num(fv(r, 'Over/Under Budget — $ (line)')) < 0);
+  const underBudget = workRecords.filter(r => num(fv(r, 'Over/Under Budget — $ (line)')) > 0);
+  rows.push(row(t, 'Estimating', k, 'phases_over_budget', 'phases_over_budget', 'Phases Over Budget', 'integer', 'Derived', overBudget.length, null));
+  rows.push(row(t, 'Estimating', k, 'phases_under_budget', 'phases_under_budget', 'Phases Under Budget', 'integer', 'Derived', underBudget.length, null));
+
+  if (overBudget.length > 0) {
+    const worstOverrun = [...overBudget].sort((a, b) => {
+      const aB = num(fv(a, 'Revised Budget (line)'));
+      const aO = Math.abs(num(fv(a, 'Over/Under Budget — $ (line)')));
+      const bB = num(fv(b, 'Revised Budget (line)'));
+      const bO = Math.abs(num(fv(b, 'Over/Under Budget — $ (line)')));
+      return (bB > 0 ? bO / bB : 0) - (aB > 0 ? aO / aB : 0);
+    })[0];
+    const wB = num(fv(worstOverrun, 'Revised Budget (line)'));
+    const wO = Math.abs(num(fv(worstOverrun, 'Over/Under Budget — $ (line)')));
+    const wPct = wB > 0 ? Math.round((wO / wB) * 100) : 0;
+    const wDesc = str(fv(worstOverrun, 'Line Item Description'));
+    rows.push(row(t, 'Estimating', k, 'largest_overrun', 'largest_overrun', 'Largest Overrun', 'string', 'Derived', null, `+${wPct}% (${wDesc})`));
+  }
+  if (underBudget.length > 0) {
+    const bestSavings = [...underBudget].sort((a, b) => {
+      const aB = num(fv(a, 'Revised Budget (line)'));
+      const aS = num(fv(a, 'Over/Under Budget — $ (line)'));
+      const bB = num(fv(b, 'Revised Budget (line)'));
+      const bS = num(fv(b, 'Over/Under Budget — $ (line)'));
+      return (bB > 0 ? bS / bB : 0) - (aB > 0 ? aS / aB : 0);
+    })[0];
+    const sB = num(fv(bestSavings, 'Revised Budget (line)'));
+    const sS = num(fv(bestSavings, 'Over/Under Budget — $ (line)'));
+    const sPct = sB > 0 ? Math.round((sS / sB) * 100) : 0;
+    const sDesc = str(fv(bestSavings, 'Line Item Description'));
+    rows.push(row(t, 'Estimating', k, 'largest_savings', 'largest_savings', 'Largest Savings', 'string', 'Derived', null, `${sPct}% (${sDesc})`));
+  }
+
+  const totalRevBudget = workRecords.reduce((s, r) => s + num(fv(r, 'Revised Budget (line)')), 0);
+  if (totalRevBudget > 0) {
+    const netVar = ((totalJtd - totalRevBudget) / totalRevBudget) * 100;
+    rows.push(row(t, 'Estimating', k, 'net_variance_pct', 'net_variance_pct', 'Net Variance %', 'percent', 'Derived', rd(netVar), null));
+  }
+
+  // Material benchmark KPIs
+  const totalMatActual = matRecords.reduce((s, r) => s + num(fv(r, 'Job-to-Date Cost (line)')), 0);
+  const totalMatBudget = matRecords.reduce((s, r) => s + num(fv(r, 'Revised Budget (line)')), 0);
+  rows.push(row(t, 'Material', k, 'material_spend_total', 'material_spend_total', 'Total Material Spend', 'currency', 'Derived', rd(totalMatActual), null));
+  rows.push(row(t, 'Material', k, 'material_budget_total', 'material_budget_total', 'Total Material Budget', 'currency', 'Derived', rd(totalMatBudget), null));
+  rows.push(row(t, 'Material', k, 'material_variance_dollars', 'material_variance_dollars', 'Material Variance', 'currency', 'Derived', rd(totalMatBudget - totalMatActual), null));
+  if (totalMatBudget > 0) {
+    rows.push(row(t, 'Material', k, 'material_variance_pct', 'material_variance_pct', 'Material Variance %', 'percent', 'Derived', rd(((totalMatBudget - totalMatActual) / totalMatBudget) * 100), null));
+  }
+  if (meta.unitCount) {
+    rows.push(row(t, 'Material', k, 'material_cost_per_unit', 'material_cost_per_unit', 'Material $/Unit', 'currency', 'Derived', rd(totalMatActual / meta.unitCount), null));
+  }
+  if (meta.fixtureCount) {
+    rows.push(row(t, 'Material', k, 'material_cost_per_fixture', 'kpi_material_cost_per_fixture', 'Material $/Fixture', 'currency', 'Derived', rd(totalMatActual / meta.fixtureCount), null));
+  }
+  if (revenue > 0) {
+    rows.push(row(t, 'Material', k, 'material_pct_of_revenue_actual', 'material_pct_of_revenue_actual', 'Material % of Revenue', 'percent', 'Derived', rd((totalMatActual / revenue) * 100), null));
+  }
+  if (totalJtd > 0) {
+    rows.push(row(t, 'Material', k, 'material_pct_of_direct_cost', 'material_pct_of_direct_cost', 'Material % of Direct Cost', 'percent', 'Derived', rd((totalMatActual / totalJtd) * 100), null));
+  }
+  if (totalMatActual > 0 && laborCost > 0) {
+    rows.push(row(t, 'Material', k, 'labor_to_material_dollar_ratio', 'labor_to_material_dollar_ratio', 'Labor : Material $ Ratio', 'ratio', 'Derived', rd(laborCost / totalMatActual), null));
+  }
+  rows.push(row(t, 'Material', k, 'material_codes_tracked', 'material_codes_tracked', 'Material Codes Tracked', 'integer', 'Derived', matRecords.length, null));
+  const matOver = matRecords.filter(r => num(fv(r, 'Over/Under Budget — $ (line)')) < 0);
+  const matUnder = matRecords.filter(r => num(fv(r, 'Over/Under Budget — $ (line)')) > 0);
+  rows.push(row(t, 'Material', k, 'material_codes_over_budget', 'material_codes_over_budget', 'Material Codes Over Budget', 'integer', 'Derived', matOver.length, null));
+  rows.push(row(t, 'Material', k, 'material_codes_under_budget', 'material_codes_under_budget', 'Material Codes Under Budget', 'integer', 'Derived', matUnder.length, null));
+
+  if (matOver.length > 0) {
+    const worstMat = [...matOver].sort((a, b) => {
+      const aB = num(fv(a, 'Revised Budget (line)'));
+      const aO = Math.abs(num(fv(a, 'Over/Under Budget — $ (line)')));
+      const bB = num(fv(b, 'Revised Budget (line)'));
+      const bO = Math.abs(num(fv(b, 'Over/Under Budget — $ (line)')));
+      return (bB > 0 ? bO / bB : 0) - (aB > 0 ? aO / aB : 0);
+    })[0];
+    const mB = num(fv(worstMat, 'Revised Budget (line)'));
+    const mO = Math.abs(num(fv(worstMat, 'Over/Under Budget — $ (line)')));
+    const mPct = mB > 0 ? Math.round((mO / mB) * 100) : 0;
+    const mDesc = str(fv(worstMat, 'Line Item Description'));
+    rows.push(row(t, 'Material', k, 'largest_material_overrun', 'largest_material_overrun', 'Largest Material Overrun', 'string', 'Derived', null, `+${mPct}% (${mDesc})`));
+  }
+  if (matUnder.length > 0) {
+    const bestMat = [...matUnder].sort((a, b) => {
+      const aB = num(fv(a, 'Revised Budget (line)'));
+      const aS = num(fv(a, 'Over/Under Budget — $ (line)'));
+      const bB = num(fv(b, 'Revised Budget (line)'));
+      const bS = num(fv(b, 'Over/Under Budget — $ (line)'));
+      return (bB > 0 ? bS / bB : 0) - (aB > 0 ? aS / aB : 0);
+    })[0];
+    const mB2 = num(fv(bestMat, 'Revised Budget (line)'));
+    const mS = num(fv(bestMat, 'Over/Under Budget — $ (line)'));
+    const mPct2 = mB2 > 0 ? Math.round((mS / mB2) * 100) : 0;
+    const mDesc2 = str(fv(bestMat, 'Line Item Description'));
+    rows.push(row(t, 'Material', k, 'largest_material_savings', 'largest_material_savings', 'Largest Material Savings', 'string', 'Derived', null, `${mPct2}% (${mDesc2})`));
+  }
+
+  // Sorted material spend for concentration metrics
+  const matBySpend = [...matRecords].map(r => ({
+    actual: num(fv(r, 'Job-to-Date Cost (line)')),
+    desc: str(fv(r, 'Line Item Description')),
+  })).sort((a, b) => b.actual - a.actual);
+  if (matBySpend.length >= 2 && totalMatActual > 0) {
+    const top2 = matBySpend[0].actual + matBySpend[1].actual;
+    rows.push(row(t, 'Material', k, 'top_2_material_concentration', 'top_2_material_concentration', 'Top 2 Codes Concentration', 'percent', 'Derived', rd((top2 / totalMatActual) * 100), null));
   }
 
   // Vendor KPIs
@@ -494,6 +678,9 @@ function buildBenchmarkKPIs(records: RecordRow[], fields: FieldsMap, meta: Proje
   const vendorCount = nonPayrollRecords.length;
   rows.push(row(t, 'Vendor', k, 'vendor_count', 'vendor_count', 'Vendor/Material Codes', 'integer', 'Derived', vendorCount, null));
   rows.push(row(t, 'Vendor', k, 'ap_total', 'ap_total', 'AP Total', 'currency', 'Extracted', apTotal, null));
+  if (vendorCount > 0 && apTotal > 0) {
+    rows.push(row(t, 'Vendor', k, 'avg_material_invoice', 'avg_material_invoice', 'Avg Material Invoice', 'currency', 'Derived', rd(apTotal / vendorCount), null));
+  }
 
   return rows;
 }
@@ -607,14 +794,177 @@ function buildReconciliationTab(records: RecordRow[], fields: FieldsMap): Export
 }
 
 
+// ── Tab: Crew Analytics (per-worker) ─────────────────────────
+
+function parseWorkers(records: RecordRow[]): WorkerRecord[] {
+  const laborRecords = records.filter(r => cat(r) === 'labor');
+  const workerMap = new Map<string, { name: string; regHrs: number; otHrs: number; wages: number; codes: Set<string> }>();
+
+  for (const rec of laborRecords) {
+    const code = cc(rec);
+    const hours = parseHours(fv(rec, 'Quantity (labor hours or units)'));
+    const cost = num(fv(rec, 'Job-to-Date Cost (line)'));
+
+    const workerEntries = str(fv(rec, 'Worker Details')) || str(fv(rec, 'PR Transactions'));
+    if (!workerEntries) continue;
+
+    const lines = workerEntries.split(/[;\n]/).filter(Boolean);
+    for (const line of lines) {
+      const match = line.match(/^(.+?)\s*\|\s*(\w+)\s*\|\s*([\d,.]+)\s*reg\s*\|\s*([\d,.]+)\s*ot\s*\|\s*\$?([\d,.]+)/i);
+      if (!match) continue;
+      const [, name, id, regStr, otStr, wageStr] = match;
+      const key = id.trim();
+      if (!workerMap.has(key)) {
+        workerMap.set(key, { name: name.trim(), regHrs: 0, otHrs: 0, wages: 0, codes: new Set() });
+      }
+      const w = workerMap.get(key)!;
+      w.regHrs += parseFloat(regStr.replace(/,/g, '')) || 0;
+      w.otHrs += parseFloat(otStr.replace(/,/g, '')) || 0;
+      w.wages += parseFloat(wageStr.replace(/,/g, '')) || 0;
+      w.codes.add(code);
+    }
+  }
+
+  return Array.from(workerMap.entries()).map(([id, w]) => {
+    const totalHours = w.regHrs + w.otHrs;
+    const rate = totalHours > 0 ? w.wages / totalHours : 0;
+    return {
+      name: w.name,
+      id,
+      regHours: w.regHrs,
+      otHours: w.otHrs,
+      totalHours,
+      wages: w.wages,
+      rate,
+      codesWorked: w.codes.size,
+      tier: classifyTier(rate),
+    };
+  }).sort((a, b) => b.totalHours - a.totalHours);
+}
+
+function buildWorkerCrewAnalytics(workers: WorkerRecord[]): ExportRow[] {
+  const rows: ExportRow[] = [];
+  const t = 'Crew Analytics';
+
+  for (const w of workers) {
+    const k = `worker=${w.id}`;
+    const s = 'Worker Detail';
+    rows.push(row(t, s, k, 'worker_reg_hrs', `worker_reg_hrs`, `${w.name} — REG HRS`, 'number', 'Extracted', rd(w.regHours), null));
+    rows.push(row(t, s, k, 'worker_ot_hrs', `worker_ot_hrs`, `${w.name} — OT HRS`, 'number', 'Extracted', rd(w.otHours), null));
+    rows.push(row(t, s, k, 'worker_total_hrs', `worker_total_hrs`, `${w.name} — TOTAL HRS`, 'number', 'Derived', rd(w.totalHours), null));
+    rows.push(row(t, s, k, 'worker_ot_pct', `worker_ot`, `${w.name} — OT %`, 'percent', 'Derived', w.totalHours > 0 ? rd((w.otHours / w.totalHours) * 100) : 0, null));
+    rows.push(row(t, s, k, 'worker_wages', `worker_wages`, `${w.name} — WAGES ($)`, 'currency', 'Extracted', rd(w.wages), null));
+    rows.push(row(t, s, k, 'worker_rate', `worker__per_hr`, `${w.name} — $/HR`, 'currency', 'Derived', rd(w.rate), null));
+    rows.push(row(t, s, k, 'worker_codes', `worker_codes`, `${w.name} — CODES`, 'integer', 'Derived', w.codesWorked, null));
+    rows.push(row(t, s, k, 'worker_tier', `worker_tier`, `${w.name} — TIER`, 'string', 'Derived', null, w.tier));
+  }
+
+  return rows;
+}
+
+function buildWorkerCrewAnalyticsFromSecondary(workerRows: RecordRow[]): { rows: ExportRow[]; workers: WorkerRecord[] } {
+  const exportRows: ExportRow[] = [];
+  const workers: WorkerRecord[] = [];
+  const t = 'Crew Analytics';
+
+  for (const rec of workerRows) {
+    const name = str(fv(rec, 'Worker Name', 'Employee Name', 'Name'));
+    const id = str(fv(rec, 'Worker ID', 'Employee ID', 'ID')) || name.replace(/\s/g, '').slice(0, 4).toUpperCase();
+    const regHours = num(fv(rec, 'Regular Hours', 'Reg Hours', 'REG HRS'));
+    const otHours = num(fv(rec, 'OT Hours', 'Overtime Hours', 'OT HRS'));
+    const totalHours = regHours + otHours || num(fv(rec, 'Total Hours', 'TOTAL HRS'));
+    const wages = num(fv(rec, 'Wages', 'Total Wages', 'WAGES'));
+    const rate = totalHours > 0 ? wages / totalHours : num(fv(rec, 'Rate', 'Hourly Rate', '$/HR'));
+    const codes = num(fv(rec, 'Cost Codes Worked', 'Codes', 'CODES'));
+    const tier = classifyTier(rate);
+
+    const k = `worker=${id}`;
+    const s = 'Worker Detail';
+    exportRows.push(row(t, s, k, 'worker_reg_hrs', `worker_reg_hrs`, `${name} — REG HRS`, 'number', 'Extracted', rd(regHours), null));
+    exportRows.push(row(t, s, k, 'worker_ot_hrs', `worker_ot_hrs`, `${name} — OT HRS`, 'number', 'Extracted', rd(otHours), null));
+    exportRows.push(row(t, s, k, 'worker_total_hrs', `worker_total_hrs`, `${name} — TOTAL HRS`, 'number', 'Derived', rd(totalHours), null));
+    exportRows.push(row(t, s, k, 'worker_ot_pct', `worker_ot`, `${name} — OT %`, 'percent', 'Derived', totalHours > 0 ? rd((otHours / totalHours) * 100) : 0, null));
+    exportRows.push(row(t, s, k, 'worker_wages', `worker_wages`, `${name} — WAGES ($)`, 'currency', 'Extracted', rd(wages), null));
+    exportRows.push(row(t, s, k, 'worker_rate', `worker__per_hr`, `${name} — $/HR`, 'currency', 'Derived', rd(rate), null));
+    exportRows.push(row(t, s, k, 'worker_codes', `worker_codes`, `${name} — CODES`, 'integer', 'Derived', codes || 0, null));
+    exportRows.push(row(t, s, k, 'worker_tier', `worker_tier`, `${name} — TIER`, 'string', 'Derived', null, tier));
+
+    workers.push({ name, id, regHours, otHours, totalHours, wages, rate, codesWorked: codes || 0, tier });
+  }
+
+  workers.sort((a, b) => b.totalHours - a.totalHours);
+  return { rows: exportRows, workers };
+}
+
+
+// ── Tab: Crew & Labor (tier breakdown) ───────────────────────
+
+function buildCrewTiers(workers: WorkerRecord[], meta: ProjectMeta): ExportRow[] {
+  const rows: ExportRow[] = [];
+  const t = 'Crew & Labor';
+
+  const tierGroups = new Map<string, WorkerRecord[]>();
+  for (const w of workers) {
+    if (!tierGroups.has(w.tier)) tierGroups.set(w.tier, []);
+    tierGroups.get(w.tier)!.push(w);
+  }
+
+  for (const band of TIER_BANDS) {
+    const group = tierGroups.get(band.tier) || [];
+    if (group.length === 0) continue;
+    const rates = group.map(w => w.rate).sort((a, b) => a - b);
+    const minR = rates[0];
+    const maxR = rates[rates.length - 1];
+    const slug = band.tier.toLowerCase().replace(/\s+/g, '_');
+    const s = 'Rate Tier';
+    const k = `tier_${slug}`;
+
+    rows.push(row(t, s, k, 'rate_range', `tier_${slug}_rate_range`, `${band.tier} Rate Range`, 'string', 'Derived', null, `$${Math.round(minR)}–$${Math.round(maxR)}/hr`));
+    rows.push(row(t, s, k, 'workers', `tier_${slug}_workers`, `${band.tier} Worker Count`, 'integer', 'Derived', group.length, null));
+  }
+
+  const totalWorkers = workers.length;
+  rows.push(row(t, 'Rate Tier', 'tier_total', 'total_crew_workers', 'tier_total_crew_workers', 'TOTAL CREW', 'integer', 'Derived', totalWorkers, null));
+
+  // Blended summary metrics
+  const totalHrs = workers.reduce((s, w) => s + w.totalHours, 0);
+  const totalWages = workers.reduce((s, w) => s + w.wages, 0);
+  const blendedGross = totalHrs > 0 ? totalWages / totalHrs : 0;
+
+  rows.push(row(t, 'Blended Labor Metrics', 'blended', 'gross_wages_rate', 'tier_gross_wages_rate', 'Gross Wages $/hr', 'currency', 'Derived', rd(blendedGross), null));
+
+  if (meta.unitCount && totalHrs > 0) {
+    rows.push(row(t, 'Blended Labor Metrics', 'blended', 'hours_per_unit', 'tier_hours_per_unit', 'Hours per Unit', 'number', 'Derived', rd(totalHrs / meta.unitCount), null));
+  }
+
+  // Crew composition ratios
+  const leads = (tierGroups.get('Superintendent') || []).length + (tierGroups.get('Lead Journeyman') || []).length;
+  const helpers = (tierGroups.get('Helper') || []).length;
+  const apprentices = (tierGroups.get('Apprentice') || []).length;
+
+  if (helpers > 0 && leads > 0) {
+    rows.push(row(t, 'Composition', 'composition', 'lead_to_helper_ratio', 'lead_to_helper_ratio', 'Lead-to-Helper Ratio', 'string', 'Derived', null, `1 : ${Math.round(helpers / leads)}`));
+  }
+  if (totalWorkers > 0 && apprentices > 0) {
+    rows.push(row(t, 'Composition', 'composition', 'apprentice_ratio', 'apprentice_ratio', 'Apprentice Ratio', 'percent', 'Derived', rd((apprentices / totalWorkers) * 100), null));
+  }
+  if (meta.unitCount && totalWorkers > 0) {
+    rows.push(row(t, 'Composition', 'composition', 'crew_density_per_100u', 'crew_density_per_100u', 'Crew Density per 100 Units', 'number', 'Derived', rd((totalWorkers / meta.unitCount) * 100), null));
+  }
+
+  return rows;
+}
+
+
 // ── Orchestrator ─────────────────────────────────────────────
 
 export function buildExportRows(
-  extractedData: { fields: FieldsMap; records: RecordRow[] },
+  extractedData: { fields: FieldsMap; records: RecordRow[]; workerRecords?: RecordRow[] },
   meta: ProjectMeta = {},
 ): ExportRow[] {
-  const { fields, records } = extractedData;
-  return [
+  const { fields, records, workerRecords } = extractedData;
+
+  const allRows = [
     ...buildOverview(records, fields, meta),
     ...buildBudgetVsActual(records),
     ...buildMaterial(records, meta),
@@ -626,6 +976,26 @@ export function buildExportRows(
     ...buildInsights(records, fields),
     ...buildReconciliationTab(records, fields),
   ];
+
+  let workers: WorkerRecord[] = [];
+
+  if (workerRecords && workerRecords.length > 0) {
+    const result = buildWorkerCrewAnalyticsFromSecondary(workerRecords);
+    allRows.push(...result.rows);
+    workers = result.workers;
+  } else {
+    const parsed = parseWorkers(records);
+    if (parsed.length > 0) {
+      allRows.push(...buildWorkerCrewAnalytics(parsed));
+      workers = parsed;
+    }
+  }
+
+  if (workers.length > 0) {
+    allRows.push(...buildCrewTiers(workers, meta));
+  }
+
+  return allRows;
 }
 
 // ── Database Writer ──────────────────────────────────────────
@@ -634,7 +1004,7 @@ export async function runJcrModel(
   pipelineLogId: string,
   projectId: string,
   orgId: string,
-  extractedData: { fields: FieldsMap; records: RecordRow[]; skillId?: string },
+  extractedData: { fields: FieldsMap; records: RecordRow[]; skillId?: string; workerRecords?: RecordRow[] },
   meta: ProjectMeta = {},
 ): Promise<{ runId: string; rowCount: number }> {
   const sb = getSupabase();
@@ -643,7 +1013,7 @@ export async function runJcrModel(
   console.log(`[jcr-model] Starting run=${runId} project=${projectId} pipeline_log=${pipelineLogId}`);
 
   const exportRows = buildExportRows(
-    { fields: extractedData.fields, records: extractedData.records },
+    { fields: extractedData.fields, records: extractedData.records, workerRecords: extractedData.workerRecords },
     meta,
   );
 
