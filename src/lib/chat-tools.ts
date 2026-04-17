@@ -911,10 +911,18 @@ async function executeJcrAnalysis(
     .select('tab, section, record_key, canonical_name, display_name, data_type, status, value_text, value_number, notes')
     .eq('project_id', projectId);
 
-  if (tab) dbQuery = dbQuery.eq('tab', tab);
-  if (section) dbQuery = dbQuery.eq('section', section);
+  if (tab) dbQuery = dbQuery.ilike('tab', `%${tab}%`);
+  if (section) dbQuery = dbQuery.ilike('section', `%${section}%`);
   if (canonical) dbQuery = dbQuery.eq('canonical_name', canonical);
-  if (query) dbQuery = dbQuery.or(`canonical_name.ilike.%${query}%,display_name.ilike.%${query}%,value_text.ilike.%${query}%`);
+  if (query) {
+    const words = query.split(/\s+/).filter(Boolean).map(w => w.replace(/[%_]/g, ''));
+    const clauses = words.flatMap(w => [
+      `canonical_name.ilike.%${w}%`,
+      `display_name.ilike.%${w}%`,
+      `value_text.ilike.%${w}%`,
+    ]);
+    dbQuery = dbQuery.or(clauses.join(','));
+  }
 
   const { data, error } = await dbQuery.order('tab').order('section').limit(500);
   if (error) return { result: null, error: error.message };
