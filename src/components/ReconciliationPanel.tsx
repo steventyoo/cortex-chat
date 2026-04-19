@@ -2,6 +2,30 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
+function downloadReconciliationCsv(results: ReconciliationResult[]) {
+  const header = ['Rule', 'Link Type', 'Status', 'Match Key', 'Source Value', 'Target Value', 'Diff %', 'Message', 'Resolved By', 'Resolution Note'];
+  const csvRows = results.map(r => [
+    r.reconciliation_rules?.rule_name || r.rule_id,
+    r.reconciliation_rules?.link_type_key || '',
+    r.status,
+    r.match_key_value,
+    r.source_value != null ? String(r.source_value) : '',
+    r.target_value != null ? String(r.target_value) : '',
+    r.difference_pct != null ? String(r.difference_pct) : '',
+    r.message,
+    r.resolved_by || '',
+    r.resolution_note || '',
+  ]);
+  const csv = [header, ...csvRows].map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `reconciliation-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 interface ReconciliationResult {
   id: string;
   rule_id: string;
@@ -181,11 +205,20 @@ export default function ReconciliationPanel({ projectId }: ReconciliationPanelPr
             </p>
           )}
         </div>
-        <button
-          onClick={runReconciliation}
-          disabled={running}
-          className="px-3.5 py-1.5 bg-[#1a1a1a] text-white text-[12px] font-medium rounded-lg hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
-        >
+        <div className="flex items-center gap-2">
+          {results.length > 0 && (
+            <button
+              onClick={() => downloadReconciliationCsv(results)}
+              className="px-3.5 py-1.5 border border-[#ddd] text-[#444] text-[12px] font-medium rounded-lg hover:bg-[#f5f5f5] transition-colors"
+            >
+              Export CSV
+            </button>
+          )}
+          <button
+            onClick={runReconciliation}
+            disabled={running}
+            className="px-3.5 py-1.5 bg-[#1a1a1a] text-white text-[12px] font-medium rounded-lg hover:bg-[#333] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+          >
           {running ? (
             <>
               <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
@@ -203,6 +236,7 @@ export default function ReconciliationPanel({ projectId }: ReconciliationPanelPr
             </>
           )}
         </button>
+        </div>
       </div>
 
       {/* Error */}
@@ -351,6 +385,18 @@ export default function ReconciliationPanel({ projectId }: ReconciliationPanelPr
                               <DetailRow label="Target Value" value={formatCurrency(result.target_value)} />
                               <DetailRow label="Difference" value={result.difference != null ? formatCurrency(result.difference) : '—'} />
                               <DetailRow label="Run ID" value={result.run_id.slice(0, 8)} mono />
+                              {result.source_record_id && (
+                                <div>
+                                  <div className="text-[10px] text-[#999] uppercase tracking-wider mb-0.5">Source Record</div>
+                                  <a href={`/review?record=${result.source_record_id}`} className="text-[12px] text-[#0066cc] hover:text-[#004499] font-mono underline">{result.source_record_id.slice(0, 12)}...</a>
+                                </div>
+                              )}
+                              {result.target_record_id && (
+                                <div>
+                                  <div className="text-[10px] text-[#999] uppercase tracking-wider mb-0.5">Target Record</div>
+                                  <a href={`/review?record=${result.target_record_id}`} className="text-[12px] text-[#0066cc] hover:text-[#004499] font-mono underline">{result.target_record_id.slice(0, 12)}...</a>
+                                </div>
+                              )}
                             </div>
 
                             {isResolved ? (

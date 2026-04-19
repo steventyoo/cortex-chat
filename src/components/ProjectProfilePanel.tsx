@@ -37,6 +37,16 @@ interface ProfileSnapshot {
   missing_cost_codes: number;
   top_subs: Array<{ name: string; bidAmount: number; coCount: number }> | null;
   sub_co_rate: number | null;
+  total_workers: number | null;
+  total_labor_hours: number | null;
+  total_ot_hours: number | null;
+  ot_ratio: number | null;
+  blended_gross_wage: number | null;
+  fully_loaded_wage: number | null;
+  burden_multiplier: number | null;
+  unit_count: number | null;
+  fixture_count: number | null;
+  duration_months: number | null;
   created_at: string;
 }
 
@@ -217,6 +227,33 @@ export default function ProjectProfilePanel({ projectId }: ProjectProfilePanelPr
               <KpiCard label="Blended Rate" value={profile.blended_labor_rate ? `$${profile.blended_labor_rate.toFixed(2)}/hr` : '—'} subtitle={profile.estimated_labor_rate ? `Est: $${profile.estimated_labor_rate.toFixed(2)}/hr` : undefined} />
             </div>
           </Section>
+
+          {/* Crew & Labor (from payroll/JCR) */}
+          {(profile.total_workers != null || profile.total_labor_hours != null || profile.blended_gross_wage != null) && (
+            <Section title="Crew & Labor">
+              <div className="grid grid-cols-3 gap-3">
+                <KpiCard label="Total Workers" value={profile.total_workers != null ? String(profile.total_workers) : '—'} />
+                <KpiCard label="Total Labor Hours" value={fmtNumber(profile.total_labor_hours)} />
+                <KpiCard label="OT Hours" value={fmtNumber(profile.total_ot_hours)} subtitle={profile.ot_ratio != null ? `OT Ratio: ${profile.ot_ratio.toFixed(1)}%` : undefined} highlight={profile.ot_ratio != null && profile.ot_ratio > 15 ? 'warning' : undefined} />
+              </div>
+              <div className="grid grid-cols-3 gap-3 mt-3">
+                <KpiCard label="Blended Gross Wage" value={profile.blended_gross_wage ? `$${profile.blended_gross_wage.toFixed(2)}/hr` : '—'} />
+                <KpiCard label="Fully Loaded Wage" value={profile.fully_loaded_wage ? `$${profile.fully_loaded_wage.toFixed(2)}/hr` : '—'} />
+                <KpiCard label="Burden Multiplier" value={profile.burden_multiplier ? `${profile.burden_multiplier.toFixed(2)}x` : '—'} />
+              </div>
+            </Section>
+          )}
+
+          {/* Project Scope */}
+          {(profile.unit_count != null || profile.fixture_count != null || profile.duration_months != null) && (
+            <Section title="Project Scope">
+              <div className="grid grid-cols-3 gap-3">
+                <KpiCard label="Unit Count" value={profile.unit_count != null ? String(profile.unit_count) : '—'} />
+                <KpiCard label="Fixture Count" value={profile.fixture_count != null ? String(profile.fixture_count) : '—'} />
+                <KpiCard label="Duration" value={profile.duration_months != null ? `${profile.duration_months} months` : '—'} />
+              </div>
+            </Section>
+          )}
 
           {/* Change Orders */}
           <Section title="Change Orders">

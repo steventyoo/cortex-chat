@@ -25,3 +25,41 @@ export async function shutdownLangfuse(): Promise<void> {
     _langfuse = null;
   }
 }
+
+/* ── Eval scoring helpers ─────────────────────────────────── */
+
+export interface EvalScores {
+  correctness: number;
+  tool_routing: 'correct' | 'wrong' | 'partial';
+  answer_match: boolean;
+}
+
+export async function scoreChatTrace(
+  traceId: string,
+  scores: EvalScores
+): Promise<void> {
+  const lf = getLangfuse();
+
+  lf.score({
+    traceId,
+    name: 'correctness',
+    value: scores.correctness,
+    comment: `Numeric correctness score (0-1)`,
+  });
+
+  lf.score({
+    traceId,
+    name: 'tool_routing',
+    value: scores.tool_routing === 'correct' ? 1 : scores.tool_routing === 'partial' ? 0.5 : 0,
+    comment: `Tool routing: ${scores.tool_routing}`,
+  });
+
+  lf.score({
+    traceId,
+    name: 'answer_match',
+    value: scores.answer_match ? 1 : 0,
+    comment: `Answer matched expected output: ${scores.answer_match}`,
+  });
+
+  await lf.flushAsync();
+}
