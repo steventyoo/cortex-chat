@@ -95,6 +95,7 @@ function OperatorNav() {
     { label: 'Doc Links', href: '/operator/doc-links' },
     { label: 'Chat Tools', href: '/operator/chat-tools' },
     { label: 'Context Cards', href: '/operator/context-cards' },
+    { label: 'Evals', href: '/operator/evals' },
   ];
 
   return (
