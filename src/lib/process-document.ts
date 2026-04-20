@@ -177,45 +177,101 @@ async function processLargePdfVision(opts: {
 
   tStep = Date.now();
   const catalogFields = await getSkillFieldDefinitions(skill.skillId);
-  const visionSpan = trace.span({
-    name: 'large-pdf-vision-extraction',
-    input: { skillId: skill.skillId, pageCount, fileSizeBytes: rawBuffer.length },
-  });
 
   let extraction: ExtractionResult;
   let discoveredFields: Record<string, unknown> = {};
   let overallConfidence: number;
   let flags: ValidationFlag[];
+  let usedExtractionMethod = 'vision-chunked';
 
-  try {
-    console.log(`[process:large-pdf] Starting vision chunked extraction: skill=${skill.skillId} pages=${pageCount}`);
-    const visionResult: VisionExtractionResult = await extractWithVision(
-      rawBuffer, skill, catalogFields, classifierConfidence, 'pdf',
-      { langfuseParent: visionSpan },
-    );
-    extraction = visionResult.extraction;
-    discoveredFields = visionResult.discoveredFields;
-    overallConfidence = visionResult.overallConfidence;
-    flags = visionResult.flags;
-    visionSpan.end({
-      output: {
-        fieldCount: Object.keys(extraction.fields).length,
-        recordCount: extraction.records?.length ?? 0,
-        discoveredCount: Object.keys(discoveredFields).length,
-        overallConfidence,
-      },
-      metadata: {
-        inputTokens: visionResult.metadata.inputTokens,
-        outputTokens: visionResult.metadata.outputTokens,
-        elapsedMs: visionResult.metadata.elapsedMs,
-      },
+  if (skill.extractionMethod === 'codegen') {
+    const codegenSpan = trace.span({
+      name: 'large-pdf-codegen-extraction',
+      input: { skillId: skill.skillId, pageCount, fileSizeBytes: rawBuffer.length },
     });
-    console.log(`[process:large-pdf] Vision extraction complete: fields=${Object.keys(extraction.fields).length} records=${extraction.records?.length ?? 0} confidence=${overallConfidence}`);
-  } catch (err) {
-    visionSpan.end({ level: 'ERROR', statusMessage: err instanceof Error ? err.message : String(err) });
-    console.error(`[process:large-pdf] Vision extraction failed:`, err);
-    await markFailed(sb, recordId, 'large_pdf_vision', err);
-    return { success: false, recordId, status: 'failed', timing, error: 'Large PDF vision extraction failed' };
+
+    try {
+      console.log(`[process:large-pdf] Starting codegen extraction: skill=${skill.skillId} pages=${pageCount}`);
+      const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
+
+      const sourceText = await extractTextFromLargePdf(rawBuffer, LARGE_PDF_SAMPLE_PAGES);
+
+      const codegenResult: CodegenExtractionResult = await extractWithCodegen(
+        rawBuffer, sourceText, skill, catalogFields, contextCardFields,
+        classifierConfidence, 'pdf',
+        { langfuseParent: codegenSpan },
+      );
+      extraction = codegenResult.extraction;
+      discoveredFields = codegenResult.discoveredFields;
+      overallConfidence = computeOverallConfidence(extraction);
+      flags = [];
+
+      for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
+        if (fieldData.value !== null && fieldData.confidence < 0.7) {
+          flags.push({ field: fieldName, issue: `Low confidence (${Math.round(fieldData.confidence * 100)}%)`, severity: 'warning' });
+        }
+      }
+      usedExtractionMethod = 'codegen';
+      codegenSpan.end({
+        output: {
+          fieldCount: Object.keys(extraction.fields).length,
+          recordCount: extraction.records?.length ?? 0,
+          targetTableCount: extraction.targetTables?.reduce((sum, t) => sum + t.records.length, 0) ?? 0,
+          discoveredCount: Object.keys(discoveredFields).length,
+          overallConfidence,
+        },
+        metadata: {
+          generatedCode: codegenResult.metadata.generatedCode,
+          codegenInputTokens: codegenResult.metadata.codegenInputTokens,
+          codegenOutputTokens: codegenResult.metadata.codegenOutputTokens,
+          sandboxElapsedMs: codegenResult.metadata.sandboxElapsedMs,
+          retries: codegenResult.metadata.retries,
+          parserMethod: codegenResult.metadata.parserMethod,
+        },
+      });
+      console.log(`[process:large-pdf] Codegen extraction complete: fields=${Object.keys(extraction.fields).length} records=${extraction.records?.length ?? 0} targetTableRows=${extraction.targetTables?.reduce((sum, t) => sum + t.records.length, 0) ?? 0} confidence=${overallConfidence}`);
+    } catch (err) {
+      codegenSpan.end({ level: 'ERROR', statusMessage: err instanceof Error ? err.message : String(err) });
+      console.error(`[process:large-pdf] Codegen extraction failed:`, err);
+      await markFailed(sb, recordId, 'large_pdf_codegen', err);
+      return { success: false, recordId, status: 'failed', timing, error: 'Large PDF codegen extraction failed' };
+    }
+  } else {
+    const visionSpan = trace.span({
+      name: 'large-pdf-vision-extraction',
+      input: { skillId: skill.skillId, pageCount, fileSizeBytes: rawBuffer.length },
+    });
+
+    try {
+      console.log(`[process:large-pdf] Starting vision chunked extraction: skill=${skill.skillId} pages=${pageCount}`);
+      const visionResult: VisionExtractionResult = await extractWithVision(
+        rawBuffer, skill, catalogFields, classifierConfidence, 'pdf',
+        { langfuseParent: visionSpan },
+      );
+      extraction = visionResult.extraction;
+      discoveredFields = visionResult.discoveredFields;
+      overallConfidence = visionResult.overallConfidence;
+      flags = visionResult.flags;
+      visionSpan.end({
+        output: {
+          fieldCount: Object.keys(extraction.fields).length,
+          recordCount: extraction.records?.length ?? 0,
+          discoveredCount: Object.keys(discoveredFields).length,
+          overallConfidence,
+        },
+        metadata: {
+          inputTokens: visionResult.metadata.inputTokens,
+          outputTokens: visionResult.metadata.outputTokens,
+          elapsedMs: visionResult.metadata.elapsedMs,
+        },
+      });
+      console.log(`[process:large-pdf] Vision extraction complete: fields=${Object.keys(extraction.fields).length} records=${extraction.records?.length ?? 0} confidence=${overallConfidence}`);
+    } catch (err) {
+      visionSpan.end({ level: 'ERROR', statusMessage: err instanceof Error ? err.message : String(err) });
+      console.error(`[process:large-pdf] Vision extraction failed:`, err);
+      await markFailed(sb, recordId, 'large_pdf_vision', err);
+      return { success: false, recordId, status: 'failed', timing, error: 'Large PDF vision extraction failed' };
+    }
   }
   timing.ai_extraction = Date.now() - tStep;
 
@@ -250,7 +306,7 @@ async function processLargePdfVision(opts: {
       overall_confidence: overallConfidence,
       extracted_data: extractionWithDiscovered,
       validation_flags: flags.length > 0 ? flags : null,
-      ai_model: 'opus-vision-chunked',
+      ai_model: usedExtractionMethod === 'codegen' ? 'opus-codegen' : 'opus-vision-chunked',
       tier1_completed_at: new Date().toISOString(),
       tier2_completed_at: new Date().toISOString(),
       page_count: pageCount,
@@ -267,6 +323,25 @@ async function processLargePdfVision(opts: {
     console.error(`[process:large-pdf] Failed to update pipeline record:`, err);
   }
   timing.db_final_update = Date.now() - tStep;
+
+  if (extraction.skillId === JCR_SKILL_ID && extraction.records?.length) {
+    try {
+      const jcrT = Date.now();
+      const workerRecords = extraction.targetTables
+        ?.find(t => t.table === 'payroll_transactions' || t.table === 'worker_transactions')?.records;
+      const jcrResult = await runJcrModel(recordId, projectId || '', orgId, {
+        fields: extraction.fields as Record<string, { value: string | number | null; confidence: number }>,
+        records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
+        skillId: extraction.skillId,
+        workerRecords: workerRecords as Array<Record<string, { value: string | number | null; confidence: number }>> | undefined,
+      });
+      timing.jcr_model = Date.now() - jcrT;
+      console.log(`[process:large-pdf] JCR model complete: rows=${jcrResult.rowCount} workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
+    } catch (err) {
+      console.warn(`[process:large-pdf] JCR model failed (non-fatal):`, err);
+    }
+  }
+
   timing.total = Date.now() - t0;
 
   console.log(`[process:large-pdf] DONE record=${recordId} file="${fileName}" status=${finalStatus} pages=${pageCount} — ` +
@@ -275,15 +350,16 @@ async function processLargePdfVision(opts: {
   trace.update({
     output: {
       status: finalStatus,
-      extractionMethod: 'vision-chunked',
+      extractionMethod: usedExtractionMethod,
       skillId: extraction.skillId,
       overallConfidence,
       fieldCount: Object.keys(extraction.fields).length,
       recordCount: extraction.records?.length ?? 0,
+      targetTableRows: extraction.targetTables?.reduce((sum, t) => sum + t.records.length, 0) ?? 0,
       flagCount: flags.length,
       pageCount,
     },
-    metadata: { ...timing, extractionMethod: 'vision-chunked' },
+    metadata: { ...timing, extractionMethod: usedExtractionMethod },
   });
   langfuse.flushAsync().catch(() => {});
 

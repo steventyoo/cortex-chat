@@ -57,6 +57,8 @@ function buildMetaPrompt(
 
   const fileTypeHint = getFileTypeHint(fileExt);
 
+  const secondaryTableSection = buildSecondaryTableSection(skill);
+
   return `You are a data extraction engineer. Your job is to write a Python script that extracts structured data from a document.
 
 ## Document Type
@@ -79,7 +81,13 @@ Your Python script MUST print a single JSON object to stdout with this structure
   "records": [
     {"column_a": <val>, "column_b": <val>, ...},
     ...
-  ],
+  ],${secondaryTableSection ? `
+  "secondary_tables": {
+    "table_name": [
+      {"col_a": <val>, "col_b": <val>, ...},
+      ...
+    ]
+  },` : ''}
   "discovered_fields": {
     "descriptive_key": <any structured data found beyond required fields>,
     ...
@@ -94,12 +102,13 @@ Your Python script MUST print a single JSON object to stdout with this structure
 
 Rules:
 - "fields" MUST contain ALL required fields listed above. Use \`null\` value and low confidence if not found.
-- "records" is for multi-row data (line items, cost codes, pay apps, workers, etc.). Omit if the document has no tabular data.
+- "records" is for multi-row data (line items, cost codes, pay apps, workers, etc.). Omit if the document has no tabular data.${secondaryTableSection ? `
+- "secondary_tables" MUST be populated with the tables described below. Each table is an array of flat row objects (no nested {value, confidence} wrappers — just plain values).` : ''}
 - "discovered_fields" is for ANY other valuable structured data you find that isn't in the required fields. Examples: breakdowns, subtotals, cross-references, summary tables, metadata. Be generous — extract everything useful.
 - confidence: 1.0 = copied verbatim from document, 0.9 = calculated/derived from document data, 0.7-0.8 = inferred with high certainty, <0.7 = uncertain
 - source: brief description of where in the document the value was found (page number, section, table header, etc.)
 - Print ONLY the JSON to stdout. No other output. Use json.dumps() with indent=2.
-
+${secondaryTableSection || ''}
 ## File Handling
 ${fileTypeHint}
 The document content is available at \`/tmp/input${fileExt ? '.' + fileExt : ''}\`.
@@ -113,6 +122,41 @@ The document content is available at \`/tmp/input${fileExt ? '.' + fileExt : ''}
 6. Cross-reference values across sections when the same data appears in multiple places.
 
 Write the complete Python script now. Use only the standard library plus: pandas, numpy, openpyxl, pdfplumber, xlrd, python-docx, docx2txt, olefile, python-pptx.`;
+}
+
+function buildSecondaryTableSection(skill: DocumentSkill): string {
+  const secondaryTables = skill.multiRecordConfig?.secondaryTables;
+  if (!secondaryTables?.length) return '';
+
+  let section = `\n## Secondary Tables (REQUIRED)\nIn addition to the main "records" array, you MUST also extract these secondary data tables and include them under "secondary_tables" in the output JSON.\n`;
+
+  for (const st of secondaryTables) {
+    section += `\n### Table: "${st.table}"\nExtract one row per line item. Columns:\n`;
+    section += st.fields.map(f => `- "${f}"`).join('\n');
+    section += '\n';
+  }
+
+  if (skill.skillId === 'job_cost_report') {
+    section += `
+### JCR-Specific Parsing Hints for "payroll_transactions"
+This is a Job Cost Report PDF. Payroll (PR) line items appear inside cost-code sections throughout the document.
+
+Structure:
+- Each cost-code section starts with a header like "011 - DS & RD Labor" or "020 - Earthwork"
+- Within each section, look for PR (Payroll) lines — they contain worker names, hours, and amounts
+- Each PR line should produce one row in payroll_transactions
+
+Parsing strategy:
+1. Iterate every page with pdfplumber
+2. Extract text line by line; detect cost-code section headers (pattern: 3-digit code + " - " + description)
+3. Track the current cost code as you move through pages
+4. For each PR line, extract: worker_name, worker_id (if present), hours_type (Regular/Overtime/Double Time), hours, amount, cost_code
+5. Include ALL PR lines from ALL cost codes — there may be thousands across 100+ pages
+6. Do NOT stop early or truncate — capture every single payroll transaction line
+`;
+  }
+
+  return section;
 }
 
 function getFileTypeHint(fileExt: string): string {
@@ -346,6 +390,7 @@ function extractPythonCode(text: string): string {
 interface RawCodegenOutput {
   fields: Record<string, { value: unknown; confidence: number; source?: string }>;
   records?: Array<Record<string, unknown>>;
+  secondary_tables?: Record<string, Array<Record<string, unknown>>>;
   discovered_fields?: Record<string, unknown>;
   metadata?: {
     pages_parsed?: number;
@@ -411,6 +456,26 @@ function normalizeToExtractionResult(
     skillVersion: skill.version,
     classifierConfidence,
   };
+
+  if (raw.secondary_tables) {
+    const targetTables: ExtractionResult['targetTables'] = [];
+    for (const [tableName, rows] of Object.entries(raw.secondary_tables)) {
+      if (!Array.isArray(rows)) continue;
+      targetTables.push({
+        table: tableName,
+        records: rows.map(rec => {
+          const normalized: Record<string, ExtractedField> = {};
+          for (const [key, val] of Object.entries(rec)) {
+            normalized[key] = { value: val as string | number | null, confidence: 0.9 };
+          }
+          return normalized;
+        }),
+      });
+    }
+    if (targetTables.length > 0) {
+      extraction.targetTables = targetTables;
+    }
+  }
 
   return {
     extraction,
@@ -517,13 +582,15 @@ export async function extractWithCodegen(
       const fieldCount = Object.keys(normalized.extraction.fields).length;
       const recordCount = normalized.extraction.records?.length ?? 0;
       const discoveredCount = Object.keys(normalized.discoveredFields).length;
+      const targetTableCount = normalized.extraction.targetTables?.reduce((sum, t) => sum + t.records.length, 0) ?? 0;
 
       options?.langfuseParent?.span({
         name: 'codegen-result',
-        input: { fieldCount, recordCount, discoveredCount, overallConfidence: classifierConfidence },
+        input: { fieldCount, recordCount, discoveredCount, targetTableCount, overallConfidence: classifierConfidence },
         output: {
           fields: normalized.extraction.fields,
           recordSample: normalized.extraction.records?.slice(0, 3),
+          targetTableSummary: normalized.extraction.targetTables?.map(t => ({ table: t.table, count: t.records.length })),
           discoveredFields: normalized.discoveredFields,
         },
         metadata: {
@@ -535,7 +602,8 @@ export async function extractWithCodegen(
       });
 
       console.log(
-        `[codegen] SUCCESS skill=${skill.skillId} fields=${fieldCount} records=${recordCount} discovered=${discoveredCount} ` +
+        `[codegen] SUCCESS skill=${skill.skillId} fields=${fieldCount} records=${recordCount} ` +
+        `targetTableRows=${targetTableCount} discovered=${discoveredCount} ` +
         `retries=${retries} total=${totalTime}ms`
       );
 
