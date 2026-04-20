@@ -17,6 +17,7 @@ import {
   buildClassificationTool,
   buildExtractionTool,
   buildGeneralExtractionTool,
+  coerceExtractionResult,
 } from './extraction-schemas';
 import {
   listActiveSkillRows,
@@ -475,11 +476,16 @@ export async function extractWithSkill(
     delete rawExtraction.extra_fields;
   }
 
+  const coerced = coerceExtractionResult(rawExtraction, catalogFields);
+  if (coerced.warnings.length) {
+    console.log(`[extract] coercion warnings: ${coerced.warnings.join(', ')}`);
+  }
+
   const extraction: ExtractionResult = {
     documentType: rawExtraction.documentType,
     documentTypeConfidence: rawExtraction.documentTypeConfidence,
-    fields: rawExtraction.fields,
-    records: rawExtraction.records,
+    fields: coerced.fields,
+    records: coerced.records,
     skillId: skill.skillId,
     skillVersion: skill.version,
     classifierConfidence: classification.confidence,
