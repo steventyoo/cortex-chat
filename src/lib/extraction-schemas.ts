@@ -41,11 +41,50 @@ const EXTRACTED_FIELD_JSON_SCHEMA = {
   required: ['value', 'confidence'],
 };
 
+function valueSchemaForType(fd: FieldDefinition): Record<string, unknown> {
+  switch (fd.type) {
+    case 'number':
+      return { anyOf: [{ type: 'number' as const }, { type: 'null' as const }] };
+    case 'boolean':
+      return { anyOf: [{ type: 'boolean' as const }, { type: 'null' as const }] };
+    case 'enum':
+      if (Array.isArray(fd.options) && fd.options.length) {
+        return { anyOf: [{ type: 'string' as const, enum: fd.options }, { type: 'null' as const }] };
+      }
+      return { anyOf: [{ type: 'string' as const }, { type: 'null' as const }] };
+    case 'date':
+      return {
+        anyOf: [
+          { type: 'string' as const, description: 'ISO 8601 date string (YYYY-MM-DD)' },
+          { type: 'null' as const },
+        ],
+      };
+    case 'array':
+      return {
+        anyOf: [
+          { type: 'array' as const, items: { type: 'string' as const } },
+          { type: 'null' as const },
+        ],
+      };
+    case 'string':
+    default:
+      return { anyOf: [{ type: 'string' as const }, { type: 'null' as const }] };
+  }
+}
+
 function fieldTypeToJsonSchema(fd: FieldDefinition): Record<string, unknown> {
-  const base: Record<string, unknown> = { ...EXTRACTED_FIELD_JSON_SCHEMA };
-  const desc = fd.description + (Array.isArray(fd.options) && fd.options.length ? ` Options: [${fd.options.join(', ')}]` : '');
-  base.description = desc;
-  return base;
+  const desc = fd.description
+    + (Array.isArray(fd.options) && fd.options.length ? ` Options: [${fd.options.join(', ')}]` : '');
+
+  return {
+    type: 'object' as const,
+    description: desc,
+    properties: {
+      value: valueSchemaForType(fd),
+      confidence: { type: 'number' as const, minimum: 0, maximum: 1 },
+    },
+    required: ['value', 'confidence'],
+  };
 }
 
 // ── Classification Tool ──────────────────────────────────────
@@ -175,6 +214,139 @@ export function buildExtractionTool(
       required,
     },
   };
+}
+
+// ── Post-Extraction Coercion ─────────────────────────────────
+
+/** Input from LLM may include booleans; output is always pipeline-compatible. */
+type RawFieldVal = { value: string | number | boolean | null; confidence: number };
+type PipelineField = { value: string | number | null; confidence: number };
+
+function coerceField(
+  fieldName: string,
+  field: RawFieldVal,
+  fd: FieldDefinition | undefined,
+): { field: PipelineField; warning?: string } {
+  if (field.value === null || field.value === undefined || !fd) {
+    const v = field.value;
+    const safe: string | number | null = typeof v === 'boolean' ? String(v) : (v ?? null);
+    return { field: { value: safe, confidence: field.confidence } };
+  }
+
+  const raw = field.value;
+
+  switch (fd.type) {
+    case 'number': {
+      if (typeof raw === 'number') return { field: { value: raw, confidence: field.confidence } };
+      const stripped = String(raw).replace(/[$,%\s]/g, '').replace(/,/g, '');
+      const n = parseFloat(stripped);
+      if (!isNaN(n)) {
+        return {
+          field: { value: n, confidence: field.confidence },
+          warning: `${fieldName}: coerced "${String(raw).slice(0, 40)}" → ${n}`,
+        };
+      }
+      return {
+        field: { value: 0, confidence: field.confidence },
+        warning: `${fieldName}: unparseable number "${String(raw).slice(0, 40)}", defaulted to 0`,
+      };
+    }
+
+    case 'boolean': {
+      if (typeof raw === 'boolean') {
+        return { field: { value: raw ? 'true' : 'false', confidence: field.confidence } };
+      }
+      const s = String(raw).toLowerCase().trim();
+      if (['true', '1', 'yes'].includes(s)) {
+        return { field: { value: 'true', confidence: field.confidence }, warning: `${fieldName}: coerced "${raw}" → "true"` };
+      }
+      if (['false', '0', 'no'].includes(s)) {
+        return { field: { value: 'false', confidence: field.confidence }, warning: `${fieldName}: coerced "${raw}" → "false"` };
+      }
+      return { field: { value: String(raw), confidence: field.confidence } };
+    }
+
+    case 'enum': {
+      const s = String(raw);
+      if (Array.isArray(fd.options) && fd.options.length) {
+        if (!fd.options.includes(s)) {
+          const match = fd.options.find(o => o.toLowerCase() === s.toLowerCase());
+          if (match) {
+            return { field: { value: match, confidence: field.confidence }, warning: `${fieldName}: case-corrected "${s}" → "${match}"` };
+          }
+          return { field: { value: s, confidence: field.confidence }, warning: `${fieldName}: value "${s.slice(0, 40)}" not in enum [${fd.options.join(', ')}]` };
+        }
+      }
+      return { field: { value: s, confidence: field.confidence } };
+    }
+
+    case 'date': {
+      const s = String(raw).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return { field: { value: s, confidence: field.confidence } };
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) {
+        const iso = d.toISOString().slice(0, 10);
+        return { field: { value: iso, confidence: field.confidence }, warning: `${fieldName}: normalized date "${s.slice(0, 30)}" → "${iso}"` };
+      }
+      return { field: { value: s, confidence: field.confidence } };
+    }
+
+    case 'string':
+    default: {
+      if (typeof raw !== 'string') {
+        return { field: { value: String(raw), confidence: field.confidence }, warning: `${fieldName}: coerced ${typeof raw} to string` };
+      }
+      return { field: { value: raw, confidence: field.confidence } };
+    }
+  }
+}
+
+function coerceFieldMap(
+  fields: Record<string, RawFieldVal>,
+  catalog: FieldDefinition[],
+): { fields: Record<string, PipelineField>; warnings: string[] } {
+  const out: Record<string, PipelineField> = {};
+  const warnings: string[] = [];
+  for (const [name, fld] of Object.entries(fields)) {
+    const fd = catalog.find(f => f.name === name);
+    const { field: coerced, warning } = coerceField(name, fld, fd);
+    out[name] = coerced;
+    if (warning) warnings.push(warning);
+  }
+  return { fields: out, warnings };
+}
+
+export interface CoercionResult {
+  fields: Record<string, PipelineField>;
+  records?: Array<Record<string, PipelineField>>;
+  warnings: string[];
+}
+
+/**
+ * Validates and coerces raw LLM extraction output against the field catalog.
+ * Handles type mismatches (e.g. string "1,234" for a number field) that slip
+ * past the JSON Schema constraints.
+ */
+export function coerceExtractionResult(
+  raw: {
+    fields: Record<string, RawFieldVal>;
+    records?: Array<Record<string, RawFieldVal>>;
+  },
+  catalog: FieldDefinition[],
+): CoercionResult {
+  const { fields, warnings } = coerceFieldMap(raw.fields, catalog);
+
+  let records: Array<Record<string, PipelineField>> | undefined;
+  if (Array.isArray(raw.records)) {
+    records = [];
+    for (const rec of raw.records) {
+      const r = coerceFieldMap(rec, catalog);
+      records.push(r.fields);
+      warnings.push(...r.warnings);
+    }
+  }
+
+  return { fields, records, warnings };
 }
 
 // ── Extraction Tool (General / Unknown Documents) ────────────
