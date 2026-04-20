@@ -4,7 +4,7 @@ import { processDocument } from '@/lib/process-document';
 import { getBaseUrl } from '@/lib/base-url';
 import { getSupabase } from '@/lib/supabase';
 
-export const maxDuration = 300;
+export const maxDuration = 600;
 
 const SKIP_STATUSES = new Set([
   'extracted', 'pending_review', 'approved', 'tier2_validated', 'tier2_flagged', 'failed', 'deleted',
