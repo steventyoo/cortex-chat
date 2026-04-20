@@ -10,7 +10,7 @@
       "maxDuration": 60
     },
     "src/app/api/pipeline/process/route.ts": {
-      "maxDuration": 300
+      "maxDuration": 600
     },
     "src/app/api/pipeline/recover/route.ts": {
       "maxDuration": 60
