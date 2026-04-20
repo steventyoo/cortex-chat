@@ -226,7 +226,7 @@ export async function materializeProjectProfile(
 
     // Use total_revenues as contract value fallback (negated since it's stored negative)
     if (!contractValue) {
-      const rev = fieldVal(latest.fields, 'total_revenues', 'sales_cost_code_999_rev_budget');
+      const rev = fieldVal(latest.fields, 'total_revenues', 'sales_cost_code_999_rev_budget', 'sales_cost_code_rev_budget');
       if (rev) contractValue = Math.abs(rev);
     }
   }
@@ -284,11 +284,18 @@ export async function materializeProjectProfile(
         const category = String(rec['Cost Category']?.value || '').toLowerCase();
         if (category !== 'labor') continue;
         const qtyField = rec['Quantity (labor hours or units)'] || rec['Quantity'];
-        if (qtyField?.value) {
-          const raw = String(qtyField.value);
-          const hoursMatch = raw.match(/([\d,.]+)\s*hours/i);
-          if (hoursMatch) {
-            totalActualHours += parseFloat(hoursMatch[1].replace(/,/g, '')) || 0;
+        if (qtyField?.value != null) {
+          if (typeof qtyField.value === 'number') {
+            totalActualHours += qtyField.value;
+          } else {
+            const raw = String(qtyField.value);
+            const hoursMatch = raw.match(/([\d,.]+)\s*hours/i);
+            if (hoursMatch) {
+              totalActualHours += parseFloat(hoursMatch[1].replace(/,/g, '')) || 0;
+            } else {
+              const plain = parseFloat(raw.replace(/,/g, ''));
+              if (!isNaN(plain) && plain > 0) totalActualHours += plain;
+            }
           }
         }
       }

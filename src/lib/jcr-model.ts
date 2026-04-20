@@ -89,15 +89,30 @@ function pct(f: FieldVal | undefined): number {
 
 function parseHours(f: FieldVal | undefined): { total: number; reg: number; ot: number } {
   if (!f?.value) return { total: 0, reg: 0, ot: 0 };
+
+  if (typeof f.value === 'number') {
+    return { total: f.value, reg: f.value, ot: 0 };
+  }
+
   const s = String(f.value);
+
   const totalMatch = s.match(/([\d,.]+)\s*hours/i);
   const regMatch = s.match(/Reg:\s*([\d,.]+)/i);
   const otMatch = s.match(/O\/T:\s*([\d,.]+)/i);
-  return {
-    total: totalMatch ? parseFloat(totalMatch[1].replace(/,/g, '')) || 0 : 0,
-    reg: regMatch ? parseFloat(regMatch[1].replace(/,/g, '')) || 0 : 0,
-    ot: otMatch ? parseFloat(otMatch[1].replace(/,/g, '')) || 0 : 0,
-  };
+  if (totalMatch) {
+    return {
+      total: parseFloat(totalMatch[1].replace(/,/g, '')) || 0,
+      reg: regMatch ? parseFloat(regMatch[1].replace(/,/g, '')) || 0 : 0,
+      ot: otMatch ? parseFloat(otMatch[1].replace(/,/g, '')) || 0 : 0,
+    };
+  }
+
+  const plain = parseFloat(s.replace(/,/g, ''));
+  if (!isNaN(plain) && plain > 0) {
+    return { total: plain, reg: plain, ot: 0 };
+  }
+
+  return { total: 0, reg: 0, ot: 0 };
 }
 
 function fv(rec: RecordRow, ...names: string[]): FieldVal | undefined {
@@ -156,7 +171,7 @@ function buildOverview(
     .filter(r => cc(r) !== '999' && !cc(r).startsWith('Overhead'))
     .reduce((sum, r) => sum + num(fv(r, 'Over/Under Budget — $ (line)')), 0);
 
-  const revenue = Math.abs(num(fields['total_revenues'] || fields['sales_cost_code_999_rev_budget']));
+  const revenue = Math.abs(num(fields['total_revenues'] || fields['sales_cost_code_999_rev_budget'] || fields['sales_cost_code_rev_budget']));
   const netProfit = revenue - totalJtd;
   const grossMargin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
 
@@ -182,9 +197,9 @@ function buildOverview(
   rows.push(row(t, s, k, 'subcontract_cost', 'subcontract_cost', 'Subcontract Cost', 'currency', 'Extracted', rd(subCost), null));
   rows.push(row(t, s, k, 'other_cost', 'other_cost', 'Other Cost', 'currency', 'Extracted', rd(otherCost), null));
   rows.push(row(t, s, k, 'total_labor_hours', 'total_labor_hours', 'Total Labor Hours', 'number', 'Extracted', rd(totalHours), null));
-  rows.push(row(t, s, k, 'source_pr', 'source_pr', 'Source: Payroll', 'currency', 'Extracted', num(fields['source_pr']), null));
-  rows.push(row(t, s, k, 'source_ap', 'source_ap', 'Source: AP', 'currency', 'Extracted', num(fields['source_ap']), null));
-  rows.push(row(t, s, k, 'source_gl', 'source_gl', 'Source: GL', 'currency', 'Extracted', num(fields['source_gl']), null));
+  rows.push(row(t, s, k, 'source_pr', 'source_pr', 'Source: Payroll', 'currency', 'Extracted', num(fields['source_pr'] || fields['pr_amount']), null));
+  rows.push(row(t, s, k, 'source_ap', 'source_ap', 'Source: AP', 'currency', 'Extracted', num(fields['source_ap'] || fields['ap_amount']), null));
+  rows.push(row(t, s, k, 'source_gl', 'source_gl', 'Source: GL', 'currency', 'Extracted', num(fields['source_gl'] || fields['gl_amount']), null));
 
   // Project meta
   rows.push(row(t, 'Project Profile', k, 'job_number', 'job_number', 'Job Number', 'string', 'Extracted', null, str(fields['Job Number'])));
@@ -298,9 +313,9 @@ function buildCostBreakdown(records: RecordRow[], fields: FieldsMap, meta: Proje
   const t = 'Cost Breakdown';
   const k = 'breakdown';
 
-  const pr = num(fields['source_pr']);
-  const ap = num(fields['source_ap']);
-  const gl = num(fields['source_gl']);
+  const pr = num(fields['source_pr'] || fields['pr_amount']);
+  const ap = num(fields['source_ap'] || fields['ap_amount']);
+  const gl = num(fields['source_gl'] || fields['gl_amount']);
   const total = pr + ap + gl;
 
   rows.push(row(t, 'Source Split', k, 'source_pr', 'source_pr_total', 'Payroll Total', 'currency', 'Extracted', pr, null));
@@ -313,7 +328,7 @@ function buildCostBreakdown(records: RecordRow[], fields: FieldsMap, meta: Proje
     rows.push(row(t, 'Source Split', k, 'gl_pct', 'source_gl_pct', 'GL %', 'percent', 'Derived', rd((gl / total) * 100), null));
   }
 
-  const revenue = Math.abs(num(fields['total_revenues'] || fields['sales_cost_code_999_rev_budget']));
+  const revenue = Math.abs(num(fields['total_revenues'] || fields['sales_cost_code_999_rev_budget'] || fields['sales_cost_code_rev_budget']));
   const laborCost = records.filter(r => cat(r) === 'labor').reduce((s, r) => s + num(fv(r, 'Job-to-Date Cost (line)')), 0);
   const materialCost = records.filter(r => cat(r) === 'material').reduce((s, r) => s + num(fv(r, 'Job-to-Date Cost (line)')), 0);
 
@@ -483,7 +498,7 @@ function buildBenchmarkKPIs(records: RecordRow[], fields: FieldsMap, meta: Proje
   const t = 'Benchmark KPIs';
   const k = 'kpi';
 
-  const revenue = Math.abs(num(fields['total_revenues'] || fields['sales_cost_code_999_rev_budget']));
+  const revenue = Math.abs(num(fields['total_revenues'] || fields['sales_cost_code_999_rev_budget'] || fields['sales_cost_code_rev_budget']));
   const workRecords = records.filter(r => cc(r) !== '999' && !cc(r).startsWith('Overhead'));
   const totalJtd = workRecords.reduce((s, r) => s + num(fv(r, 'Job-to-Date Cost (line)')), 0);
   const laborCost = records.filter(r => cat(r) === 'labor').reduce((s, r) => s + num(fv(r, 'Job-to-Date Cost (line)')), 0);
@@ -553,7 +568,7 @@ function buildBenchmarkKPIs(records: RecordRow[], fields: FieldsMap, meta: Proje
   if (revenue > 0) {
     rows.push(row(t, 'Cost Mix', k, 'labor_pct_of_revenue', 'kpi_labor_pct_of_revenue', 'Labor as % of Revenue', 'percent', 'Derived', rd((laborCost / revenue) * 100), null));
     rows.push(row(t, 'Cost Mix', k, 'material_pct_of_revenue', 'kpi_material_pct_of_revenue', 'Material as % of Revenue', 'percent', 'Derived', rd((materialCost / revenue) * 100), null));
-    const glCost = num(fields['source_gl']);
+    const glCost = num(fields['source_gl'] || fields['gl_amount']);
     if (glCost > 0) {
       rows.push(row(t, 'Cost Mix', k, 'gl_pct_of_revenue', 'gl_pct_of_revenue', 'GL as % of Revenue', 'percent', 'Derived', rd((glCost / revenue) * 100), null));
     }
@@ -673,7 +688,7 @@ function buildBenchmarkKPIs(records: RecordRow[], fields: FieldsMap, meta: Proje
   }
 
   // Vendor KPIs
-  const apTotal = num(fields['source_ap']);
+  const apTotal = num(fields['source_ap'] || fields['ap_amount']);
   const nonPayrollRecords = records.filter(r => cat(r) !== 'labor' && cat(r) !== 'overhead' && cc(r) !== '999');
   const vendorCount = nonPayrollRecords.length;
   rows.push(row(t, 'Vendor', k, 'vendor_count', 'vendor_count', 'Vendor/Material Codes', 'integer', 'Derived', vendorCount, null));
@@ -773,7 +788,7 @@ function buildReconciliationTab(records: RecordRow[], fields: FieldsMap): Export
   rows.push(row(t, 'Crew Hours', 'recon_e', 'total_hours', 'recon_total_hours', 'Sum of Per-Code Hours', 'number', 'Derived', rd(totalLaborHours), null));
 
   // F: Cross-tab tie-out
-  const revenue = Math.abs(num(fields['total_revenues'] || fields['sales_cost_code_999_rev_budget']));
+  const revenue = Math.abs(num(fields['total_revenues'] || fields['sales_cost_code_999_rev_budget'] || fields['sales_cost_code_rev_budget']));
   const profit = revenue - sumJtd;
   const crossCheck = Math.abs(sumJtd - (revenue - profit));
   rows.push(row(t, 'Cross-Tab', 'recon_f', 'revenue', 'recon_revenue', 'Revenue', 'currency', 'Extracted', revenue, null));
@@ -782,9 +797,9 @@ function buildReconciliationTab(records: RecordRow[], fields: FieldsMap): Export
   rows.push(row(t, 'Cross-Tab', 'recon_f', 'check_f', 'recon_check_f', 'Revenue - Profit = Direct Cost?', 'currency', 'Cross-Ref', crossCheck, null, crossCheck < 1 ? 'PASS' : 'FAIL'));
 
   // G: Source tie-out
-  const pr = num(fields['source_pr']);
-  const ap = num(fields['source_ap']);
-  const gl = num(fields['source_gl']);
+  const pr = num(fields['source_pr'] || fields['pr_amount']);
+  const ap = num(fields['source_ap'] || fields['ap_amount']);
+  const gl = num(fields['source_gl'] || fields['gl_amount']);
   const sourceTotal = pr + ap + gl;
   const sourceCheck = Math.abs(sourceTotal - sumJtd);
   rows.push(row(t, 'Source Tie-out', 'recon_g', 'source_total', 'recon_source_total', 'PR + AP + GL Total', 'currency', 'Derived', rd(sourceTotal), null));
