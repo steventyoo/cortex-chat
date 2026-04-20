@@ -226,7 +226,7 @@ export async function materializeProjectProfile(
 
     // Use total_revenues as contract value fallback (negated since it's stored negative)
     if (!contractValue) {
-      const rev = fieldVal(latest.fields, 'total_revenues', 'sales_cost_code_999_rev_budget', 'sales_cost_code_rev_budget');
+      const rev = fieldVal(latest.fields, 'total_revenues', 'sales_cost_code_rev_budget');
       if (rev) contractValue = Math.abs(rev);
     }
   }
