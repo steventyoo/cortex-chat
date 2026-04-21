@@ -39,6 +39,7 @@ function buildMetaPrompt(
   catalogFields: FieldDefinition[],
   contextCardFields: string[],
   fileExt: string,
+  scopedFields?: Map<string, FieldDefinition[]>,
 ): string {
   const fieldDescriptions = catalogFields.map(f => {
     let line = `- "${f.name}" (${f.type}${f.required ? ', REQUIRED' : ''}): ${f.description}`;
@@ -57,7 +58,52 @@ function buildMetaPrompt(
 
   const fileTypeHint = getFileTypeHint(fileExt);
 
-  const secondaryTableSection = buildSecondaryTableSection(skill);
+  const recordScopes = scopedFields
+    ? [...scopedFields.entries()].filter(([s]) => s !== 'doc')
+    : null;
+
+  let secondaryTableSection = '';
+  let recordsFieldList = '';
+
+  if (recordScopes && recordScopes.length > 0) {
+    const primaryScope = recordScopes[0];
+    recordsFieldList = JSON.stringify(primaryScope[1].map(f => f.name));
+
+    if (recordScopes.length > 1) {
+      secondaryTableSection = `\n## Secondary Tables (REQUIRED)\nIn addition to the main "records" array, you MUST also extract these secondary data tables and include them under "secondary_tables" in the output JSON.\n`;
+
+      for (const [scope, scopeFields] of recordScopes.slice(1)) {
+        secondaryTableSection += `\n### Table: "${scope}"\nExtract one row per line item. Columns:\n`;
+        secondaryTableSection += scopeFields.map(f => `- "${f.name}": ${f.description}`).join('\n');
+        secondaryTableSection += '\n';
+      }
+    }
+
+    if (skill.skillId === 'job_cost_report') {
+      secondaryTableSection += `
+### JCR-Specific Parsing Hints for "payroll_transactions"
+This is a Job Cost Report PDF. Payroll (PR) line items appear inside cost-code sections throughout the document.
+
+Structure:
+- Each cost-code section starts with a header like "011 - DS & RD Labor" or "020 - Earthwork"
+- Within each section, look for PR (Payroll) lines — they contain worker names, hours, and amounts
+- Each PR line should produce one row in payroll_transactions
+
+Parsing strategy:
+1. Iterate every page with pdfplumber
+2. Extract text line by line; detect cost-code section headers (pattern: 3-digit code + " - " + description)
+3. Track the current cost code as you move through pages
+4. For each PR line, extract: name, number, regular_hours, overtime_hours, regular_amount, overtime_amount, actual_amount, cost_code, source, document_date, posted_date, check_number, description
+5. Include ALL PR lines from ALL cost codes — there may be thousands across 100+ pages
+6. Do NOT stop early or truncate — capture every single payroll transaction line
+`;
+    }
+  } else {
+    secondaryTableSection = buildSecondaryTableSection(skill);
+    if (skill.multiRecordConfig?.fields) {
+      recordsFieldList = JSON.stringify(skill.multiRecordConfig.fields);
+    }
+  }
 
   return `You are a data extraction engineer. Your job is to write a Python script that extracts structured data from a document.
 
@@ -102,8 +148,8 @@ Your Python script MUST print a single JSON object to stdout with this structure
 
 Rules:
 - "fields" MUST contain ALL required fields listed above. Use \`null\` value and low confidence if not found.
-- "records" is for multi-row data (line items, cost codes, pay apps, workers, etc.). Omit if the document has no tabular data.${skill.multiRecordConfig?.fields ? `
-- "records" MUST use EXACTLY these column names (verbatim, case-sensitive): ${JSON.stringify(skill.multiRecordConfig.fields)}. Each record object must use these as keys. Do NOT rename, abbreviate, or rephrase them.` : ''}${secondaryTableSection ? `
+- "records" is for multi-row data (line items, cost codes, pay apps, workers, etc.). Omit if the document has no tabular data.${recordsFieldList ? `
+- "records" MUST use EXACTLY these column names (verbatim, case-sensitive): ${recordsFieldList}. Each record object must use these as keys. Do NOT rename, abbreviate, or rephrase them.` : ''}${secondaryTableSection ? `
 - "secondary_tables" MUST be populated with the tables described below. Each table is an array of flat row objects (no nested {value, confidence} wrappers — just plain values).` : ''}
 - "discovered_fields" is for ANY other valuable structured data you find that isn't in the required fields. Examples: breakdowns, subtotals, cross-references, summary tables, metadata. Be generous — extract everything useful.
 - confidence: 1.0 = copied verbatim from document, 0.9 = calculated/derived from document data, 0.7-0.8 = inferred with high certainty, <0.7 = uncertain
@@ -125,6 +171,7 @@ The document content is available at \`/tmp/input${fileExt ? '.' + fileExt : ''}
 Write the complete Python script now. Use only the standard library plus: pandas, numpy, openpyxl, pdfplumber, xlrd, python-docx, docx2txt, olefile, python-pptx.`;
 }
 
+/** @deprecated Fallback for skills not yet migrated to scoped skill_fields. */
 function buildSecondaryTableSection(skill: DocumentSkill): string {
   const secondaryTables = skill.multiRecordConfig?.secondaryTables;
   if (!secondaryTables?.length) return '';
@@ -500,12 +547,12 @@ export async function extractWithCodegen(
   contextCardFields: string[],
   classifierConfidence: number,
   fileExt: string,
-  options?: { langfuseParent?: LangfuseParent },
+  options?: { langfuseParent?: LangfuseParent; scopedFields?: Map<string, FieldDefinition[]> },
 ): Promise<CodegenExtractionResult> {
   const t0 = Date.now();
   const client = new Anthropic();
 
-  const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt);
+  const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt, options?.scopedFields);
   const docPreview = sourceText.slice(0, 10_000);
 
   const inputFile: ExtractionFile = {

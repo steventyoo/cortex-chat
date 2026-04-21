@@ -24,6 +24,7 @@ import {
 } from './stores/skills.store';
 import {
   getSkillFieldDefinitions as storeGetSkillFieldDefs,
+  getSkillFieldDefinitionsFlat as storeGetSkillFieldDefsFlat,
 } from './stores/field-catalog.store';
 import type { LangfuseParent } from './langfuse';
 
@@ -47,8 +48,10 @@ export interface DocumentSkill {
   version: number;
   status: 'active' | 'draft' | 'archived';
   systemPrompt: string;
+  /** @deprecated Use field_catalog + skill_fields instead. Kept as JSONB fallback for unmigrated skills. */
   fieldDefinitions: FieldDefinition[];
   targetTable: string;
+  /** @deprecated Use scoped skill_fields instead. Kept for backward compatibility with skills not yet migrated. */
   multiRecordConfig: {
     primaryTable: string;
     fields: string[];
@@ -97,6 +100,7 @@ let _skillsCacheTime = 0;
 
 const _orgAliasCache = new Map<string, { data: Map<string, string[]>; time: number }>();
 const _skillFieldDefsCache = new Map<string, { data: FieldDefinition[]; time: number }>();
+const _skillFieldDefsScopedCache = new Map<string, { data: Map<string, FieldDefinition[]>; time: number }>();
 
 function mapRowToSkill(row: Record<string, unknown>): DocumentSkill {
   const method = String(row.extraction_method || 'llm');
@@ -142,9 +146,12 @@ export async function getSkill(skillId: string): Promise<DocumentSkill | null> {
 }
 
 /**
- * Assembles FieldDefinition[] from skill_fields JOIN field_catalog.
+ * Assembles FieldDefinition[] from skill_fields JOIN field_catalog (doc scope only).
  * This is the single source of truth for what fields a skill should extract.
- * Falls back to skill.fieldDefinitions (legacy JSONB) if no catalog rows exist.
+ *
+ * @deprecated for extraction prompts — use getSkillFieldDefinitionsScoped() instead
+ * to get all scopes (doc + record). Falls back to skill.fieldDefinitions (legacy JSONB)
+ * if no catalog rows exist.
  */
 export async function getSkillFieldDefinitions(skillId: string): Promise<FieldDefinition[]> {
   const now = Date.now();
@@ -153,9 +160,10 @@ export async function getSkillFieldDefinitions(skillId: string): Promise<FieldDe
     return cached.data;
   }
 
-  const fields = await storeGetSkillFieldDefs(skillId);
+  const fields = await storeGetSkillFieldDefsFlat(skillId);
 
   if (fields.length === 0) {
+    // DEPRECATED: JSONB fallback — will be removed once all skills use field_catalog
     console.warn(
       `[skills] No catalog rows for skill "${skillId}" — falling back to legacy fieldDefinitions JSONB. ` +
       `Migrate this skill to field_catalog to remove this fallback.`
@@ -166,6 +174,38 @@ export async function getSkillFieldDefinitions(skillId: string): Promise<FieldDe
 
   const result: FieldDefinition[] = fields as FieldDefinition[];
   _skillFieldDefsCache.set(skillId, { data: result, time: now });
+  return result;
+}
+
+/**
+ * Returns scope-grouped field definitions from skill_fields JOIN field_catalog.
+ * Keys are scope strings (e.g., 'doc', 'cost_code', 'payroll_transactions').
+ * Falls back to legacy JSONB (doc-only) if no catalog rows exist.
+ */
+export async function getSkillFieldDefinitionsScoped(skillId: string): Promise<Map<string, FieldDefinition[]>> {
+  const now = Date.now();
+  const cached = _skillFieldDefsScopedCache.get(skillId);
+  if (cached && now - cached.time < CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const scoped = await storeGetSkillFieldDefs(skillId);
+
+  if (scoped.size === 0) {
+    // DEPRECATED: JSONB fallback — will be removed once all skills use field_catalog
+    console.warn(
+      `[skills] No catalog rows for skill "${skillId}" — falling back to legacy fieldDefinitions JSONB (doc scope only).`
+    );
+    const skill = await getSkill(skillId);
+    const fallback = new Map<string, FieldDefinition[]>();
+    if (skill?.fieldDefinitions?.length) {
+      fallback.set('doc', skill.fieldDefinitions);
+    }
+    return fallback;
+  }
+
+  const result = scoped as Map<string, FieldDefinition[]>;
+  _skillFieldDefsScopedCache.set(skillId, { data: result, time: now });
   return result;
 }
 
@@ -303,7 +343,7 @@ function importanceLabel(imp: 'P' | 'S' | 'E' | 'A'): string {
   }
 }
 
-export function buildSkillPrompt(skill: DocumentSkill, fields: FieldDefinition[], sourceText: string): string {
+export function buildSkillPrompt(skill: DocumentSkill, fields: FieldDefinition[], sourceText: string, scopedFields?: Map<string, FieldDefinition[]>): string {
   const lines: string[] = [];
 
   lines.push(`Extract ALL structured data from the following ${skill.displayName} document.`);
@@ -331,7 +371,36 @@ export function buildSkillPrompt(skill: DocumentSkill, fields: FieldDefinition[]
     lines.push('');
   }
 
-  if (skill.multiRecordConfig && Array.isArray(skill.multiRecordConfig.fields) && skill.multiRecordConfig.fields.length > 0) {
+  const recordScopes = scopedFields
+    ? [...scopedFields.entries()].filter(([s]) => s !== 'doc')
+    : null;
+
+  if (recordScopes && recordScopes.length > 0) {
+    lines.push('## Multi-Record Extraction');
+    lines.push('This document contains MULTIPLE line items / records. You MUST extract EVERY record as a separate entry.');
+    lines.push('');
+    lines.push('The "fields" object should contain document-level summary data (totals, project info, report metadata).');
+    lines.push('');
+
+    const primaryScope = recordScopes[0];
+    lines.push(`The "records" array should contain one entry per ${primaryScope[0].replace(/_/g, ' ')} found in the document.`);
+    lines.push(`Each record MUST use EXACTLY these field names (verbatim, case-sensitive):`);
+    for (const f of primaryScope[1]) {
+      lines.push(`  - ${f.name}: ${f.description}`);
+    }
+    lines.push('');
+    lines.push('Extract ALL records — do not summarize or skip any. Even if there are hundreds, extract every single one.');
+    lines.push('');
+
+    for (const [scope, scopeFields] of recordScopes.slice(1)) {
+      lines.push(`Also extract into "${scope}": each row must use these field names:`);
+      for (const f of scopeFields) {
+        lines.push(`  - ${f.name}: ${f.description}`);
+      }
+      lines.push('');
+    }
+  } else if (skill.multiRecordConfig && Array.isArray(skill.multiRecordConfig.fields) && skill.multiRecordConfig.fields.length > 0) {
+    // DEPRECATED: fallback to JSONB multiRecordConfig for skills not yet migrated
     lines.push('## Multi-Record Extraction');
     lines.push('This document contains MULTIPLE line items / cost codes. You MUST extract EVERY line item as a separate record in the "records" array.');
     lines.push('Each record should contain these fields:');
@@ -393,12 +462,13 @@ export async function extractWithSkill(
   }
 
   tStep = Date.now();
-  const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+  const scopedFieldDefs = await getSkillFieldDefinitionsScoped(skill.skillId);
+  const catalogFields = scopedFieldDefs.get('doc') || [];
   const tCatalog = Date.now() - tStep;
 
   tStep = Date.now();
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const extractionPrompt = buildSkillPrompt(skill, catalogFields, sourceText);
+  const extractionPrompt = buildSkillPrompt(skill, catalogFields, sourceText, scopedFieldDefs);
 
   const isTypedSkill = catalogFields.length > 0;
   const tool = isTypedSkill
@@ -408,7 +478,8 @@ export async function extractWithSkill(
   console.log(`[extract] tool schema debug: mode=${isTypedSkill ? 'typed' : 'general'} skill=${skill.skillId}`);
   console.log(`[extract] tool JSON: ${JSON.stringify(tool)}`);
 
-  const maxTokens = skill.multiRecordConfig ? 64000 : 8192;
+  const hasRecordScopes = scopedFieldDefs.size > 1 || !!skill.multiRecordConfig;
+  const maxTokens = hasRecordScopes ? 64000 : 8192;
 
   const messageParams = {
     model: 'claude-opus-4-6' as const,
@@ -427,7 +498,7 @@ export async function extractWithSkill(
   });
 
   let response;
-  if (skill.multiRecordConfig) {
+  if (hasRecordScopes) {
     const stream = client.messages.stream(messageParams);
     response = await stream.finalMessage();
   } else {
