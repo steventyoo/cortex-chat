@@ -14,24 +14,37 @@ export async function GET(req: NextRequest) {
   }
 
   const sb = getSupabase();
-  let query = sb
-    .from('computed_export')
-    .select('*')
-    .eq('project_id', projectId)
-    .eq('skill_id', skillId)
-    .order('tab')
-    .order('section')
-    .order('record_key');
+  const PAGE_SIZE = 1000;
+  let allRows: Record<string, unknown>[] = [];
+  let from = 0;
+  let hasMore = true;
 
-  if (tab) query = query.eq('tab', tab);
-  if (section) query = query.eq('section', section);
-  if (canonical) query = query.eq('canonical_name', canonical);
+  while (hasMore) {
+    let query = sb
+      .from('computed_export')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('skill_id', skillId)
+      .order('tab')
+      .order('section')
+      .order('record_key')
+      .range(from, from + PAGE_SIZE - 1);
 
-  const { data, error } = await query;
+    if (tab) query = query.eq('tab', tab);
+    if (section) query = query.eq('section', section);
+    if (canonical) query = query.eq('canonical_name', canonical);
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const { data, error } = await query;
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    const page = data || [];
+    allRows = allRows.concat(page);
+    hasMore = page.length === PAGE_SIZE;
+    from += PAGE_SIZE;
   }
 
-  return NextResponse.json({ rows: data || [], count: data?.length || 0 });
+  return NextResponse.json({ rows: allRows, count: allRows.length });
 }

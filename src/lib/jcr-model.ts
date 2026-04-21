@@ -25,6 +25,61 @@ type FieldVal = { value: string | number | null; confidence: number };
 type RecordRow = Record<string, FieldVal>;
 type FieldsMap = Record<string, FieldVal>;
 
+// ── Aggregate payroll transactions into per-cost-code worker summaries ──
+
+function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
+  const groups = new Map<string, RecordRow>();
+
+  const SUM_FIELDS = new Set([
+    'regular_hours', 'overtime_hours', 'doubletime_hours',
+    'actual_amount', 'regular_amount', 'overtime_amount', 'doubletime_amount',
+  ]);
+  const LABEL_FIELDS = new Set(['description', 'cost_category', 'cost_code', 'name', 'source', 'number']);
+
+  for (const txn of transactions) {
+    const codeVal = txn.cost_code?.value ?? txn.number?.value ?? 'unknown';
+    const key = String(typeof codeVal === 'number' ? codeVal : codeVal);
+
+    if (!groups.has(key)) {
+      const seed: RecordRow = {};
+      for (const field of LABEL_FIELDS) {
+        if (txn[field]?.value != null) {
+          seed[field] = { value: txn[field].value, confidence: txn[field].confidence };
+        }
+      }
+      for (const field of SUM_FIELDS) {
+        seed[field] = { value: 0, confidence: 0.9 };
+      }
+      seed.transaction_count = { value: 0, confidence: 1 };
+      groups.set(key, seed);
+    }
+
+    const agg = groups.get(key)!;
+    for (const field of SUM_FIELDS) {
+      const v = txn[field]?.value;
+      if (v != null && typeof v === 'number') {
+        (agg[field] as FieldVal).value = ((agg[field] as FieldVal).value as number) + v;
+      }
+    }
+    (agg.transaction_count as FieldVal).value = ((agg.transaction_count as FieldVal).value as number) + 1;
+  }
+
+  const results = Array.from(groups.values());
+  for (const agg of results) {
+    const regH = (agg.regular_hours?.value as number) || 0;
+    const otH = (agg.overtime_hours?.value as number) || 0;
+    const totalH = regH + otH + ((agg.doubletime_hours?.value as number) || 0);
+    agg.worker_reg_hrs = { value: regH, confidence: 0.9 };
+    agg.worker_ot_hrs = { value: otH, confidence: 0.9 };
+    agg.worker_total_hrs = { value: totalH, confidence: 0.9 };
+    agg.worker_wages = { value: (agg.actual_amount?.value as number) || 0, confidence: 0.9 };
+    agg.worker_ot_pct = { value: totalH > 0 ? (otH / totalH) * 100 : 0, confidence: 0.9 };
+    agg.worker_rate = { value: totalH > 0 ? ((agg.actual_amount?.value as number) || 0) / totalH : 0, confidence: 0.9 };
+  }
+
+  return results;
+}
+
 // ── Orchestrator ─────────────────────────────────────────────
 
 export async function runJcrModel(
@@ -42,7 +97,7 @@ export async function runJcrModel(
 
   const collections: Record<string, RecordRow[]> = {
     cost_code: extractedData.records,
-    worker: extractedData.workerRecords ?? [],
+    worker: aggregateWorkerRecords(extractedData.workerRecords ?? []),
   };
 
   const extractedRows = emitExtractedRows(skillId, extractedData.fields, collections);
