@@ -14,13 +14,13 @@ export default function MaterialTab({ rows }: Props) {
   const pivoted = useMemo(() => {
     const records = pivotByRecordKey(tabRows);
     return records
-      .filter(r => String(r._record_key).startsWith('mat_') && r._record_key !== 'mat_total')
+      .filter(r => String(r._record_key).startsWith('cost_code='))
       .sort((a, b) => n(b.actual) - n(a.actual));
   }, [tabRows]);
 
   const summaryRec = useMemo(() => {
     const records = pivotByRecordKey(tabRows);
-    return records.find(r => r._record_key === 'mat_total');
+    return records.find(r => r._record_key === 'mat_total' || r._record_key === 'material_total');
   }, [tabRows]);
 
   const totalActual = summaryRec ? n(summaryRec.total_actual) : pivoted.reduce((acc, r) => acc + n(r.actual), 0);

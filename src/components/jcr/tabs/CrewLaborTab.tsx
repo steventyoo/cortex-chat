@@ -13,7 +13,7 @@ export default function CrewLaborTab({ rows }: Props) {
   const pivoted = useMemo(() => {
     const records = pivotByRecordKey(tabRows);
     return records
-      .filter(r => String(r._record_key).startsWith('crew_'))
+      .filter(r => String(r._record_key).startsWith('cost_code='))
       .sort((a, b) => n(b.cost) - n(a.cost));
   }, [tabRows]);
 

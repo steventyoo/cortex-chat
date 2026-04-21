@@ -172,7 +172,8 @@ export async function materializeProjectProfile(
     .from('computed_export')
     .select('canonical_name, value_number')
     .eq('project_id', projectId)
-    .in('canonical_name', ['contract_value', 'revised_budget', 'job_to_date_cost']);
+    .eq('record_key', 'project')
+    .in('canonical_name', ['contract_value', 'total_revised_budget', 'total_jtd_cost']);
 
   const baseMap = new Map<string, number>();
   for (const r of baseKpis || []) {
@@ -180,8 +181,8 @@ export async function materializeProjectProfile(
   }
 
   contractValue = baseMap.get('contract_value') || 0;
-  revisedBudget = baseMap.get('revised_budget') || 0;
-  jobToDateCost = baseMap.get('job_to_date_cost') || 0;
+  revisedBudget = baseMap.get('total_revised_budget') || 0;
+  jobToDateCost = baseMap.get('total_jtd_cost') || 0;
 
   // Fall back to raw extracted_data if computed_export is empty
   if (!contractValue && !revisedBudget && !jobToDateCost && jcrDocs.length > 0) {
@@ -409,6 +410,7 @@ export async function materializeProjectProfile(
     .from('computed_export')
     .select('canonical_name, value_number, value_text')
     .eq('project_id', projectId)
+    .eq('record_key', 'project')
     .in('canonical_name', [
       'net_profit', 'gross_margin_pct', 'direct_cost_total',
       'labor_cost', 'material_cost', 'overhead_cost', 'burden_cost',

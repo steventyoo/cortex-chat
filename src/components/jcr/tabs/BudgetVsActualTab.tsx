@@ -13,7 +13,7 @@ export default function BudgetVsActualTab({ rows }: Props) {
   const pivoted = useMemo(() => {
     const records = pivotByRecordKey(tabRows);
     return records
-      .filter(r => String(r._record_key).startsWith('cc_'))
+      .filter(r => String(r._record_key).startsWith('cost_code='))
       .sort((a, b) => n(b.jtd_cost) - n(a.jtd_cost));
   }, [tabRows]);
 
