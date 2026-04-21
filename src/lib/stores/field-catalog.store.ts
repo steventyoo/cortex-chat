@@ -220,6 +220,7 @@ const FIELD_DEF_SELECT = `
   extraction_hint,
   disambiguation_rules,
   sort_order,
+  scope,
   field_catalog (
     canonical_name,
     display_name,
@@ -230,11 +231,43 @@ const FIELD_DEF_SELECT = `
   )
 ` as const;
 
+function assembleFieldDef(
+  row: Record<string, unknown>,
+  catalog: { canonical_name: string; display_name: string; field_type: string; description: string; enum_options: string[] | null },
+): AssembledFieldDef {
+  const name = catalog.canonical_name;
+  const fieldType = (catalog.field_type || 'string') as AssembledFieldDef['type'];
+  const desc = (row.description as string) || catalog.description || '';
+
+  const optionsRaw = row.options as string[] | null;
+  const options = optionsRaw && optionsRaw.length > 0
+    ? optionsRaw
+    : catalog.enum_options && catalog.enum_options.length > 0
+      ? catalog.enum_options
+      : undefined;
+
+  const disambiguationRules = (row.extraction_hint as string) || (row.disambiguation_rules as string) || undefined;
+
+  return {
+    name,
+    type: fieldType,
+    tier: ((row.tier as number) ?? 1) as AssembledFieldDef['tier'],
+    required: (row.required as boolean) ?? false,
+    description: desc,
+    options,
+    disambiguationRules,
+    importance: (row.importance as AssembledFieldDef['importance']) || undefined,
+  };
+}
+
 /**
- * Assemble FieldDefinition-shaped objects from skill_fields JOIN field_catalog.
- * Returns them sorted by sort_order.
+ * Assemble FieldDefinition-shaped objects from skill_fields JOIN field_catalog,
+ * grouped by scope. Returns a Map where keys are scope strings (e.g. 'doc',
+ * 'cost_code', 'payroll_transactions') and values are sorted field arrays.
+ *
+ * Field names use canonical_name from field_catalog (v4 aligned).
  */
-export async function getSkillFieldDefinitions(skillId: string): Promise<AssembledFieldDef[]> {
+export async function getSkillFieldDefinitions(skillId: string): Promise<Map<string, AssembledFieldDef[]>> {
   const sb = getSupabase();
   const { data, error } = await sb
     .from('skill_fields')
@@ -242,9 +275,9 @@ export async function getSkillFieldDefinitions(skillId: string): Promise<Assembl
     .eq('skill_id', skillId)
     .order('sort_order');
 
-  if (error || !data || data.length === 0) return [];
+  const result = new Map<string, AssembledFieldDef[]>();
+  if (error || !data || data.length === 0) return result;
 
-  const fields: AssembledFieldDef[] = [];
   for (const row of data) {
     const catalogRaw = row.field_catalog as unknown;
     const catalog = Array.isArray(catalogRaw) ? catalogRaw[0] : catalogRaw;
@@ -258,32 +291,24 @@ export async function getSkillFieldDefinitions(skillId: string): Promise<Assembl
       enum_options: string[] | null;
     };
 
-    const name = row.display_override || cat.display_name;
-    const fieldType = (cat.field_type || 'string') as AssembledFieldDef['type'];
-    const desc = (row.description as string) || cat.description || '';
+    const scope = (row.scope as string) || 'doc';
+    const field = assembleFieldDef(row, cat);
 
-    const optionsRaw = row.options as string[] | null;
-    const options = optionsRaw && optionsRaw.length > 0
-      ? optionsRaw
-      : cat.enum_options && cat.enum_options.length > 0
-        ? cat.enum_options
-        : undefined;
-
-    const disambiguationRules = (row.extraction_hint as string) || (row.disambiguation_rules as string) || undefined;
-
-    fields.push({
-      name,
-      type: fieldType,
-      tier: ((row.tier as number) ?? 1) as AssembledFieldDef['tier'],
-      required: (row.required as boolean) ?? false,
-      description: desc,
-      options,
-      disambiguationRules,
-      importance: (row.importance as AssembledFieldDef['importance']) || undefined,
-    });
+    const arr = result.get(scope) || [];
+    arr.push(field);
+    result.set(scope, arr);
   }
 
-  return fields;
+  return result;
+}
+
+/**
+ * Convenience wrapper: returns only doc-scoped fields as a flat array.
+ * Used by callers that don't need record-level field grouping.
+ */
+export async function getSkillFieldDefinitionsFlat(skillId: string): Promise<AssembledFieldDef[]> {
+  const scoped = await getSkillFieldDefinitions(skillId);
+  return scoped.get('doc') || [];
 }
 
 /**

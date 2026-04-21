@@ -1,5 +1,5 @@
 import { getSupabase, lookupCategoryId } from '@/lib/supabase';
-import { extractWithSkill, getSkillFieldDefinitions, listActiveSkills, classifyDocument, getSkill } from '@/lib/skills';
+import { extractWithSkill, getSkillFieldDefinitions, getSkillFieldDefinitionsScoped, listActiveSkills, classifyDocument, getSkill } from '@/lib/skills';
 import { extractWithCodegen, type CodegenExtractionResult } from '@/lib/codegen-extractor';
 import { extractWithVision, type VisionExtractionResult } from '@/lib/vision-extractor';
 import { getContextCardFieldsForSkill } from '@/lib/stores/context-cards.store';
@@ -176,7 +176,8 @@ async function processLargePdfVision(opts: {
   }
 
   tStep = Date.now();
-  const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+  const scopedFields = await getSkillFieldDefinitionsScoped(skill.skillId);
+  const catalogFields = scopedFields.get('doc') || [];
 
   let extraction: ExtractionResult;
   let discoveredFields: Record<string, unknown> = {};
@@ -199,7 +200,7 @@ async function processLargePdfVision(opts: {
       const codegenResult: CodegenExtractionResult = await extractWithCodegen(
         rawBuffer, sourceText, skill, catalogFields, contextCardFields,
         classifierConfidence, 'pdf',
-        { langfuseParent: codegenSpan },
+        { langfuseParent: codegenSpan, scopedFields },
       );
       extraction = codegenResult.extraction;
       discoveredFields = codegenResult.discoveredFields;
@@ -608,7 +609,8 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
     });
 
     if (skill?.extractionMethod === 'vision') {
-      const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+      const scopedFields = await getSkillFieldDefinitionsScoped(skill.skillId);
+      const catalogFields = scopedFields.get('doc') || [];
       const fileExt = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : '';
 
       let docBuffer: Buffer;
@@ -668,7 +670,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           const codegenResult: CodegenExtractionResult = await extractWithCodegen(
             docBuffer, sourceText, skill, catalogFields, contextCardFields,
             classification.confidence, fileExt,
-            { langfuseParent: codegenSpan },
+            { langfuseParent: codegenSpan, scopedFields },
           );
           extraction = codegenResult.extraction;
           discoveredFields = codegenResult.discoveredFields;
@@ -714,7 +716,8 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       }
     } else if (skill?.extractionMethod === 'codegen') {
       console.log(`[process] Using CODEGEN extraction for skill=${skill.skillId}`);
-      const catalogFields = await getSkillFieldDefinitions(skill.skillId);
+      const scopedFields2 = await getSkillFieldDefinitionsScoped(skill.skillId);
+      const catalogFields = scopedFields2.get('doc') || [];
       const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
       const fileExt = fileName.includes('.') ? fileName.split('.').pop() || '' : '';
 
@@ -732,7 +735,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         const codegenResult: CodegenExtractionResult = await extractWithCodegen(
           docBuffer, sourceText, skill, catalogFields, contextCardFields,
           classification.confidence, fileExt,
-          { langfuseParent: codegenSpan2 },
+          { langfuseParent: codegenSpan2, scopedFields: scopedFields2 },
         );
         extraction = codegenResult.extraction;
         discoveredFields = codegenResult.discoveredFields;
