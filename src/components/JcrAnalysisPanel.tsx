@@ -53,7 +53,7 @@ export default function JcrAnalysisPanel({ projectId }: { projectId: string | nu
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/jcr-export?projectId=${encodeURIComponent(projectId)}`);
+      const res = await fetch(`/api/export-data?projectId=${encodeURIComponent(projectId)}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Failed to fetch');
       setRows(json.rows || []);

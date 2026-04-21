@@ -17,7 +17,7 @@ Follow this reasoning chain for every data question:
 |---|---|---|
 | Project-level KPIs (fixture count, unit count, contract value, margin, risk score, hours/fixture, productivity) | **project_overview** | Pre-computed profile; fastest single call |
 | Financial drill-downs by cost code, cost breakdowns, budget vs actual | **jcr_analysis** | Queries canonical JCR export rows |
-| Crew composition, labor tiers, worker analytics, blended wage, OT breakdown | **jcr_analysis** (tab: "Crew") | Crew & Labor tab in jcr_export has per-worker tier data derived from payroll |
+| Crew composition, labor tiers, worker analytics, blended wage, OT breakdown | **jcr_analysis** (tab: "Crew") | Crew & Labor tab in computed_export has per-worker tier data derived from payroll |
 | Quantities, fixture schedules, material lists, spec details from submittals / drawings | **search_documents** (RAG) | Full-text + embedding search across all extracted docs |
 | "Find me documents about X", locate a specific file or section | **search_documents** | Retrieval, not aggregation |
 | Cross-document discrepancies, "reconcile JCR vs production" | **reconciliation_check** | Runs rule-based reconciliation engine |
@@ -29,7 +29,7 @@ Follow this reasoning chain for every data question:
 1. Start with **project_overview** whenever the question is about a single project's top-level metrics. If the answer is there, STOP.
 2. If project_overview lacks the detail, pick ONE specific tool from the table above — do not shotgun multiple tools hoping to find data.
 3. Use **search_documents** for anything related to quantities, schedules, specs, or material data that lives in submittals, drawings, or estimates — NOT jcr_analysis.
-4. Use **jcr_analysis** for financial / cost-code data AND for crew/labor analytics (crew tiers, worker breakdowns, blended wages, OT ratios). The jcr_export table contains both financial and labor data.
+4. Use **jcr_analysis** for financial / cost-code data AND for crew/labor analytics (crew tiers, worker breakdowns, blended wages, OT ratios). The computed_export table contains both financial and labor data.
 5. If a tool returns zero results, state that clearly and stop. Do NOT retry with a different tool unless you have a concrete reason the data lives elsewhere.
 
 ## SQL SCHEMA

@@ -881,7 +881,7 @@ async function executeJcrAnalysis(
 
   if (!hasFilter) {
     const { data: indexRows, error: idxErr } = await sb
-      .from('jcr_export')
+      .from('computed_export')
       .select('tab, section, canonical_name, display_name, data_type, value_number, value_text')
       .eq('project_id', projectId)
       .order('tab')
@@ -907,7 +907,7 @@ async function executeJcrAnalysis(
   }
 
   let dbQuery = sb
-    .from('jcr_export')
+    .from('computed_export')
     .select('tab, section, record_key, canonical_name, display_name, data_type, status, value_text, value_number, notes')
     .eq('project_id', projectId);
 

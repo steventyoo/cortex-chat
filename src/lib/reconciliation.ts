@@ -248,14 +248,14 @@ function compareValues(
 }
 
 // ── JCR Export Self-Checks ───────────────────────────────────
-// Reads pre-computed reconciliation tie-outs from the jcr_export
+// Reads pre-computed reconciliation tie-outs from the computed_export
 // Reconciliation tab, which correctly handles filtering (code 999,
 // overhead, category splits) that the generic engine can't do.
 
 async function getJcrExportReconciliation(projectId: string): Promise<ReconciliationCheck[]> {
   const sb = getSupabase();
   const { data: rows } = await sb
-    .from('jcr_export')
+    .from('computed_export')
     .select('section, record_key, canonical_name, display_name, value_number, notes')
     .eq('project_id', projectId)
     .eq('tab', 'Reconciliation');
@@ -525,7 +525,7 @@ export async function reconcileProject(
     c.sourceValue != null || c.targetValue != null || c.message.startsWith('No ')
   );
 
-  // Add pre-computed JCR self-checks from jcr_export Reconciliation tab
+  // Add pre-computed JCR self-checks from computed_export Reconciliation tab
   const jcrSelfChecks = await getJcrExportReconciliation(projectId);
   meaningfulChecks.push(...jcrSelfChecks);
 
