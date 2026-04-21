@@ -82,7 +82,7 @@ type RdFn = (n: number | null | undefined) => number | null;
 
 function createEvaluator(expression: string): (ctx: EvalContext, safeFn: SafeFn, rdFn: RdFn) => unknown {
   try {
-    return new Function('ctx', 'safe', 'rd', 'Math', `"use strict"; return (${expression})`) as
+    return new Function('ctx', 'safe', 'rd', `"use strict"; return (${expression})`) as
       (ctx: EvalContext, safeFn: SafeFn, rdFn: RdFn) => unknown;
   } catch (err) {
     console.error(`[derived-evaluator] Failed to compile expression: ${expression}`, err);
@@ -90,11 +90,17 @@ function createEvaluator(expression: string): (ctx: EvalContext, safeFn: SafeFn,
   }
 }
 
+const STRING_FIELDS = new Set(['cost_code', 'description', 'cost_category', 'name', 'source', 'check_number', 'number']);
+
 function flattenRecord(rec: RecordRow): Record<string, number | string | null> {
   const flat: Record<string, number | string | null> = {};
   for (const [key, field] of Object.entries(rec)) {
     if (!field?.value && field?.value !== 0) {
       flat[key] = null;
+      continue;
+    }
+    if (STRING_FIELDS.has(key)) {
+      flat[key] = String(field.value);
       continue;
     }
     if (typeof field.value === 'number') {
