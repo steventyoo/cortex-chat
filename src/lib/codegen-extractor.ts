@@ -102,7 +102,8 @@ Your Python script MUST print a single JSON object to stdout with this structure
 
 Rules:
 - "fields" MUST contain ALL required fields listed above. Use \`null\` value and low confidence if not found.
-- "records" is for multi-row data (line items, cost codes, pay apps, workers, etc.). Omit if the document has no tabular data.${secondaryTableSection ? `
+- "records" is for multi-row data (line items, cost codes, pay apps, workers, etc.). Omit if the document has no tabular data.${skill.multiRecordConfig?.fields ? `
+- "records" MUST use EXACTLY these column names (verbatim, case-sensitive): ${JSON.stringify(skill.multiRecordConfig.fields)}. Each record object must use these as keys. Do NOT rename, abbreviate, or rephrase them.` : ''}${secondaryTableSection ? `
 - "secondary_tables" MUST be populated with the tables described below. Each table is an array of flat row objects (no nested {value, confidence} wrappers — just plain values).` : ''}
 - "discovered_fields" is for ANY other valuable structured data you find that isn't in the required fields. Examples: breakdowns, subtotals, cross-references, summary tables, metadata. Be generous — extract everything useful.
 - confidence: 1.0 = copied verbatim from document, 0.9 = calculated/derived from document data, 0.7-0.8 = inferred with high certainty, <0.7 = uncertain
@@ -150,7 +151,7 @@ Parsing strategy:
 1. Iterate every page with pdfplumber
 2. Extract text line by line; detect cost-code section headers (pattern: 3-digit code + " - " + description)
 3. Track the current cost code as you move through pages
-4. For each PR line, extract: worker_name, worker_id (if present), hours_type (Regular/Overtime/Double Time), hours, amount, cost_code
+4. For each PR line, extract: name, number, regular_hours, overtime_hours, regular_amount, overtime_amount, actual_amount, cost_code, source, document_date, posted_date, check_number, description
 5. Include ALL PR lines from ALL cost codes — there may be thousands across 100+ pages
 6. Do NOT stop early or truncate — capture every single payroll transaction line
 `;

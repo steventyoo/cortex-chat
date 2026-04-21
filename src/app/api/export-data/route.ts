@@ -7,6 +7,7 @@ export async function GET(req: NextRequest) {
   const tab = searchParams.get('tab');
   const canonical = searchParams.get('canonical');
   const section = searchParams.get('section');
+  const skillId = searchParams.get('skillId') || 'job_cost_report';
 
   if (!projectId) {
     return NextResponse.json({ error: 'projectId required' }, { status: 400 });
@@ -14,9 +15,10 @@ export async function GET(req: NextRequest) {
 
   const sb = getSupabase();
   let query = sb
-    .from('jcr_export')
+    .from('computed_export')
     .select('*')
     .eq('project_id', projectId)
+    .eq('skill_id', skillId)
     .order('tab')
     .order('section')
     .order('record_key');

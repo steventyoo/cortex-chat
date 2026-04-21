@@ -3,20 +3,9 @@
  * Each unique record_key becomes one object with `field` values as keys.
  */
 
-export interface ExportRow {
-  id: string;
-  tab: string;
-  section: string;
-  record_key: string;
-  field: string;
-  canonical_name: string;
-  display_name: string;
-  data_type: string;
-  status: string;
-  value_text: string | null;
-  value_number: number | null;
-  notes: string | null;
-}
+import type { ExportRow } from '@/types/export';
+
+export type { ExportRow };
 
 export type PivotedRecord = Record<string, string | number | null>;
 

@@ -49,7 +49,7 @@ export interface ProjectProfile {
   missingCostCodes: number;
   topSubs: Array<{ name: string; bidAmount: number; coCount: number }>;
   subCoRate: number | null;
-  // Enriched KPIs from jcr_export
+  // Enriched KPIs from computed_export
   netProfit: number | null;
   grossMarginPct: number | null;
   directCostTotal: number | null;
@@ -163,13 +163,13 @@ export async function materializeProjectProfile(
   }
   const totalDocuments = docs.length;
 
-  // 3. Financial KPIs — prefer jcr_export canonical values (already filtered correctly)
+  // 3. Financial KPIs — prefer computed_export canonical values (already filtered correctly)
   const jcrDocs = docs.filter(d => d.skillId === 'job_cost_report');
   let contractValue = 0, revisedBudget = 0, jobToDateCost = 0, percentComplete = 0;
 
-  // Try jcr_export first (these are computed with proper 999/overhead filtering)
+  // Try computed_export first (these are computed with proper 999/overhead filtering)
   const { data: baseKpis } = await sb
-    .from('jcr_export')
+    .from('computed_export')
     .select('canonical_name, value_number')
     .eq('project_id', projectId)
     .in('canonical_name', ['contract_value', 'revised_budget', 'job_to_date_cost']);
@@ -183,7 +183,7 @@ export async function materializeProjectProfile(
   revisedBudget = baseMap.get('revised_budget') || 0;
   jobToDateCost = baseMap.get('job_to_date_cost') || 0;
 
-  // Fall back to raw extracted_data if jcr_export is empty
+  // Fall back to raw extracted_data if computed_export is empty
   if (!contractValue && !revisedBudget && !jobToDateCost && jcrDocs.length > 0) {
     const latest = jcrDocs[jcrDocs.length - 1];
 
@@ -403,10 +403,10 @@ export async function materializeProjectProfile(
   // 8. Sub/vendor KPIs
   const subDocs = docs.filter(d => d.skillId === 'sub_bid');
 
-  // 8b. JCR Export enrichment — read canonical KPIs from jcr_export
+  // 8b. JCR Export enrichment — read canonical KPIs from computed_export
   type JcrRow = { canonical_name: string; value_number: number | null; value_text: string | null };
   const { data: jcrExportRows } = await sb
-    .from('jcr_export')
+    .from('computed_export')
     .select('canonical_name, value_number, value_text')
     .eq('project_id', projectId)
     .in('canonical_name', [
@@ -484,7 +484,7 @@ export async function materializeProjectProfile(
     missingCostCodes,
     topSubs: topSubs.slice(0, 10),
     subCoRate: subCoRate ? Math.round(subCoRate * 100) / 100 : null,
-    // Enriched from jcr_export
+    // Enriched from computed_export
     netProfit: jn('net_profit'),
     grossMarginPct: jn('gross_margin_pct'),
     directCostTotal: jn('direct_cost_total'),
