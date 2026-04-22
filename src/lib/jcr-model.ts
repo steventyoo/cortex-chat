@@ -57,27 +57,50 @@ function codeInRanges(code: number, ranges: CodeRangeEntry[]): boolean {
   return false;
 }
 
-// ── Fix extraction column swap ──────────────────────────────
-// The codegen extractor swaps jtd_cost and over_under_budget:
-//   extracted jtd_cost       = actual plus_minus_budget (actual − budget)
-//   extracted over_under_budget = actual jtd_cost (the real cost)
-// We swap them back here so downstream derived fields work correctly.
+// ── Fix extraction column swap (auto-detecting) ─────────────
+// Some extractions swap jtd_cost and over_under_budget.
+// Heuristic: if abs(jtd_cost) < abs(over_under_budget) for the majority
+// of records, the columns are swapped and need fixing.
 
 function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
+  // Detect whether columns are swapped by checking the majority pattern.
+  // Costs (jtd_cost) are generally larger in absolute value than variances.
+  let swappedCount = 0;
+  let totalChecked = 0;
+  for (const rec of records) {
+    const jtd = rec.jtd_cost?.value as number | null;
+    const ou = rec.over_under_budget?.value as number | null;
+    if (jtd != null && ou != null) {
+      totalChecked++;
+      if (Math.abs(ou) > Math.abs(jtd)) swappedCount++;
+    }
+  }
+
+  const needsSwap = totalChecked > 0 && swappedCount > totalChecked / 2;
+
   return records.map(rec => {
     const fixed = { ...rec };
     const jtdRaw = rec.jtd_cost;
     const ouRaw = rec.over_under_budget;
-    if (jtdRaw && ouRaw) {
+
+    if (needsSwap && jtdRaw && ouRaw) {
       fixed.jtd_cost = { value: ouRaw.value, confidence: ouRaw.confidence };
-      // Recompute over_under as actual − budget (positive = over budget)
       const actual = (ouRaw.value as number) || 0;
       const budget = (fixed.revised_budget?.value as number) || 0;
       fixed.over_under_budget = {
         value: Math.round((actual - budget) * 100) / 100,
         confidence: ouRaw.confidence,
       };
+    } else if (!needsSwap && jtdRaw) {
+      // Columns are correct — just recompute over_under for consistency
+      const actual = (jtdRaw.value as number) || 0;
+      const budget = (fixed.revised_budget?.value as number) || 0;
+      fixed.over_under_budget = {
+        value: Math.round((actual - budget) * 100) / 100,
+        confidence: jtdRaw.confidence,
+      };
     }
+
     const budget = (fixed.revised_budget?.value as number) || 0;
     const actual = (fixed.jtd_cost?.value as number) || 0;
     if (budget > 0) {
