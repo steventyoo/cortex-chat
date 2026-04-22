@@ -154,7 +154,8 @@ Rules:
 - "discovered_fields" is for ANY other valuable structured data you find that isn't in the required fields. Examples: breakdowns, subtotals, cross-references, summary tables, metadata. Be generous — extract everything useful.
 - confidence: 1.0 = copied verbatim from document, 0.9 = calculated/derived from document data, 0.7-0.8 = inferred with high certainty, <0.7 = uncertain
 - source: brief description of where in the document the value was found (page number, section, table header, etc.)
-- Print ONLY the JSON to stdout. No other output. Use json.dumps() with indent=2.
+- IMPORTANT: Write the JSON to the file \`/tmp/output.json\` using compact encoding (no indent). Do NOT print large JSON to stdout — it will be truncated for large documents. Use: \`with open("/tmp/output.json", "w") as f: json.dump(output, f, default=str)\`
+- You may print short progress/status messages to stdout for debugging.
 ${secondaryTableSection || ''}
 ## File Handling
 ${fileTypeHint}
@@ -448,16 +449,21 @@ interface RawCodegenOutput {
 }
 
 function parseCodegenOutput(stdout: string): RawCodegenOutput {
-  const jsonMatch = stdout.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(`[codegen] No JSON object found in script output. stdout: ${stdout.slice(0, 500)}`);
-  }
-
+  // Try direct parse first (output file path — entire string is JSON)
   let parsed: unknown;
   try {
-    parsed = JSON.parse(jsonMatch[0]);
-  } catch (e) {
-    throw new Error(`[codegen] Failed to parse JSON from script output: ${e instanceof Error ? e.message : e}`);
+    parsed = JSON.parse(stdout);
+  } catch {
+    // Fall back to regex extraction (stdout may contain debug messages around the JSON)
+    const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error(`[codegen] No JSON object found in script output. stdout: ${stdout.slice(0, 500)}`);
+    }
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      throw new Error(`[codegen] Failed to parse JSON from script output (${stdout.length} chars): ${e instanceof Error ? e.message : e}`);
+    }
   }
 
   if (!parsed || typeof parsed !== 'object' || !('fields' in parsed)) {

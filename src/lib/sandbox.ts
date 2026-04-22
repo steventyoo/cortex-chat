@@ -295,9 +295,10 @@ export interface ExtractionRunResult {
   exitCode: number;
 }
 
-const EXTRACTION_EXEC_TIMEOUT = 60_000;
+const EXTRACTION_EXEC_TIMEOUT = 120_000;
 const EXTRACTION_SANDBOX_LIFETIME = 3 * 60_000;
 const MAX_EXTRACTION_STDOUT = 500_000;
+const EXTRACTION_OUTPUT_FILE = '/tmp/output.json';
 
 /**
  * Short-lived sandbox for running code-generated extraction scripts at pipeline time.
@@ -366,10 +367,24 @@ export class ExtractionSandbox {
       clearTimeout(timer);
     }
 
-    const stdoutRaw = await result.stdout();
-    const stdout = stdoutRaw.length > MAX_EXTRACTION_STDOUT
-      ? stdoutRaw.slice(-MAX_EXTRACTION_STDOUT)
-      : stdoutRaw;
+    // Prefer reading from the output file (bypasses stdout size limits).
+    // The meta-prompt instructs scripts to write JSON to EXTRACTION_OUTPUT_FILE.
+    let stdout = '';
+    try {
+      const buf = await sb.readFileToBuffer({ path: EXTRACTION_OUTPUT_FILE });
+      if (buf && buf.length > 0) {
+        stdout = buf.toString('utf-8');
+      }
+    } catch {
+      // File doesn't exist — fall back to stdout
+    }
+
+    if (!stdout) {
+      const stdoutRaw = await result.stdout();
+      stdout = stdoutRaw.length > MAX_EXTRACTION_STDOUT
+        ? stdoutRaw.slice(-MAX_EXTRACTION_STDOUT)
+        : stdoutRaw;
+    }
 
     const stderr = result.exitCode !== 0
       ? (await result.stderr()).slice(0, 10_000)
