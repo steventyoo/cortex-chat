@@ -29,9 +29,9 @@ export default function BudgetVsActualTab({ rows }: Props) {
     description: 'TOTAL',
     revised_budget: totalBudget,
     jtd_cost: totalActual,
-    over_under: totalVariance,
-    variance_pct: totalVarPct,
-    total_hours: pivoted.reduce((acc, r) => acc + n(r.total_hours), 0),
+    over_under_budget: totalVariance,
+    bva_variance_pct: totalVarPct,
+    _total_hours: pivoted.reduce((acc, r) => acc + n(r.regular_hours) + n(r.overtime_hours), 0),
   };
 
   const columns: Column<PivotedRecord>[] = [
@@ -59,11 +59,11 @@ export default function BudgetVsActualTab({ rows }: Props) {
       render: (r) => <span className="text-[#333]">{fmtCurrency(n(r.jtd_cost))}</span>,
     },
     {
-      key: 'over_under',
+      key: 'over_under_budget',
       label: 'Variance ($)',
       align: 'right',
       render: (r) => {
-        const val = n(r.over_under);
+        const val = n(r.over_under_budget);
         return (
           <span className={val < 0 ? 'text-red-600' : 'text-[#333]'}>
             {fmtCurrency(val)}
@@ -72,11 +72,11 @@ export default function BudgetVsActualTab({ rows }: Props) {
       },
     },
     {
-      key: 'variance_pct',
+      key: 'bva_variance_pct',
       label: 'Var %',
       align: 'right',
       render: (r) => {
-        const val = n(r.variance_pct);
+        const val = n(r.bva_variance_pct);
         return (
           <span className={val < -5 ? 'text-red-600' : val > 5 ? 'text-emerald-600' : 'text-[#333]'}>
             {fmtPercent(val)}
@@ -85,25 +85,25 @@ export default function BudgetVsActualTab({ rows }: Props) {
       },
     },
     {
-      key: 'total_hours',
+      key: '_total_hours',
       label: 'Hours',
       align: 'right',
       render: (r) => {
-        const val = n(r.total_hours);
+        const val = n(r.regular_hours) + n(r.overtime_hours);
         return <span className="text-[#333]">{val > 0 ? fmtNumber(val, 0) : '—'}</span>;
       },
     },
     {
-      key: 'pct_consumed',
+      key: 'pct_budget_consumed',
       label: '% Used',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{r.pct_consumed != null ? fmtPercent(n(r.pct_consumed)) : '—'}</span>,
+      render: (r) => <span className="text-[#333]">{r.pct_budget_consumed != null ? fmtPercent(n(r.pct_budget_consumed)) : '—'}</span>,
     },
     {
       key: 'status',
       label: 'Status',
       align: 'center',
-      render: (r) => <StatusBadge variancePct={n(r.variance_pct)} />,
+      render: (r) => <StatusBadge variancePct={n(r.bva_variance_pct)} />,
       sortable: false,
     },
   ];

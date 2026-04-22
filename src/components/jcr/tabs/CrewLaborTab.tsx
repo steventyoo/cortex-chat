@@ -8,29 +8,42 @@ import { type ExportRow, pivotByRecordKey, n, s, fmtCurrency, fmtPercent, fmtNum
 interface Props { rows: ExportRow[] }
 
 export default function CrewLaborTab({ rows }: Props) {
-  const tabRows = useMemo(() => rows.filter(r => r.tab === 'Crew Labor'), [rows]);
-
   const pivoted = useMemo(() => {
-    const records = pivotByRecordKey(tabRows);
-    return records
-      .filter(r => String(r._record_key).startsWith('cost_code='))
-      .sort((a, b) => n(b.cost) - n(a.cost));
-  }, [tabRows]);
+    const crewDerived = rows.filter(r => r.tab === 'Crew Labor');
+    const bvaRows = rows.filter(r => r.tab === 'Budget vs Actual');
+
+    const allBva = pivotByRecordKey(bvaRows);
+    const laborCodes = allBva
+      .filter(r =>
+        String(r._record_key).startsWith('cost_code=') &&
+        String(r.cost_category || '').toLowerCase() === 'labor'
+      );
+
+    const derivedByKey = new Map<string, PivotedRecord>();
+    for (const r of pivotByRecordKey(crewDerived)) {
+      derivedByKey.set(String(r._record_key), r);
+    }
+
+    return laborCodes.map(r => {
+      const derived = derivedByKey.get(String(r._record_key));
+      return { ...r, ...(derived || {}) };
+    }).sort((a, b) => Math.abs(n(b.jtd_cost)) - Math.abs(n(a.jtd_cost)));
+  }, [rows]);
 
   const summaryRow: PivotedRecord = {
     _record_key: 'TOTAL',
     _section: '',
     cost_code: '',
     description: 'TOTAL',
-    total_hours: pivoted.reduce((a, r) => a + n(r.total_hours), 0),
-    reg_hours: pivoted.reduce((a, r) => a + n(r.reg_hours), 0),
-    ot_hours: pivoted.reduce((a, r) => a + n(r.ot_hours), 0),
-    cost: pivoted.reduce((a, r) => a + n(r.cost), 0),
-    budget: pivoted.reduce((a, r) => a + n(r.budget), 0),
+    _total_hours: pivoted.reduce((a, r) => a + n(r.regular_hours) + n(r.overtime_hours), 0),
+    regular_hours: pivoted.reduce((a, r) => a + n(r.regular_hours), 0),
+    overtime_hours: pivoted.reduce((a, r) => a + n(r.overtime_hours), 0),
+    jtd_cost: pivoted.reduce((a, r) => a + n(r.jtd_cost), 0),
+    revised_budget: pivoted.reduce((a, r) => a + n(r.revised_budget), 0),
   };
-  const totalH = n(summaryRow.total_hours);
-  summaryRow.ot_pct = totalH > 0 ? (n(summaryRow.ot_hours) / totalH) * 100 : 0;
-  summaryRow.blended_rate = totalH > 0 ? n(summaryRow.cost) / totalH : 0;
+  const totalH = n(summaryRow.regular_hours) + n(summaryRow.overtime_hours);
+  summaryRow.crew_ot_pct = totalH > 0 ? (n(summaryRow.overtime_hours) / totalH) * 100 : 0;
+  summaryRow.crew_blended_rate = totalH > 0 ? n(summaryRow.jtd_cost) / totalH : 0;
 
   const columns: Column<PivotedRecord>[] = [
     {
@@ -45,49 +58,52 @@ export default function CrewLaborTab({ rows }: Props) {
       className: 'min-w-[180px]',
     },
     {
-      key: 'total_hours',
+      key: '_total_hours',
       label: 'Total Hrs',
       align: 'right',
-      render: (r) => <span className="text-[#1a1a1a] font-semibold">{fmtNumber(n(r.total_hours), 1)}</span>,
+      render: (r) => {
+        const val = n(r.regular_hours) + n(r.overtime_hours);
+        return <span className="text-[#1a1a1a] font-semibold">{fmtNumber(val, 1)}</span>;
+      },
     },
     {
-      key: 'reg_hours',
+      key: 'regular_hours',
       label: 'Reg Hrs',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{fmtNumber(n(r.reg_hours), 1)}</span>,
+      render: (r) => <span className="text-[#333]">{fmtNumber(n(r.regular_hours), 1)}</span>,
     },
     {
-      key: 'ot_hours',
+      key: 'overtime_hours',
       label: 'OT Hrs',
       align: 'right',
       render: (r) => {
-        const val = n(r.ot_hours);
+        const val = n(r.overtime_hours);
         return <span className={val > 0 ? 'text-amber-600' : 'text-[#333]'}>{fmtNumber(val, 1)}</span>;
       },
     },
     {
-      key: 'ot_pct',
+      key: 'crew_ot_pct',
       label: 'OT %',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{fmtPercent(n(r.ot_pct))}</span>,
+      render: (r) => <span className="text-[#333]">{fmtPercent(n(r.crew_ot_pct))}</span>,
     },
     {
-      key: 'cost',
+      key: 'jtd_cost',
       label: 'Cost',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{fmtCurrency(n(r.cost))}</span>,
+      render: (r) => <span className="text-[#333]">{fmtCurrency(n(r.jtd_cost))}</span>,
     },
     {
-      key: 'budget',
+      key: 'revised_budget',
       label: 'Budget',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{fmtCurrency(n(r.budget))}</span>,
+      render: (r) => <span className="text-[#333]">{fmtCurrency(n(r.revised_budget))}</span>,
     },
     {
-      key: 'blended_rate',
+      key: 'crew_blended_rate',
       label: '$/Hr',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{r.blended_rate != null ? fmtCurrency(n(r.blended_rate)) : '—'}</span>,
+      render: (r) => <span className="text-[#333]">{n(r.crew_blended_rate) ? fmtCurrency(n(r.crew_blended_rate)) : '—'}</span>,
     },
   ];
 

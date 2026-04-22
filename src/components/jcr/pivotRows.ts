@@ -24,6 +24,31 @@ export function pivotByRecordKey(
   return Array.from(groups.values());
 }
 
+/**
+ * Like pivotByRecordKey but SUM duplicate numeric fields instead of overwriting.
+ * Used for worker transaction rows where the same (record_key, field) appears many times.
+ */
+export function pivotByRecordKeySum(
+  rows: ExportRow[],
+): PivotedRecord[] {
+  const STRING_FIELDS = new Set(['cost_code', 'description', 'cost_category', 'name', 'source', 'check_number', 'number']);
+  const groups = new Map<string, PivotedRecord>();
+
+  for (const r of rows) {
+    const key = r.record_key;
+    if (!groups.has(key)) groups.set(key, { _record_key: key, _section: r.section });
+    const obj = groups.get(key)!;
+
+    if (r.value_number != null && !STRING_FIELDS.has(r.field)) {
+      obj[r.field] = (typeof obj[r.field] === 'number' ? (obj[r.field] as number) : 0) + r.value_number;
+    } else if (obj[r.field] == null) {
+      obj[r.field] = r.value_number ?? r.value_text;
+    }
+  }
+
+  return Array.from(groups.values());
+}
+
 // ── Formatters ──────────────────────────────────────────────
 
 export function fmtCurrency(val: number | null | undefined): string {

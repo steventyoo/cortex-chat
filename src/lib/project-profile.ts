@@ -233,16 +233,17 @@ export async function materializeProjectProfile(
   }
 
   const projectedFinalCost = percentComplete > 0
-    ? (jobToDateCost / (percentComplete / 100))
+    ? (Math.abs(jobToDateCost) / (percentComplete / 100))
     : null;
 
   // If percent complete wasn't in top-level fields, compute from aggregated budget vs JTD
-  if (!percentComplete && revisedBudget > 0 && jobToDateCost > 0) {
-    percentComplete = (jobToDateCost / revisedBudget) * 100;
+  // JTD cost may be stored as negative by accounting convention; use absolute value
+  if (!percentComplete && revisedBudget > 0 && jobToDateCost !== 0) {
+    percentComplete = (Math.abs(jobToDateCost) / revisedBudget) * 100;
   }
 
   const projectedFinalCostFinal = percentComplete > 0
-    ? (jobToDateCost / (percentComplete / 100))
+    ? (Math.abs(jobToDateCost) / (percentComplete / 100))
     : projectedFinalCost;
   const projectedMargin = revisedBudget > 0 && projectedFinalCostFinal
     ? revisedBudget - projectedFinalCostFinal

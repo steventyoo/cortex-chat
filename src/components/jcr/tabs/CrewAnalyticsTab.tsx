@@ -4,52 +4,66 @@ import { useMemo } from 'react';
 import DataTable, { type Column } from '../DataTable';
 import TierBadge from '../TierBadge';
 import TabHeader from '../TabHeader';
-import { type ExportRow, pivotByRecordKey, n, s, fmtCurrency, fmtPercent, fmtNumber, fmtInteger, type PivotedRecord } from '../pivotRows';
+import { type ExportRow, pivotByRecordKeySum, n, s, fmtCurrency, fmtPercent, fmtNumber, fmtInteger, type PivotedRecord } from '../pivotRows';
 
 interface Props { rows: ExportRow[] }
+
+function workerHrs(r: PivotedRecord, field: 'reg' | 'ot' | 'total'): number {
+  if (field === 'reg') return n(r.worker_reg_hrs) || n(r.regular_hours);
+  if (field === 'ot') return n(r.worker_ot_hrs) || n(r.overtime_hours);
+  const reg = n(r.worker_reg_hrs) || n(r.regular_hours);
+  const ot = n(r.worker_ot_hrs) || n(r.overtime_hours);
+  return n(r.worker_total_hrs) || (reg + ot);
+}
+
+function workerWages(r: PivotedRecord): number {
+  return n(r.worker_wages) || n(r.actual_amount);
+}
 
 export default function CrewAnalyticsTab({ rows }: Props) {
   const tabRows = useMemo(() => rows.filter(r => r.tab === 'Crew Analytics'), [rows]);
 
   const workers = useMemo((): PivotedRecord[] => {
-    const records = pivotByRecordKey(tabRows);
+    const records = pivotByRecordKeySum(tabRows);
     return records
       .filter(r => String(r._record_key).startsWith('worker='))
       .map((r): PivotedRecord => {
-        const nameField = tabRows.find(
-          row => row.record_key === r._record_key && row.canonical_name === 'worker_reg_hrs'
-        );
-        const workerName = nameField
-          ? nameField.display_name.replace(/\s*—\s*REG HRS$/, '')
-          : String(r._record_key).replace('worker=', '');
-        return { ...r, _worker_name: workerName };
+        const workerName = s(r.name) || String(r._record_key).replace('worker=', '');
+        const totalH = workerHrs(r, 'total');
+        const wages = workerWages(r);
+        return {
+          ...r,
+          _worker_name: workerName,
+          _total_hrs: totalH,
+          _reg_hrs: workerHrs(r, 'reg'),
+          _ot_hrs: workerHrs(r, 'ot'),
+          _wages: wages,
+          _ot_pct: totalH > 0 ? (workerHrs(r, 'ot') / totalH) * 100 : 0,
+          _rate: totalH > 0 ? wages / totalH : 0,
+        };
       })
-      .sort((a, b) => n(b.worker_total_hrs) - n(a.worker_total_hrs));
+      .sort((a, b) => n(b._total_hrs) - n(a._total_hrs));
   }, [tabRows]);
 
-  const summary = useMemo(() => {
-    const records = pivotByRecordKey(tabRows);
-    return records.find(r => r._record_key === 'crew_summary') || null;
-  }, [tabRows]);
-
-  const summaryRow: PivotedRecord | undefined = workers.length > 0 ? {
-    _record_key: 'TOTAL',
-    _section: '',
-    _worker_name: 'TOTAL',
-    worker_reg_hrs: workers.reduce((a, r) => a + n(r.worker_reg_hrs), 0),
-    worker_ot_hrs: workers.reduce((a, r) => a + n(r.worker_ot_hrs), 0),
-    worker_total_hrs: workers.reduce((a, r) => a + n(r.worker_total_hrs), 0),
-    worker_wages: workers.reduce((a, r) => a + n(r.worker_wages), 0),
-    worker_codes: '',
-    worker_tier: '',
-  } : undefined;
-
-  if (summaryRow) {
-    const totalH = n(summaryRow.worker_total_hrs);
-    summaryRow.worker_ot_pct = totalH > 0 ? (n(summaryRow.worker_ot_hrs) / totalH) * 100 : 0;
-    const totalW = n(summaryRow.worker_wages);
-    summaryRow.worker_rate = totalH > 0 ? totalW / totalH : 0;
-  }
+  const summaryRow: PivotedRecord | undefined = workers.length > 0 ? (() => {
+    const totReg = workers.reduce((a, r) => a + n(r._reg_hrs), 0);
+    const totOt = workers.reduce((a, r) => a + n(r._ot_hrs), 0);
+    const totH = totReg + totOt;
+    const totW = workers.reduce((a, r) => a + n(r._wages), 0);
+    return {
+      _record_key: 'TOTAL',
+      _section: '',
+      _worker_name: 'TOTAL',
+      _reg_hrs: totReg,
+      _ot_hrs: totOt,
+      _total_hrs: totH,
+      _wages: totW,
+      _ot_pct: totH > 0 ? (totOt / totH) * 100 : 0,
+      _rate: totH > 0 ? totW / totH : 0,
+      worker_codes: '',
+      worker_tier: '',
+    };
+  })() : undefined;
 
   const columns: Column<PivotedRecord>[] = [
     {
@@ -64,46 +78,46 @@ export default function CrewAnalyticsTab({ rows }: Props) {
       render: (r) => <span className="text-[#999] text-[11px]">{String(r._record_key).replace('worker=', '')}</span>,
     },
     {
-      key: 'worker_reg_hrs',
+      key: '_reg_hrs',
       label: 'Reg Hrs',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{fmtNumber(n(r.worker_reg_hrs), 1)}</span>,
+      render: (r) => <span className="text-[#333]">{fmtNumber(n(r._reg_hrs), 1)}</span>,
     },
     {
-      key: 'worker_ot_hrs',
+      key: '_ot_hrs',
       label: 'OT Hrs',
       align: 'right',
       render: (r) => {
-        const val = n(r.worker_ot_hrs);
+        const val = n(r._ot_hrs);
         return <span className={val > 0 ? 'text-amber-600' : 'text-[#333]'}>{fmtNumber(val, 1)}</span>;
       },
     },
     {
-      key: 'worker_total_hrs',
+      key: '_total_hrs',
       label: 'Total Hrs',
       align: 'right',
-      render: (r) => <span className="text-[#1a1a1a] font-semibold">{fmtNumber(n(r.worker_total_hrs), 1)}</span>,
+      render: (r) => <span className="text-[#1a1a1a] font-semibold">{fmtNumber(n(r._total_hrs), 1)}</span>,
     },
     {
-      key: 'worker_ot_pct',
+      key: '_ot_pct',
       label: 'OT %',
       align: 'right',
       render: (r) => {
-        const val = n(r.worker_ot_pct);
+        const val = n(r._ot_pct);
         return <span className={val > 15 ? 'text-amber-600' : 'text-[#333]'}>{fmtPercent(val)}</span>;
       },
     },
     {
-      key: 'worker_wages',
+      key: '_wages',
       label: 'Wages ($)',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{fmtCurrency(n(r.worker_wages))}</span>,
+      render: (r) => <span className="text-[#333]">{fmtCurrency(n(r._wages))}</span>,
     },
     {
-      key: 'worker_rate',
+      key: '_rate',
       label: '$/Hr',
       align: 'right',
-      render: (r) => <span className="text-[#333]">{r.worker_rate != null ? fmtCurrency(n(r.worker_rate)) : '—'}</span>,
+      render: (r) => <span className="text-[#333]">{n(r._rate) ? fmtCurrency(n(r._rate)) : '—'}</span>,
     },
     {
       key: 'worker_codes',
@@ -127,22 +141,6 @@ export default function CrewAnalyticsTab({ rows }: Props) {
         title="Crew Analytics"
         subtitle={`${workers.length} workers with hours, wages, and tier classification.`}
       />
-
-      {summary && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-          {[
-            { label: 'Total Labor Hours', value: fmtNumber(n(summary.total_labor_hours), 0) },
-            { label: 'Total OT Hours', value: fmtNumber(n(summary.total_ot_hours), 0) },
-            { label: 'OT Ratio', value: fmtPercent(n(summary.ot_ratio)) },
-            { label: 'Blended Gross Wage', value: fmtCurrency(n(summary.blended_gross_wage)) },
-          ].map(kpi => (
-            <div key={kpi.label} className="bg-[#fafafa] border border-[#e8e8e8] rounded-lg px-3 py-2">
-              <p className="text-[10px] text-[#999] uppercase tracking-wider">{kpi.label}</p>
-              <p className="text-lg font-semibold font-mono text-[#1a1a1a]">{kpi.value}</p>
-            </div>
-          ))}
-        </div>
-      )}
 
       <DataTable
         columns={columns}
