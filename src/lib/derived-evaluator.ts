@@ -42,9 +42,22 @@ type RecordRow = Record<string, { value: string | number | null; confidence: num
 
 // ── Sandbox helpers exposed to expressions ───────────────────
 
-function safe(numerator: number | null | undefined, denominator: number | null | undefined): number | null {
-  if (numerator == null || denominator == null || denominator === 0) return null;
-  return numerator / denominator;
+function safe(
+  first: number | null | undefined | (() => unknown),
+  denominator?: number | null | undefined,
+): number | null {
+  // Overload 1: safe(() => expr) — try/catch wrapper, returns null on error or non-number
+  if (typeof first === 'function') {
+    try {
+      const result = first();
+      return typeof result === 'number' && Number.isFinite(result) ? result : null;
+    } catch {
+      return null;
+    }
+  }
+  // Overload 2: safe(numerator, denominator) — guarded division
+  if (first == null || denominator == null || denominator === 0) return null;
+  return first / denominator;
 }
 
 function rd(n: number | null | undefined): number | null {
@@ -77,7 +90,7 @@ function topologicalSort(specs: DerivedFieldSpec[]): DerivedFieldSpec[] {
   return result;
 }
 
-type SafeFn = (n: number | null | undefined, d: number | null | undefined) => number | null;
+type SafeFn = (first: number | null | undefined | (() => unknown), d?: number | null | undefined) => number | null;
 type RdFn = (n: number | null | undefined) => number | null;
 
 function createEvaluator(expression: string): (ctx: EvalContext, safeFn: SafeFn, rdFn: RdFn) => unknown {
