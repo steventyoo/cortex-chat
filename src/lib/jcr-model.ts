@@ -38,9 +38,14 @@ function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
     const ouRaw = rec.over_under_budget;
     if (jtdRaw && ouRaw) {
       fixed.jtd_cost = { value: ouRaw.value, confidence: ouRaw.confidence };
-      fixed.over_under_budget = { value: jtdRaw.value, confidence: jtdRaw.confidence };
+      // Recompute over_under as actual − budget (positive = over budget)
+      const actual = (ouRaw.value as number) || 0;
+      const budget = (fixed.revised_budget?.value as number) || 0;
+      fixed.over_under_budget = {
+        value: Math.round((actual - budget) * 100) / 100,
+        confidence: ouRaw.confidence,
+      };
     }
-    // Recompute pct_budget_consumed with correct values
     const budget = (fixed.revised_budget?.value as number) || 0;
     const actual = (fixed.jtd_cost?.value as number) || 0;
     if (budget > 0) {
@@ -148,9 +153,14 @@ function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
     const otH = (agg.overtime_hours?.value as number) || 0;
     const dtH = (agg.doubletime_hours?.value as number) || 0;
     const totalH = regH + otH + dtH;
-    const regA = (agg.regular_amount?.value as number) || 0;
     const wages = (agg.actual_amount?.value as number) || 0;
+    const otA = (agg.overtime_amount?.value as number) || 0;
+    const dtA = (agg.doubletime_amount?.value as number) || 0;
     const codes = costCodeSets.get(key)!;
+
+    // regular_amount = total actual minus OT/DT amounts (includes burden)
+    const regA = Math.round((wages - otA - dtA) * 100) / 100;
+    agg.regular_amount = { value: regA, confidence: 0.9 };
 
     agg.worker_reg_hrs = { value: regH, confidence: 0.9 };
     agg.worker_ot_hrs = { value: otH, confidence: 0.9 };

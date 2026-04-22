@@ -159,11 +159,25 @@ function compareNumeric(key: string, field: string, expected: number, actual: nu
 
 /* ── Langfuse sync ─────────────────────────────────────────── */
 
-const LANGFUSE_BATCH_SIZE = 20;
-const LANGFUSE_BATCH_DELAY_MS = 500;
+const LANGFUSE_BATCH_SIZE = 5;
+const LANGFUSE_BATCH_DELAY_MS = 2000;
+const LANGFUSE_MAX_RETRIES = 3;
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function flushWithRetry(lf: ReturnType<typeof getLangfuse>, attempt = 0): Promise<void> {
+  try {
+    await lf.flushAsync();
+  } catch (err) {
+    if (attempt < LANGFUSE_MAX_RETRIES) {
+      const delay = LANGFUSE_BATCH_DELAY_MS * Math.pow(2, attempt);
+      await sleep(delay);
+      return flushWithRetry(lf, attempt + 1);
+    }
+    throw err;
+  }
 }
 
 async function syncToLangfuse(datasetName: string, results: FieldResult[]): Promise<void> {
@@ -173,10 +187,10 @@ async function syncToLangfuse(datasetName: string, results: FieldResult[]): Prom
     await lf.getDataset(datasetName);
   } catch {
     await lf.createDataset({ name: datasetName });
+    await sleep(LANGFUSE_BATCH_DELAY_MS);
     console.log(`  Created Langfuse dataset: ${datasetName}`);
   }
 
-  // Batch dataset item creation to avoid 429s
   for (let i = 0; i < results.length; i += LANGFUSE_BATCH_SIZE) {
     const batch = results.slice(i, i + LANGFUSE_BATCH_SIZE);
     for (const r of batch) {
@@ -188,7 +202,7 @@ async function syncToLangfuse(datasetName: string, results: FieldResult[]): Prom
         metadata: { status: r.status },
       });
     }
-    await lf.flushAsync();
+    await flushWithRetry(lf);
     if (i + LANGFUSE_BATCH_SIZE < results.length) await sleep(LANGFUSE_BATCH_DELAY_MS);
   }
 
@@ -197,17 +211,34 @@ async function syncToLangfuse(datasetName: string, results: FieldResult[]): Prom
     metadata: { dataset: datasetName, totalFields: results.length },
   });
 
-  const dataset = await lf.getDataset(datasetName);
+  await flushWithRetry(lf);
+  await sleep(LANGFUSE_BATCH_DELAY_MS);
 
-  // Batch item linking and scoring
+  let dataset;
+  for (let attempt = 0; attempt <= LANGFUSE_MAX_RETRIES; attempt++) {
+    try {
+      dataset = await lf.getDataset(datasetName);
+      break;
+    } catch {
+      if (attempt === LANGFUSE_MAX_RETRIES) {
+        console.warn(`  ⚠ Could not fetch dataset "${datasetName}" for linking — skipping item links`);
+        dataset = null;
+      } else {
+        await sleep(LANGFUSE_BATCH_DELAY_MS * Math.pow(2, attempt));
+      }
+    }
+  }
+
   for (let i = 0; i < results.length; i += LANGFUSE_BATCH_SIZE) {
     const batch = results.slice(i, i + LANGFUSE_BATCH_SIZE);
     for (const r of batch) {
-      const dsItem = dataset.items.find(
-        (di: { id?: string }) => di.id === `${datasetName}--${r.key}`,
-      );
-      if (dsItem) {
-        dsItem.link(trace, RUN_LABEL);
+      if (dataset?.items) {
+        const dsItem = dataset.items.find(
+          (di: { id?: string }) => di.id === `${datasetName}--${r.key}`,
+        );
+        if (dsItem) {
+          dsItem.link(trace, RUN_LABEL);
+        }
       }
 
       lf.score({
@@ -217,7 +248,7 @@ async function syncToLangfuse(datasetName: string, results: FieldResult[]): Prom
         comment: `${r.key}: ${r.status}${r.delta != null ? ` (delta=${(r.delta * 100).toFixed(2)}%)` : ''}`,
       });
     }
-    await lf.flushAsync();
+    await flushWithRetry(lf);
     if (i + LANGFUSE_BATCH_SIZE < results.length) await sleep(LANGFUSE_BATCH_DELAY_MS);
   }
 
@@ -229,7 +260,7 @@ async function syncToLangfuse(datasetName: string, results: FieldResult[]): Prom
     comment: `${passCount}/${results.length} fields pass`,
   });
 
-  await lf.flushAsync();
+  await flushWithRetry(lf);
 }
 
 /* ── CLI output ────────────────────────────────────────────── */
