@@ -60,9 +60,11 @@ function safe(
   return first / denominator;
 }
 
-function rd(n: number | null | undefined): number | null {
+function rd(n: number | null | undefined, decimals?: number): number | null {
   if (n == null) return null;
-  return Math.round(n * 100) / 100;
+  const d = decimals ?? 2;
+  const factor = Math.pow(10, d);
+  return Math.round(n * factor) / factor;
 }
 
 // ── Core evaluation ──────────────────────────────────────────
@@ -91,7 +93,7 @@ function topologicalSort(specs: DerivedFieldSpec[]): DerivedFieldSpec[] {
 }
 
 type SafeFn = (first: number | null | undefined | (() => unknown), d?: number | null | undefined) => number | null;
-type RdFn = (n: number | null | undefined) => number | null;
+type RdFn = (n: number | null | undefined, decimals?: number) => number | null;
 
 function createEvaluator(expression: string): (ctx: EvalContext, safeFn: SafeFn, rdFn: RdFn) => unknown {
   try {
@@ -194,7 +196,7 @@ export async function evaluateDerivedFields(
     const evalFn = createEvaluator(spec.expression);
 
     try {
-      if (spec.scope === 'doc') {
+      if (spec.scope === 'doc' || spec.scope === 'project') {
         const result = evalFn(ctx, safe, rd);
         const numVal = typeof result === 'number' ? rd(result) : null;
         const textVal = typeof result === 'string' ? result : null;
