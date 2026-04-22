@@ -95,20 +95,48 @@ function fixDocLevelFields(fields: FieldsMap, costCodeRecords: RecordRow[], code
   const revRanges = codeRanges.revenue ?? [999];
   let budgetSum = 0;
   let jtdSum = 0;
+  let revenueFromCodes = 0;
   for (const rec of costCodeRecords) {
     const code = parseInt(String(rec.cost_code?.value ?? '0'), 10);
-    if (codeInRanges(code, revRanges)) continue;
+    if (codeInRanges(code, revRanges)) {
+      revenueFromCodes += Math.abs((rec.jtd_cost?.value as number) || 0);
+      continue;
+    }
     budgetSum += (rec.revised_budget?.value as number) || 0;
     jtdSum += (rec.jtd_cost?.value as number) || 0;
   }
 
   budgetSum = Math.round(budgetSum * 100) / 100;
   jtdSum = Math.round(jtdSum * 100) / 100;
+  revenueFromCodes = Math.round(revenueFromCodes * 100) / 100;
   const overUnder = Math.round((budgetSum - jtdSum) * 100) / 100;
 
   fixed.total_revised_budget = { value: budgetSum, confidence: 0.95 };
   fixed.total_jtd_cost = { value: jtdSum, confidence: 0.95 };
   fixed.overunder_budget_line = { value: overUnder, confidence: 0.95 };
+
+  // Map job_totals_revenue: prefer extracted field, fall back to contract_value, then revenue code sum
+  if (!fixed.job_totals_revenue?.value) {
+    const cv = fixed.contract_value?.value;
+    const revenue = cv != null ? Math.abs(cv as number) : revenueFromCodes;
+    if (revenue > 0) {
+      fixed.job_totals_revenue = { value: revenue, confidence: 0.9 };
+    }
+  }
+
+  // Map job_totals_expenses: prefer extracted, fall back to computed total_jtd_cost
+  if (!fixed.job_totals_expenses?.value && jtdSum > 0) {
+    fixed.job_totals_expenses = { value: jtdSum, confidence: 0.9 };
+  }
+
+  // Map job_totals_net: prefer extracted, compute from revenue - expenses
+  if (!fixed.job_totals_net?.value) {
+    const rev = (fixed.job_totals_revenue?.value as number) || 0;
+    const exp = (fixed.job_totals_expenses?.value as number) || jtdSum;
+    if (rev > 0) {
+      fixed.job_totals_net = { value: Math.round((rev - exp) * 100) / 100, confidence: 0.9 };
+    }
+  }
 
   if (budgetSum > 0) {
     fixed.overall_pct_budget_consumed = {
