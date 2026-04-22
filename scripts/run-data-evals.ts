@@ -33,19 +33,21 @@ function parseArgs() {
   let skill = '';
   let suite: 'all' | 'derived' | 'extraction' = 'all';
   let record: string | null = null;
+  let noLangfuse = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--skill' && args[i + 1]) skill = args[i + 1];
     if (args[i] === '--suite' && args[i + 1]) suite = args[i + 1] as typeof suite;
     if (args[i] === '--record' && args[i + 1]) record = args[i + 1];
+    if (args[i] === '--no-langfuse') noLangfuse = true;
   }
 
   if (!skill) {
-    console.error('Usage: npx tsx scripts/run-data-evals.ts --skill <skill_id> [--suite derived|extraction|all] [--record <record_key>]');
+    console.error('Usage: npx tsx scripts/run-data-evals.ts --skill <skill_id> [--suite derived|extraction|all] [--record <record_key>] [--no-langfuse]');
     process.exit(1);
   }
 
-  return { skill, suite, record };
+  return { skill, suite, record, noLangfuse };
 }
 
 /* ── Load labels dynamically ───────────────────────────────── */
@@ -320,12 +322,13 @@ function fmt(v: number | null): string {
 /* ── Main ──────────────────────────────────────────────────── */
 
 async function main() {
-  const { skill, suite, record } = parseArgs();
+  const { skill, suite, record, noLangfuse } = parseArgs();
 
   console.log(`\nData Accuracy Eval — ${RUN_LABEL}`);
   console.log(`Skill:  ${skill}`);
   console.log(`Suite:  ${suite}`);
   if (record) console.log(`Record: ${record}`);
+  if (noLangfuse) console.log(`Langfuse: disabled`);
 
   const labels = await loadLabels(skill);
   console.log(`\nLoaded labels for ${labels.skillId} (project: ${labels.projectId})`);
@@ -342,8 +345,10 @@ async function main() {
   if (suite === 'all' || suite === 'derived') {
     const derivedResults = labels.derivedLabels.map((l) => scoreDerived(l, pivot));
     printSummary('DERIVED FIELDS ACCURACY', labels.langfuse.derivedDataset, derivedResults);
-    await syncToLangfuse(labels.langfuse.derivedDataset, derivedResults);
-    console.log(`  → Synced to Langfuse dataset: ${labels.langfuse.derivedDataset}\n`);
+    if (!noLangfuse) {
+      await syncToLangfuse(labels.langfuse.derivedDataset, derivedResults);
+      console.log(`  → Synced to Langfuse dataset: ${labels.langfuse.derivedDataset}\n`);
+    }
   }
 
   // Run extraction suite
@@ -371,14 +376,20 @@ async function main() {
     if (wkResults.length > 0) printSummary('WORKER EXTRACTION', labels.langfuse.extractionDataset, wkResults);
     if (otherResults.length > 0) printSummary('REPORT RECORD EXTRACTION', labels.langfuse.extractionDataset, otherResults);
 
-    await syncToLangfuse(labels.langfuse.extractionDataset, extractionResults);
-    console.log(`  → Synced to Langfuse dataset: ${labels.langfuse.extractionDataset}\n`);
+    if (!noLangfuse) {
+      await syncToLangfuse(labels.langfuse.extractionDataset, extractionResults);
+      console.log(`  → Synced to Langfuse dataset: ${labels.langfuse.extractionDataset}\n`);
+    }
   }
 
   console.log(`\nRun label: ${RUN_LABEL}`);
-  console.log('View results in Langfuse → Datasets\n');
+  if (noLangfuse) {
+    console.log('Langfuse sync skipped (--no-langfuse)\n');
+  } else {
+    console.log('View results in Langfuse → Datasets\n');
+  }
 
-  await shutdownLangfuse();
+  if (!noLangfuse) await shutdownLangfuse();
 }
 
 main().catch((err) => {

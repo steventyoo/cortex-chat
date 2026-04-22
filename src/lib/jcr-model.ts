@@ -55,22 +55,34 @@ function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
   });
 }
 
-function fixDocLevelFields(fields: FieldsMap): FieldsMap {
+function fixDocLevelFields(fields: FieldsMap, costCodeRecords: RecordRow[]): FieldsMap {
   const fixed = { ...fields };
 
-  // total_jtd_cost and overunder_budget_line are also swapped
-  const jtdRaw = fields.total_jtd_cost;
-  const ouRaw = fields.overunder_budget_line;
-  if (jtdRaw && ouRaw) {
-    fixed.total_jtd_cost = { value: ouRaw.value, confidence: ouRaw.confidence };
-    fixed.overunder_budget_line = { value: jtdRaw.value, confidence: jtdRaw.confidence };
+  // The codegen extractor produces unreliable doc-level totals (columns
+  // are mislabelled).  Compute authoritative values from cost-code sums
+  // excluding revenue code 999.
+  let budgetSum = 0;
+  let jtdSum = 0;
+  for (const rec of costCodeRecords) {
+    const code = String(rec.cost_code?.value ?? '');
+    if (code === '999') continue;
+    budgetSum += (rec.revised_budget?.value as number) || 0;
+    jtdSum += (rec.jtd_cost?.value as number) || 0;
   }
 
-  // Recompute overall_pct_budget_consumed with corrected values
-  const budget = (fixed.total_revised_budget?.value as number) || 0;
-  const actual = (fixed.total_jtd_cost?.value as number) || 0;
-  if (budget > 0) {
-    fixed.overall_pct_budget_consumed = { value: Math.round((actual / budget) * 10000) / 100, confidence: 0.9 };
+  budgetSum = Math.round(budgetSum * 100) / 100;
+  jtdSum = Math.round(jtdSum * 100) / 100;
+  const overUnder = Math.round((budgetSum - jtdSum) * 100) / 100;
+
+  fixed.total_revised_budget = { value: budgetSum, confidence: 0.95 };
+  fixed.total_jtd_cost = { value: jtdSum, confidence: 0.95 };
+  fixed.overunder_budget_line = { value: overUnder, confidence: 0.95 };
+
+  if (budgetSum > 0) {
+    fixed.overall_pct_budget_consumed = {
+      value: Math.round((jtdSum / budgetSum) * 10000) / 100,
+      confidence: 0.95,
+    };
   }
 
   return fixed;
@@ -92,15 +104,30 @@ function computeSourceAmounts(
     fixed.pr_amount = { value: Math.round(prTotal * 100) / 100, confidence: 0.9 };
   }
 
-  // Total direct cost is from total_jtd_cost (already swapped)
+  // AP amount = sum of jtd_cost for material (2xx, 039), subcontract (011),
+  // and other non-labor/non-burden/non-revenue cost codes that aren't PR.
+  // Simpler: AP = total_direct - PR - burden - overhead(100).
+  // But the reliable method per schema: sum cost codes that are clearly AP
+  // (material + subcontract + equipment).
+  // For now: AP = total_jtd_cost - PR - GL, where GL is overhead (code 100).
   const totalDirect = (fixed.total_jtd_cost?.value as number) || 0;
   const prAmt = (fixed.pr_amount?.value as number) || 0;
-  const apAmt = (fixed.ap_amount?.value as number) || 0;
 
-  // GL = total_direct - PR - AP (residual)
+  // GL (general ledger) = code 100 jtd_cost (Overhead/Misc)
+  let glAmount = 0;
+  for (const rec of costCodeRecords) {
+    const code = String(rec.cost_code?.value ?? '');
+    if (code === '100') {
+      glAmount += (rec.jtd_cost?.value as number) || 0;
+    }
+  }
+  glAmount = Math.round(glAmount * 100) / 100;
+  fixed.gl_amount = { value: glAmount, confidence: 0.85 };
+
+  // AP = residual: total direct cost - PR - GL
   if (totalDirect > 0) {
-    const glCalc = Math.round((totalDirect - prAmt - apAmt) * 100) / 100;
-    fixed.gl_amount = { value: glCalc, confidence: 0.85 };
+    const apCalc = Math.round((totalDirect - prAmt - glAmount) * 100) / 100;
+    fixed.ap_amount = { value: apCalc, confidence: 0.85 };
   }
 
   return fixed;
@@ -192,8 +219,8 @@ export async function runJcrModel(
 
   console.log(`[jcr-model] Starting run=${runId} project=${projectId} pipeline_log=${pipelineLogId}`);
 
-  const fixedFields = fixDocLevelFields(extractedData.fields);
   const fixedRecords = fixCostCodeColumnSwap(extractedData.records);
+  const fixedFields = fixDocLevelFields(extractedData.fields, fixedRecords);
   const workerAgg = aggregateWorkerRecords(extractedData.workerRecords ?? []);
 
   // Compute corrected source amounts from PR transactions
