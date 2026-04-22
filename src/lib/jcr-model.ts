@@ -25,36 +25,114 @@ type FieldVal = { value: string | number | null; confidence: number };
 type RecordRow = Record<string, FieldVal>;
 type FieldsMap = Record<string, FieldVal>;
 
-// ── Aggregate payroll transactions into per-cost-code worker summaries ──
+// ── Fix extraction column swap ──────────────────────────────
+// The codegen extractor swaps jtd_cost and over_under_budget:
+//   extracted jtd_cost       = actual plus_minus_budget (actual − budget)
+//   extracted over_under_budget = actual jtd_cost (the real cost)
+// We swap them back here so downstream derived fields work correctly.
+
+function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
+  return records.map(rec => {
+    const fixed = { ...rec };
+    const jtdRaw = rec.jtd_cost;
+    const ouRaw = rec.over_under_budget;
+    if (jtdRaw && ouRaw) {
+      fixed.jtd_cost = { value: ouRaw.value, confidence: ouRaw.confidence };
+      fixed.over_under_budget = { value: jtdRaw.value, confidence: jtdRaw.confidence };
+    }
+    // Recompute pct_budget_consumed with correct values
+    const budget = (fixed.revised_budget?.value as number) || 0;
+    const actual = (fixed.jtd_cost?.value as number) || 0;
+    if (budget > 0) {
+      fixed.pct_budget_consumed = { value: Math.round((actual / budget) * 10000) / 100, confidence: 0.9 };
+    }
+    return fixed;
+  });
+}
+
+function fixDocLevelFields(fields: FieldsMap): FieldsMap {
+  const fixed = { ...fields };
+
+  // total_jtd_cost and overunder_budget_line are also swapped
+  const jtdRaw = fields.total_jtd_cost;
+  const ouRaw = fields.overunder_budget_line;
+  if (jtdRaw && ouRaw) {
+    fixed.total_jtd_cost = { value: ouRaw.value, confidence: ouRaw.confidence };
+    fixed.overunder_budget_line = { value: jtdRaw.value, confidence: jtdRaw.confidence };
+  }
+
+  // Recompute overall_pct_budget_consumed with corrected values
+  const budget = (fixed.total_revised_budget?.value as number) || 0;
+  const actual = (fixed.total_jtd_cost?.value as number) || 0;
+  if (budget > 0) {
+    fixed.overall_pct_budget_consumed = { value: Math.round((actual / budget) * 10000) / 100, confidence: 0.9 };
+  }
+
+  return fixed;
+}
+
+// Compute PR/GL/AP source amounts from transactions and cost code data
+function computeSourceAmounts(
+  fields: FieldsMap,
+  workerTransactions: RecordRow[],
+  costCodeRecords: RecordRow[],
+): FieldsMap {
+  const fixed = { ...fields };
+
+  // PR amount = sum of all payroll transaction actual_amount
+  if (workerTransactions.length > 0) {
+    const prTotal = workerTransactions.reduce(
+      (s, t) => s + ((t.actual_amount?.value as number) || 0), 0,
+    );
+    fixed.pr_amount = { value: Math.round(prTotal * 100) / 100, confidence: 0.9 };
+  }
+
+  // Total direct cost is from total_jtd_cost (already swapped)
+  const totalDirect = (fixed.total_jtd_cost?.value as number) || 0;
+  const prAmt = (fixed.pr_amount?.value as number) || 0;
+  const apAmt = (fixed.ap_amount?.value as number) || 0;
+
+  // GL = total_direct - PR - AP (residual)
+  if (totalDirect > 0) {
+    const glCalc = Math.round((totalDirect - prAmt - apAmt) * 100) / 100;
+    fixed.gl_amount = { value: glCalc, confidence: 0.85 };
+  }
+
+  return fixed;
+}
+
+// ── Aggregate payroll transactions into per-worker summaries ──
 
 function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
   const groups = new Map<string, RecordRow>();
+  const costCodeSets = new Map<string, Set<string>>();
 
   const SUM_FIELDS = new Set([
     'regular_hours', 'overtime_hours', 'doubletime_hours',
     'actual_amount', 'regular_amount', 'overtime_amount', 'doubletime_amount',
   ]);
-  const LABEL_FIELDS = new Set(['description', 'cost_category', 'cost_code', 'name', 'source', 'number']);
 
   for (const txn of transactions) {
-    const codeVal = txn.cost_code?.value ?? txn.number?.value ?? 'unknown';
-    const key = String(typeof codeVal === 'number' ? codeVal : codeVal);
+    const workerName = String(txn.name?.value ?? 'unknown');
+    const key = workerName;
 
     if (!groups.has(key)) {
       const seed: RecordRow = {};
-      for (const field of LABEL_FIELDS) {
-        if (txn[field]?.value != null) {
-          seed[field] = { value: txn[field].value, confidence: txn[field].confidence };
-        }
-      }
+      seed.name = { value: workerName, confidence: 0.9 };
+      if (txn.source?.value) seed.source = { value: txn.source.value, confidence: 0.9 };
       for (const field of SUM_FIELDS) {
         seed[field] = { value: 0, confidence: 0.9 };
       }
       seed.transaction_count = { value: 0, confidence: 1 };
       groups.set(key, seed);
+      costCodeSets.set(key, new Set());
     }
 
     const agg = groups.get(key)!;
+    const codes = costCodeSets.get(key)!;
+
+    if (txn.cost_code?.value) codes.add(String(txn.cost_code.value));
+
     for (const field of SUM_FIELDS) {
       const v = txn[field]?.value;
       if (v != null && typeof v === 'number') {
@@ -64,17 +142,26 @@ function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
     (agg.transaction_count as FieldVal).value = ((agg.transaction_count as FieldVal).value as number) + 1;
   }
 
-  const results = Array.from(groups.values());
-  for (const agg of results) {
+  const results: RecordRow[] = [];
+  for (const [key, agg] of groups) {
     const regH = (agg.regular_hours?.value as number) || 0;
     const otH = (agg.overtime_hours?.value as number) || 0;
-    const totalH = regH + otH + ((agg.doubletime_hours?.value as number) || 0);
+    const dtH = (agg.doubletime_hours?.value as number) || 0;
+    const totalH = regH + otH + dtH;
+    const regA = (agg.regular_amount?.value as number) || 0;
+    const wages = (agg.actual_amount?.value as number) || 0;
+    const codes = costCodeSets.get(key)!;
+
     agg.worker_reg_hrs = { value: regH, confidence: 0.9 };
     agg.worker_ot_hrs = { value: otH, confidence: 0.9 };
     agg.worker_total_hrs = { value: totalH, confidence: 0.9 };
-    agg.worker_wages = { value: (agg.actual_amount?.value as number) || 0, confidence: 0.9 };
+    agg.worker_wages = { value: wages, confidence: 0.9 };
     agg.worker_ot_pct = { value: totalH > 0 ? (otH / totalH) * 100 : 0, confidence: 0.9 };
-    agg.worker_rate = { value: totalH > 0 ? ((agg.actual_amount?.value as number) || 0) / totalH : 0, confidence: 0.9 };
+    agg.worker_rate = { value: totalH > 0 ? wages / totalH : 0, confidence: 0.9 };
+    agg.worker_nominal_rate = { value: regH > 0 ? regA / regH : 0, confidence: 0.9 };
+    agg.worker_codes = { value: codes.size, confidence: 0.9 };
+
+    results.push(agg);
   }
 
   return results;
@@ -95,16 +182,25 @@ export async function runJcrModel(
 
   console.log(`[jcr-model] Starting run=${runId} project=${projectId} pipeline_log=${pipelineLogId}`);
 
+  const fixedFields = fixDocLevelFields(extractedData.fields);
+  const fixedRecords = fixCostCodeColumnSwap(extractedData.records);
+  const workerAgg = aggregateWorkerRecords(extractedData.workerRecords ?? []);
+
+  // Compute corrected source amounts from PR transactions
+  const finalFields = computeSourceAmounts(fixedFields, extractedData.workerRecords ?? [], fixedRecords);
+
+  console.log(`[jcr-model] Fixed column swap for ${fixedRecords.length} cost codes, aggregated ${workerAgg.length} workers from ${extractedData.workerRecords?.length ?? 0} transactions`);
+
   const collections: Record<string, RecordRow[]> = {
-    cost_code: extractedData.records,
-    worker: aggregateWorkerRecords(extractedData.workerRecords ?? []),
+    cost_code: fixedRecords,
+    worker: workerAgg,
   };
 
-  const extractedRows = emitExtractedRows(skillId, extractedData.fields, collections);
+  const extractedRows = emitExtractedRows(skillId, finalFields, collections);
 
   const derivedRows = await evaluateDerivedFields(
     skillId,
-    { fields: extractedData.fields, collections },
+    { fields: finalFields, collections },
     meta as Record<string, unknown>,
   );
 

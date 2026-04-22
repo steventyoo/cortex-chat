@@ -245,11 +245,11 @@ export async function materializeProjectProfile(
   const projectedFinalCostFinal = percentComplete > 0
     ? (Math.abs(jobToDateCost) / (percentComplete / 100))
     : projectedFinalCost;
-  const projectedMargin = revisedBudget > 0 && projectedFinalCostFinal
-    ? revisedBudget - projectedFinalCostFinal
+  const projectedMargin = contractValue > 0 && projectedFinalCostFinal
+    ? contractValue - projectedFinalCostFinal
     : null;
-  const projectedMarginPct = revisedBudget > 0 && projectedMargin != null
-    ? (projectedMargin / revisedBudget) * 100
+  const projectedMarginPct = contractValue > 0 && projectedMargin != null
+    ? (projectedMargin / contractValue) * 100
     : null;
 
   // Also compute total over/under from JCR records if available
@@ -428,6 +428,8 @@ export async function materializeProjectProfile(
       'crew_total_hours_pr', 'crew_total_ot_hours_pr', 'crew_ot_ratio_pr',
       'blended_gross_wage_pr', 'total_workers',
       'total_labor_hours', 'source_pr', 'source_ap',
+      'pr_src_cost_per_hr', 'straight_time_rate', 'burden_total',
+      'overall_pct_budget_consumed',
     ]);
 
   const jcrMap = new Map<string, JcrRow>();
@@ -467,7 +469,7 @@ export async function materializeProjectProfile(
     totalBudgetHours: totalBudgetHours || null,
     totalActualHours: totalActualHours || null,
     laborProductivityRatio: laborProductivityRatio ? Math.round(laborProductivityRatio * 1000) / 1000 : null,
-    blendedLaborRate: driftMetrics?.actualLaborRate ? Math.round(driftMetrics.actualLaborRate * 100) / 100 : null,
+    blendedLaborRate: jn('blended_gross_wage') ?? (driftMetrics?.actualLaborRate ? Math.round(driftMetrics.actualLaborRate * 100) / 100 : null),
     estimatedLaborRate: driftMetrics?.estimatedLaborRate ? Math.round(driftMetrics.estimatedLaborRate * 100) / 100 : null,
     totalCos: coDocs.length,
     totalCoValue: Math.round(totalCoValue),
