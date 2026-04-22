@@ -25,6 +25,38 @@ type FieldVal = { value: string | number | null; confidence: number };
 type RecordRow = Record<string, FieldVal>;
 type FieldsMap = Record<string, FieldVal>;
 
+// Schema-driven code range definitions loaded from document_skills.code_ranges
+type CodeRangeEntry = number | [number, number];
+interface CodeRanges {
+  revenue?: CodeRangeEntry[];
+  labor?: CodeRangeEntry[];
+  material?: CodeRangeEntry[];
+  burden?: CodeRangeEntry[];
+  gl_overhead?: CodeRangeEntry[];
+  subcontract?: CodeRangeEntry[];
+  [key: string]: CodeRangeEntry[] | undefined;
+}
+
+const DEFAULT_CODE_RANGES: CodeRanges = {
+  revenue: [999],
+  labor: [11, [100, 199]],
+  material: [39, [200, 299]],
+  burden: [995, 998],
+  gl_overhead: [11, 100],
+  subcontract: [[600, 699]],
+};
+
+function codeInRanges(code: number, ranges: CodeRangeEntry[]): boolean {
+  for (const entry of ranges) {
+    if (typeof entry === 'number') {
+      if (code === entry) return true;
+    } else if (Array.isArray(entry) && entry.length === 2) {
+      if (code >= entry[0] && code <= entry[1]) return true;
+    }
+  }
+  return false;
+}
+
 // ── Fix extraction column swap ──────────────────────────────
 // The codegen extractor swaps jtd_cost and over_under_budget:
 //   extracted jtd_cost       = actual plus_minus_budget (actual − budget)
@@ -55,17 +87,17 @@ function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
   });
 }
 
-function fixDocLevelFields(fields: FieldsMap, costCodeRecords: RecordRow[]): FieldsMap {
+function fixDocLevelFields(fields: FieldsMap, costCodeRecords: RecordRow[], codeRanges: CodeRanges): FieldsMap {
   const fixed = { ...fields };
 
-  // The codegen extractor produces unreliable doc-level totals (columns
-  // are mislabelled).  Compute authoritative values from cost-code sums
-  // excluding revenue code 999.
+  // Compute authoritative doc-level totals from cost-code sums,
+  // excluding revenue codes defined in the skill's code_ranges.
+  const revRanges = codeRanges.revenue ?? [999];
   let budgetSum = 0;
   let jtdSum = 0;
   for (const rec of costCodeRecords) {
-    const code = String(rec.cost_code?.value ?? '');
-    if (code === '999') continue;
+    const code = parseInt(String(rec.cost_code?.value ?? '0'), 10);
+    if (codeInRanges(code, revRanges)) continue;
     budgetSum += (rec.revised_budget?.value as number) || 0;
     jtdSum += (rec.jtd_cost?.value as number) || 0;
   }
@@ -93,10 +125,10 @@ function computeSourceAmounts(
   fields: FieldsMap,
   workerTransactions: RecordRow[],
   costCodeRecords: RecordRow[],
+  codeRanges: CodeRanges,
 ): FieldsMap {
   const fixed = { ...fields };
 
-  // PR amount = sum of all payroll transaction actual_amount
   if (workerTransactions.length > 0) {
     const prTotal = workerTransactions.reduce(
       (s, t) => s + ((t.actual_amount?.value as number) || 0), 0,
@@ -104,20 +136,15 @@ function computeSourceAmounts(
     fixed.pr_amount = { value: Math.round(prTotal * 100) / 100, confidence: 0.9 };
   }
 
-  // AP amount = sum of jtd_cost for material (2xx, 039), subcontract (011),
-  // and other non-labor/non-burden/non-revenue cost codes that aren't PR.
-  // Simpler: AP = total_direct - PR - burden - overhead(100).
-  // But the reliable method per schema: sum cost codes that are clearly AP
-  // (material + subcontract + equipment).
-  // For now: AP = total_jtd_cost - PR - GL, where GL is overhead (code 100).
   const totalDirect = (fixed.total_jtd_cost?.value as number) || 0;
   const prAmt = (fixed.pr_amount?.value as number) || 0;
 
-  // GL (general ledger) = code 100 jtd_cost (Overhead/Misc)
+  // GL = sum of jtd_cost for gl_overhead codes (configurable via code_ranges)
+  const glRanges = codeRanges.gl_overhead ?? [100];
   let glAmount = 0;
   for (const rec of costCodeRecords) {
-    const code = String(rec.cost_code?.value ?? '');
-    if (code === '100') {
+    const code = parseInt(String(rec.cost_code?.value ?? '0'), 10);
+    if (codeInRanges(code, glRanges)) {
       glAmount += (rec.jtd_cost?.value as number) || 0;
     }
   }
@@ -219,12 +246,22 @@ export async function runJcrModel(
 
   console.log(`[jcr-model] Starting run=${runId} project=${projectId} pipeline_log=${pipelineLogId}`);
 
+  // Load code_ranges from the skill config (falls back to Sage defaults)
+  let codeRanges: CodeRanges = DEFAULT_CODE_RANGES;
+  const { data: skillRow } = await sb
+    .from('document_skills')
+    .select('code_ranges')
+    .eq('skill_id', skillId)
+    .maybeSingle();
+  if (skillRow?.code_ranges) {
+    codeRanges = skillRow.code_ranges as CodeRanges;
+  }
+
   const fixedRecords = fixCostCodeColumnSwap(extractedData.records);
-  const fixedFields = fixDocLevelFields(extractedData.fields, fixedRecords);
+  const fixedFields = fixDocLevelFields(extractedData.fields, fixedRecords, codeRanges);
   const workerAgg = aggregateWorkerRecords(extractedData.workerRecords ?? []);
 
-  // Compute corrected source amounts from PR transactions
-  const finalFields = computeSourceAmounts(fixedFields, extractedData.workerRecords ?? [], fixedRecords);
+  const finalFields = computeSourceAmounts(fixedFields, extractedData.workerRecords ?? [], fixedRecords, codeRanges);
 
   console.log(`[jcr-model] Fixed column swap for ${fixedRecords.length} cost codes, aggregated ${workerAgg.length} workers from ${extractedData.workerRecords?.length ?? 0} transactions`);
 
@@ -238,7 +275,7 @@ export async function runJcrModel(
   const derivedRows = await evaluateDerivedFields(
     skillId,
     { fields: finalFields, collections },
-    meta as Record<string, unknown>,
+    { ...meta, code_ranges: codeRanges } as Record<string, unknown>,
   );
 
   const allRows = [...extractedRows, ...derivedRows];
