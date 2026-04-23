@@ -82,20 +82,48 @@ function buildMetaPrompt(
     if (skill.skillId === 'job_cost_report') {
       secondaryTableSection += `
 ### JCR-Specific Parsing Hints for "payroll_transactions"
-This is a Job Cost Report PDF. Payroll (PR) line items appear inside cost-code sections throughout the document.
+This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF. It contains cost-code sections, payroll transactions, and Job Totals.
 
-Structure:
-- Each cost-code section starts with a header like "011 - DS & RD Labor" or "020 - Earthwork"
-- Within each section, look for PR (Payroll) lines — they contain worker names, hours, and amounts
-- Each PR line should produce one row in payroll_transactions
+## Document Structure (Sage JDR)
+1. **Header**: Job number, job name, company, report period, report date
+2. **Cost Code Sections** (100+ pages): Each section starts with a header line like:
+   \`\`\`
+   011 - DS & RD Labor                Original Budget    Revised Budget    Open Commits    JTD Cost    Over/Under Budget
+   \`\`\`
+3. **Cost Code Totals Row**: At the end of each cost code section, the totals row has columns:
+   \`Original Budget | Revised Budget | Open Commits | JTD Cost | Over/Under Budget | Regular Hours | Overtime Hours\`
+   - Hours columns are ONLY present for labor codes (011, 100-199) — material/subcontract codes have no hours
+   - **CRITICAL**: The column order matters! Over/Under Budget = actual − budget (positive = over budget). Do NOT swap JTD Cost and Over/Under.
+4. **Payroll (PR) Transaction Lines**: Inside each cost code section, PR lines have this format:
+   \`\`\`
+   PR  <ref_number>  <date>  <employee_code>  <Worker Name>
+   MM/DD/YY  Regular: <hours> hours  <AMOUNT>
+   \`\`\`
+   - The worker name appears on one line, hours/amounts on the NEXT line(s)
+   - \`<AMOUNT>\` after "Regular:" is the **BASE WAGE** (not burdened)
+   - Overtime lines appear as: \`MM/DD/YY  Overtime: <hours> hours  <AMOUNT>\`
+   - Some workers span multiple cost codes — group by worker name
+5. **Burden Codes** (995, 998): Special cost codes for payroll burden and taxes
+   - 995 = Payroll Burden (benefits, insurance)
+   - 998 = Payroll Taxes (FICA, FUTA, SUTA)
+   - These have budget and actual amounts but NO individual PR transaction lines
+6. **Revenue Code 999**: Negative in Sage (credit). Use abs() for revenue-related fields.
+7. **Job Totals Section** (end of document):
+   - "Revenue" or "Total AR Billings": negative number in Sage → use abs()
+   - "Total Expenses": positive, sum of all cost code actuals
+   - "Net" or "Net Profit": Revenue − Expenses
+   - "Retainage": amount held back
+   - **"by Source"** subsection: breaks expenses into PR, AP, GL totals
+     - PR total here is BURDENED (includes 995/998 burden allocation)
 
-Parsing strategy:
+## Parsing Strategy
 1. Iterate every page with pdfplumber
 2. Extract text line by line; detect cost-code section headers (pattern: 3-digit code + " - " + description)
 3. Track the current cost code as you move through pages
 4. For each PR line, extract: name, number, regular_hours, overtime_hours, regular_amount, overtime_amount, actual_amount, cost_code, source, document_date, posted_date, check_number, description
 5. Include ALL PR lines from ALL cost codes — there may be thousands across 100+ pages
 6. Do NOT stop early or truncate — capture every single payroll transaction line
+7. At the end, parse the "Job Totals" section for revenue, expenses, net, retainage, and by-source breakdowns
 `;
     }
   } else {
@@ -188,20 +216,25 @@ function buildSecondaryTableSection(skill: DocumentSkill): string {
   if (skill.skillId === 'job_cost_report') {
     section += `
 ### JCR-Specific Parsing Hints for "payroll_transactions"
-This is a Job Cost Report PDF. Payroll (PR) line items appear inside cost-code sections throughout the document.
+This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF.
 
-Structure:
-- Each cost-code section starts with a header like "011 - DS & RD Labor" or "020 - Earthwork"
-- Within each section, look for PR (Payroll) lines — they contain worker names, hours, and amounts
-- Each PR line should produce one row in payroll_transactions
+## Document Structure
+- Cost code sections start with: \`<3-digit code> - <Description>\`
+- Cost Code Totals columns: Original Budget | Revised Budget | Open Commits | JTD Cost | Over/Under Budget | Regular Hours | Overtime Hours
+- PR transaction lines: worker name on one line, hours/amounts on the next line(s)
+- Format: \`PR <ref> <date> <emp_code> <Name>\` then \`MM/DD/YY Regular: N hours AMOUNT\`
+- regular_amount = BASE WAGE (not burdened). Do NOT include burden codes 995/998.
+- Burden codes: 995 = Payroll Burden, 998 = Payroll Taxes (have totals but no PR lines)
+- Revenue code 999 is NEGATIVE in Sage — use abs() for revenue fields
+- Job Totals section at end: Revenue, Expenses, Net, Retainage, "by Source" (PR/AP/GL)
 
 Parsing strategy:
 1. Iterate every page with pdfplumber
-2. Extract text line by line; detect cost-code section headers (pattern: 3-digit code + " - " + description)
-3. Track the current cost code as you move through pages
-4. For each PR line, extract: name, number, regular_hours, overtime_hours, regular_amount, overtime_amount, actual_amount, cost_code, source, document_date, posted_date, check_number, description
-5. Include ALL PR lines from ALL cost codes — there may be thousands across 100+ pages
-6. Do NOT stop early or truncate — capture every single payroll transaction line
+2. Detect cost-code headers (pattern: 3-digit code + " - " + description)
+3. Track current cost code across pages
+4. Extract ALL PR lines: name, hours, amounts, cost_code, source
+5. Do NOT stop early or truncate — capture every payroll transaction
+6. Parse Job Totals section at the end for summary fields
 `;
   }
 
@@ -369,7 +402,7 @@ async function generateParserCode(
   if (previousError) {
     messages.push({
       role: 'user',
-      content: `${metaPrompt}\n\nHere is a preview of the document content (first 10000 chars):\n\`\`\`\n${documentPreview}\n\`\`\``,
+      content: `${metaPrompt}\n\nHere is a preview of the document content (first 20000 chars):\n\`\`\`\n${documentPreview}\n\`\`\``,
     });
     messages.push({
       role: 'assistant',
@@ -382,7 +415,7 @@ async function generateParserCode(
   } else {
     messages.push({
       role: 'user',
-      content: `${metaPrompt}\n\nHere is a preview of the document content (first 10000 chars):\n\`\`\`\n${documentPreview}\n\`\`\`\n\nWrite the complete Python extraction script now. Output ONLY Python code, no explanation.`,
+      content: `${metaPrompt}\n\nHere is a preview of the document content (first 20000 chars):\n\`\`\`\n${documentPreview}\n\`\`\`\n\nWrite the complete Python extraction script now. Output ONLY Python code, no explanation.`,
     });
   }
 
@@ -543,6 +576,158 @@ function normalizeToExtractionResult(
   };
 }
 
+// ── JCR Post-Extraction Validation ───────────────────────────
+// Quick self-consistency checks on the extracted data. Failures trigger
+// an informed retry that includes the generated code + a structured report.
+
+interface JcrValidationCheck {
+  name: string;
+  status: 'pass' | 'fail' | 'skip';
+  expected?: number;
+  actual?: number;
+  hint?: string;
+}
+
+function validateJcrExtraction(raw: RawCodegenOutput): { passed: boolean; checks: JcrValidationCheck[] } {
+  const checks: JcrValidationCheck[] = [];
+
+  const getFieldNum = (name: string): number | null => {
+    const f = raw.fields[name];
+    if (!f || f.value == null) return null;
+    return typeof f.value === 'number' ? f.value : parseFloat(String(f.value));
+  };
+
+  const records = raw.records || [];
+  const prTable = raw.secondary_tables?.payroll_transactions || [];
+
+  // Check 1: Cost code records exist
+  if (records.length === 0) {
+    checks.push({ name: 'cost_code_records_exist', status: 'fail', hint: 'No cost code records extracted. Look for "Cost Code Totals" rows with columns: Original Budget | Revised Budget | Open Commits | JTD Cost | Over/Under Budget | Reg Hours | OT Hours' });
+  } else {
+    checks.push({ name: 'cost_code_records_exist', status: 'pass', actual: records.length });
+  }
+
+  // Check 2: PR transactions exist
+  if (prTable.length === 0) {
+    checks.push({ name: 'payroll_transactions_exist', status: 'fail', hint: 'No payroll transactions extracted. PR lines appear inside each cost code section with format: "PR <ref> <date> <emp_code> <Name>" followed by hours/amounts on next lines.' });
+  } else {
+    checks.push({ name: 'payroll_transactions_exist', status: 'pass', actual: prTable.length });
+  }
+
+  // Check 3: JTD Cost should NOT equal Over/Under Budget for most codes (column swap detection)
+  if (records.length > 5) {
+    let swapCount = 0;
+    for (const rec of records.slice(0, 20)) {
+      const jtd = toNum(rec.jtd_cost);
+      const oub = toNum(rec.over_under_budget);
+      const orig = toNum(rec.original_budget);
+      if (jtd != null && oub != null && orig != null && orig !== 0) {
+        if (Math.abs(jtd - (orig - oub)) < 1 && Math.abs(oub - (orig - jtd)) > 10) {
+          swapCount++;
+        }
+      }
+    }
+    if (swapCount > 3) {
+      checks.push({ name: 'column_swap_detection', status: 'fail', actual: swapCount, hint: 'Likely JTD Cost / Over/Under Budget column swap. In Sage JDR, column order is: Original Budget | Revised Budget | Open Commits | JTD Cost | Over/Under Budget. Over/Under = actual − budget.' });
+    } else {
+      checks.push({ name: 'column_swap_detection', status: 'pass' });
+    }
+  }
+
+  // Check 4: Job Totals fields should be populated
+  const revenue = getFieldNum('job_totals_revenue');
+  const expenses = getFieldNum('job_totals_expenses');
+  if (revenue == null || expenses == null) {
+    checks.push({ name: 'job_totals_populated', status: 'fail', hint: 'job_totals_revenue and/or job_totals_expenses are missing. These are in the "Job Totals" section at the end of the document.' });
+  } else {
+    checks.push({ name: 'job_totals_populated', status: 'pass', actual: revenue });
+
+    // Check 5: Revenue should be positive (abs of Sage negative)
+    if (revenue < 0) {
+      checks.push({ name: 'revenue_sign', status: 'fail', expected: Math.abs(revenue), actual: revenue, hint: 'Revenue should be positive. Sage shows revenue as negative (credit). Apply abs().' });
+    } else {
+      checks.push({ name: 'revenue_sign', status: 'pass' });
+    }
+
+    // Check 6: Expenses should roughly equal sum of cost code JTD costs (excl. 999)
+    if (records.length > 0) {
+      let sumJtd = 0;
+      for (const rec of records) {
+        const code = toNum(rec.cost_code);
+        const jtd = toNum(rec.jtd_cost);
+        if (jtd != null && code !== 999) sumJtd += jtd;
+      }
+      const diff = Math.abs(expenses - sumJtd);
+      const pct = expenses > 0 ? (diff / expenses) * 100 : 0;
+      if (pct > 5) {
+        checks.push({ name: 'expenses_vs_cost_code_sum', status: 'fail', expected: expenses, actual: sumJtd, hint: `Job Totals Expenses (${expenses}) differs from sum of cost code JTD costs excl. 999 (${sumJtd.toFixed(2)}) by ${pct.toFixed(1)}%. Check for missing cost codes or incorrect JTD values.` });
+      } else {
+        checks.push({ name: 'expenses_vs_cost_code_sum', status: 'pass' });
+      }
+    }
+  }
+
+  // Check 7: Burden codes should be present
+  if (records.length > 0) {
+    const has995 = records.some(r => toNum(r.cost_code) === 995);
+    const has998 = records.some(r => toNum(r.cost_code) === 998);
+    if (!has995 || !has998) {
+      checks.push({ name: 'burden_codes_present', status: 'fail', hint: `Missing burden codes: ${!has995 ? '995 (Payroll Burden)' : ''} ${!has998 ? '998 (Payroll Taxes)' : ''}. These are special cost codes near the end of the cost code listing, before code 999.` });
+    } else {
+      checks.push({ name: 'burden_codes_present', status: 'pass' });
+    }
+  }
+
+  // Check 8: Labor codes should have hours
+  if (records.length > 0) {
+    const laborNoHours = records.filter(r => {
+      const code = toNum(r.cost_code);
+      if (code == null) return false;
+      const isLabor = (code >= 100 && code < 200) || code === 11;
+      if (!isLabor) return false;
+      const regH = toNum(r.regular_hours);
+      const otH = toNum(r.overtime_hours);
+      return (regH == null || regH === 0) && (otH == null || otH === 0);
+    });
+    if (laborNoHours.length > 3) {
+      checks.push({ name: 'labor_codes_have_hours', status: 'fail', actual: laborNoHours.length, hint: `${laborNoHours.length} labor codes (011, 1xx) have no hours. Hours appear in the last two columns of Cost Code Totals rows: "Regular Hours | Overtime Hours".` });
+    } else {
+      checks.push({ name: 'labor_codes_have_hours', status: 'pass' });
+    }
+  }
+
+  const failures = checks.filter(c => c.status === 'fail');
+  return { passed: failures.length === 0, checks };
+}
+
+function toNum(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'object' && v !== null && 'value' in v) {
+    return toNum((v as Record<string, unknown>).value);
+  }
+  const n = parseFloat(String(v));
+  return isNaN(n) ? null : n;
+}
+
+function buildValidationRetryMessage(code: string, checks: JcrValidationCheck[]): string {
+  const failures = checks.filter(c => c.status === 'fail');
+  let msg = `The script ran successfully but the extracted data has ${failures.length} quality issue(s):\n\n`;
+
+  for (const check of failures) {
+    msg += `## ISSUE: ${check.name}\n`;
+    if (check.expected != null) msg += `  Expected: ${check.expected}\n`;
+    if (check.actual != null) msg += `  Got: ${check.actual}\n`;
+    if (check.hint) msg += `  Fix: ${check.hint}\n`;
+    msg += '\n';
+  }
+
+  msg += `\nHere is the Python code that produced these results:\n\`\`\`python\n${code}\n\`\`\`\n\n`;
+  msg += 'Please fix the specific issues listed above. Output ONLY the corrected Python code.';
+
+  return msg;
+}
+
 // ── Main entry point ─────────────────────────────────────────
 
 export async function extractWithCodegen(
@@ -559,7 +744,7 @@ export async function extractWithCodegen(
   const client = new Anthropic();
 
   const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt, options?.scopedFields);
-  const docPreview = sourceText.slice(0, 10_000);
+  const docPreview = sourceText.slice(0, 20_000);
 
   const inputFile: ExtractionFile = {
     path: `/tmp/input${fileExt ? '.' + fileExt : ''}`,
@@ -625,6 +810,30 @@ export async function extractWithCodegen(
 
     try {
       const raw = parseCodegenOutput(result.stdout);
+
+      // JCR post-extraction validation: check self-consistency before accepting
+      if (skill.skillId === 'job_cost_report' && attempt < MAX_RETRIES) {
+        const validation = validateJcrExtraction(raw);
+        if (!validation.passed) {
+          const failCount = validation.checks.filter(c => c.status === 'fail').length;
+          console.warn(`[codegen] JCR validation failed (attempt ${attempt + 1}): ${failCount} issue(s)`);
+          for (const c of validation.checks.filter(ch => ch.status === 'fail')) {
+            console.warn(`  - ${c.name}: ${c.hint?.slice(0, 120)}`);
+          }
+
+          options?.langfuseParent?.span({
+            name: 'jcr-validation-fail',
+            input: { attempt: attempt + 1, checks: validation.checks },
+            output: { failCount },
+          });
+
+          lastError = buildValidationRetryMessage(code, validation.checks);
+          retries++;
+          continue;
+        }
+        console.log(`[codegen] JCR validation passed: ${validation.checks.length} checks`);
+      }
+
       const normalized = normalizeToExtractionResult(raw, skill, classifierConfidence);
       normalized.metadata.retries = retries;
       normalized.metadata.generatedCode = code;
