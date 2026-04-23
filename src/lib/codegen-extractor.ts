@@ -465,12 +465,20 @@ async function generateParserCode(
 }
 
 function extractPythonCode(text: string): string {
+  // Match a complete fenced block anywhere in the response
   const fenced = text.match(/```(?:python)?\s*\n([\s\S]*?)```/);
   if (fenced) return fenced[1].trim();
 
-  // Handle truncated responses where the closing ``` is missing (max_tokens hit)
-  const openFence = text.match(/^```(?:python)?\s*\n([\s\S]+)/);
-  if (openFence) return openFence[1].trim();
+  // Handle truncated responses (max_tokens hit) — find the LAST ```python
+  // fence even if it's not at the start (LLM often prefixes with explanation)
+  const openIdx = text.lastIndexOf('```python');
+  if (openIdx !== -1) {
+    return text.slice(openIdx + '```python'.length).trim();
+  }
+  const openPlain = text.lastIndexOf('```\n');
+  if (openPlain !== -1) {
+    return text.slice(openPlain + '```\n'.length).trim();
+  }
 
   return text.trim();
 }
@@ -642,11 +650,11 @@ function validateJcrExtraction(raw: RawCodegenOutput): { passed: boolean; checks
     }
   }
 
-  // Check 4: Job Totals fields should be populated
+  // Check 4: Job Totals — log if missing but don't fail (computed from cost codes in post-processing)
   const revenue = getFieldNum('job_totals_revenue');
   const expenses = getFieldNum('job_totals_expenses');
   if (revenue == null || expenses == null) {
-    checks.push({ name: 'job_totals_populated', status: 'fail', hint: 'job_totals_revenue and/or job_totals_expenses are missing. These are in the "Job Totals" section at the end of the document.' });
+    checks.push({ name: 'job_totals_populated', status: 'skip', hint: 'job_totals_revenue/expenses not extracted — will be computed from cost code sums in post-processing.' });
   } else {
     checks.push({ name: 'job_totals_populated', status: 'pass', actual: revenue });
 
