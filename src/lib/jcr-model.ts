@@ -138,27 +138,45 @@ function fixDocLevelFields(fields: FieldsMap, costCodeRecords: RecordRow[], code
   fixed.total_jtd_cost = { value: jtdSum, confidence: 0.95 };
   fixed.overunder_budget_line = { value: overUnder, confidence: 0.95 };
 
-  // Map job_totals_revenue: prefer extracted field, fall back to contract_value, then revenue code sum
-  if (!fixed.job_totals_revenue?.value) {
-    const cv = fixed.contract_value?.value;
-    const revenue = cv != null ? Math.abs(cv as number) : revenueFromCodes;
-    if (revenue > 0) {
-      fixed.job_totals_revenue = { value: revenue, confidence: 0.9 };
+  // Revenue: authoritative = abs(code 999 jtd_cost). Fall back to contract_value.
+  const cv = fixed.contract_value?.value;
+  const authRevenue = revenueFromCodes > 0
+    ? revenueFromCodes
+    : cv != null ? Math.abs(cv as number) : 0;
+
+  if (authRevenue > 0) {
+    const llmRevenue = fixed.job_totals_revenue?.value as number | null;
+    if (llmRevenue != null && Math.abs(llmRevenue - authRevenue) > 1) {
+      console.warn(
+        `[jcr-model] job_totals_revenue: LLM extracted ${llmRevenue}, cost-code derived ${authRevenue} — using derived`,
+      );
     }
+    fixed.job_totals_revenue = { value: authRevenue, confidence: 0.95 };
   }
 
-  // Map job_totals_expenses: prefer extracted, fall back to computed total_jtd_cost
-  if (!fixed.job_totals_expenses?.value && jtdSum > 0) {
-    fixed.job_totals_expenses = { value: jtdSum, confidence: 0.9 };
+  // Expenses: authoritative = sum of non-revenue jtd_cost
+  if (jtdSum > 0) {
+    const llmExpenses = fixed.job_totals_expenses?.value as number | null;
+    if (llmExpenses != null && Math.abs(llmExpenses - jtdSum) > 1) {
+      console.warn(
+        `[jcr-model] job_totals_expenses: LLM extracted ${llmExpenses}, cost-code derived ${jtdSum} — using derived`,
+      );
+    }
+    fixed.job_totals_expenses = { value: jtdSum, confidence: 0.95 };
   }
 
-  // Map job_totals_net: prefer extracted, compute from revenue - expenses
-  if (!fixed.job_totals_net?.value) {
-    const rev = (fixed.job_totals_revenue?.value as number) || 0;
-    const exp = (fixed.job_totals_expenses?.value as number) || jtdSum;
-    if (rev > 0) {
-      fixed.job_totals_net = { value: Math.round((rev - exp) * 100) / 100, confidence: 0.9 };
+  // Net: computed from authoritative revenue and expenses
+  const finalRev = (fixed.job_totals_revenue?.value as number) || 0;
+  const finalExp = (fixed.job_totals_expenses?.value as number) || 0;
+  if (finalRev > 0) {
+    const netVal = Math.round((finalRev - finalExp) * 100) / 100;
+    const llmNet = fixed.job_totals_net?.value as number | null;
+    if (llmNet != null && Math.abs(llmNet - netVal) > 1) {
+      console.warn(
+        `[jcr-model] job_totals_net: LLM extracted ${llmNet}, computed ${netVal} — using computed`,
+      );
     }
+    fixed.job_totals_net = { value: netVal, confidence: 0.95 };
   }
 
   if (budgetSum > 0) {
@@ -223,9 +241,12 @@ function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
   ]);
 
   for (const txn of transactions) {
-    const workerName = String(
-      txn.name?.value ?? txn.worker_name?.value ?? txn.employee_name?.value ?? txn.employee?.value ?? 'unknown'
-    ).trim();
+    const rawName =
+      txn.name?.value ?? txn.worker_name?.value ?? txn.employee_name?.value
+      ?? txn.employee?.value ?? txn.emp_name?.value ?? txn.worker?.value ?? null;
+    const workerName = rawName != null && String(rawName).trim() !== ''
+      ? String(rawName).trim()
+      : 'unknown';
     const key = workerName;
 
     if (!groups.has(key)) {
@@ -320,7 +341,14 @@ export async function runJcrModel(
     const sample = sampleTxns[0];
     const keys = Object.keys(sample);
     const nameVal = sample.name?.value ?? sample.worker_name?.value ?? sample.employee_name?.value;
-    console.warn(`[jcr-model] Worker aggregation produced only ${workerAgg.length} worker(s) from ${sampleTxns.length} txns. Sample txn keys: [${keys.join(', ')}] name=${nameVal}`);
+    const uniqueNames = new Set(sampleTxns.slice(0, 50).map(t =>
+      String(t.name?.value ?? t.worker_name?.value ?? t.employee_name?.value ?? t.employee?.value ?? t.emp_name?.value ?? t.worker?.value ?? '<none>')
+    ));
+    console.warn(
+      `[jcr-model] Worker aggregation produced only ${workerAgg.length} worker(s) from ${sampleTxns.length} txns.` +
+      ` Sample keys: [${keys.join(', ')}] first name=${nameVal}` +
+      ` unique names (first 50 txns): [${[...uniqueNames].slice(0, 10).join(', ')}]`,
+    );
   }
 
   const finalFields = computeSourceAmounts(fixedFields, extractedData.workerRecords ?? [], fixedRecords, codeRanges);
