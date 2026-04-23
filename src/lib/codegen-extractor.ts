@@ -780,7 +780,8 @@ function validateJcrExtraction(raw: RawCodegenOutput): { passed: boolean; checks
       const txnHours = txnHoursByCode.get(code) || 0;
       const ratio = txnHours / ccHours;
       if (ratio < 0.5) {
-        const desc = rec.description?.value || rec.description || '';
+        const rawDesc = rec.description as Record<string, unknown> | string | undefined;
+        const desc = typeof rawDesc === 'string' ? rawDesc : (rawDesc?.value ?? rawDesc ?? '');
         badCodes.push(`${code} (${desc}): totals=${ccHours.toFixed(1)}h, transactions=${txnHours.toFixed(1)}h`);
       }
     }
