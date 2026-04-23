@@ -396,6 +396,7 @@ async function generateParserCode(
   documentPreview: string,
   previousError?: string,
   langfuseParent?: LangfuseParent,
+  previousCode?: string,
 ): Promise<CodegenGenerationResult> {
   const messages: Anthropic.MessageParam[] = [];
 
@@ -406,7 +407,9 @@ async function generateParserCode(
     });
     messages.push({
       role: 'assistant',
-      content: 'I\'ll write a Python script to extract the data.',
+      content: previousCode
+        ? `I'll write a Python script to extract the data.\n\n\`\`\`python\n${previousCode}\n\`\`\``
+        : 'I\'ll write a Python script to extract the data.',
     });
     messages.push({
       role: 'user',
@@ -464,6 +467,11 @@ async function generateParserCode(
 function extractPythonCode(text: string): string {
   const fenced = text.match(/```(?:python)?\s*\n([\s\S]*?)```/);
   if (fenced) return fenced[1].trim();
+
+  // Handle truncated responses where the closing ``` is missing (max_tokens hit)
+  const openFence = text.match(/^```(?:python)?\s*\n([\s\S]+)/);
+  if (openFence) return openFence[1].trim();
+
   return text.trim();
 }
 
@@ -722,8 +730,7 @@ function buildValidationRetryMessage(code: string, checks: JcrValidationCheck[])
     msg += '\n';
   }
 
-  msg += `\nHere is the Python code that produced these results:\n\`\`\`python\n${code}\n\`\`\`\n\n`;
-  msg += 'Please fix the specific issues listed above. Output ONLY the corrected Python code.';
+  msg += 'Please fix ONLY the specific issues listed above in the script you just wrote. Output ONLY the corrected Python code — no explanation.';
 
   return msg;
 }
@@ -752,6 +759,7 @@ export async function extractWithCodegen(
   };
 
   let lastError: string | undefined;
+  let lastCode: string | undefined;
   let retries = 0;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -760,7 +768,7 @@ export async function extractWithCodegen(
 
     let genResult: CodegenGenerationResult;
     try {
-      genResult = await generateParserCode(client, metaPrompt, docPreview, lastError, options?.langfuseParent);
+      genResult = await generateParserCode(client, metaPrompt, docPreview, lastError, options?.langfuseParent, lastCode);
     } catch (err) {
       console.error(`[codegen] Code generation failed:`, err);
       throw err;
@@ -782,6 +790,7 @@ export async function extractWithCodegen(
       console.error(`[codegen] Sandbox execution error:`, err);
       if (attempt < MAX_RETRIES) {
         lastError = err instanceof Error ? err.message : String(err);
+        lastCode = code;
         retries++;
         continue;
       }
@@ -802,6 +811,7 @@ export async function extractWithCodegen(
       console.warn(`[codegen] Script failed (attempt ${attempt + 1}): ${result.stderr.slice(0, 500)}`);
       if (attempt < MAX_RETRIES) {
         lastError = result.stderr;
+        lastCode = code;
         retries++;
         continue;
       }
@@ -828,6 +838,7 @@ export async function extractWithCodegen(
           });
 
           lastError = buildValidationRetryMessage(code, validation.checks);
+          lastCode = code;
           retries++;
           continue;
         }
@@ -875,6 +886,7 @@ export async function extractWithCodegen(
       console.warn(`[codegen] Output parsing failed (attempt ${attempt + 1}): ${err instanceof Error ? err.message : err}`);
       if (attempt < MAX_RETRIES) {
         lastError = `Output parsing error: ${err instanceof Error ? err.message : err}\n\nScript stdout:\n${result.stdout.slice(0, 2000)}`;
+        lastCode = code;
         retries++;
         continue;
       }
