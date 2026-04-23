@@ -4,10 +4,16 @@
  * Source: "JCR Test Labels — Job 2012.xlsx" (v4, 2026-04-18)
  * Sheets: Report Record, Cost Code Summaries, Worker Wages, Derived Fields
  *
- * Convention notes (from Reconciliation Actions):
+ * Two-layer convention (per JCR Schema v4):
+ *   - Worker regular_amount / overtime_amount = BASE wage from PR transaction lines
+ *   - cost_by_source_pr_amount = burdened total from "Job Totals by Source" section (includes 995/998)
+ *   - straight_time_rate, effective_hourly_rate use base wages
+ *   - pr_src_cost_per_hr, fully_loaded_wage use burdened totals
+ *
+ * Sign conventions (from Reconciliation Actions):
  *   - plus_minus_budget = actual − current_budget (positive = over budget)
  *   - Revenue (code 999) is negative in Sage (credit); derived fields use abs(revenue)
- *   - nominal_rate = regular_amount ÷ regular_hours per worker
+ *   - nominal_rate = regular_amount ÷ regular_hours per worker (base wage)
  */
 
 import { SkillEvalLabels, DerivedLabel, RecordLabel } from './types';
@@ -30,7 +36,7 @@ const DERIVED_LABELS: DerivedLabel[] = [
   { field: 'pr_src_cost_per_hr', expected: 30.03, tolerance: 0.01 },
   { field: 'fully_loaded_wage', expected: 40.17, tolerance: 0.02 },
   { field: 'burden_multiplier', expected: 1.34, tolerance: 0.02 },
-  { field: 'straight_time_rate', expected: 30.39, tolerance: 0.01 },
+  { field: 'straight_time_rate', expected: 19.19, tolerance: 0.02 },
   { field: 'total_workers', expected: 42, tolerance: 0 },
   { field: 'burden_total', expected: 148589.84, tolerance: 0.001 },
   { field: 'nominal_wage_percentiles', expected: 0, notYetComputable: true },
@@ -65,10 +71,10 @@ const DERIVED_LABELS: DerivedLabel[] = [
   { field: 'forecast_to_complete', expected: 0, notYetComputable: true },
 
   // Original Metrics
-  { field: 'effective_hourly_rate', expected: 29.79, tolerance: 0.02 },
+  { field: 'effective_hourly_rate', expected: 19.96, tolerance: 0.02 },
   { field: 'job_gross_margin_pct', expected: 38.3, pipelineField: 'gross_margin_pct', tolerance: 0.02 },
   { field: 'days_to_post', expected: 0, notYetComputable: true },
-  { field: 'ot_premium_cost', expected: -4485.24, tolerance: 0.10 },
+  { field: 'ot_premium_cost', expected: 11242.27, tolerance: 0.10 },
   { field: 'labor_to_material_ratio', expected: 1.13, pipelineField: 'labor_material_ratio', tolerance: 0.02 },
 
   // Project-level benchmarks (pending project attribute input)
@@ -172,55 +178,57 @@ function wkLabels(
 }
 
 const WORKER_LABELS: RecordLabel[] = [
+  // PDF-verified base wages (not burdened). nominal_rate = base_reg_amount / reg_hours.
+
   // APPRENTICE/HELPER tier
-  ...wkLabels('Rendon Villasenor, Ismael', { regular_hours: 36, overtime_hours: 0, regular_amount: 652.32, overtime_amount: 0, nominal_rate: 18.12 }),
-  ...wkLabels('Hubbard, Dustin R', { regular_hours: 5, overtime_hours: 0, regular_amount: 90.60, overtime_amount: 0, nominal_rate: 18.12 }),
-  ...wkLabels('Lopez Martinez, Abimael', { regular_hours: 201, overtime_hours: 10, regular_amount: 3733.92, overtime_amount: 180, nominal_rate: 18.58 }),
-  ...wkLabels('Agustin Rodriguez, Ezequiel', { regular_hours: 83, overtime_hours: 10, regular_amount: 1595.76, overtime_amount: 180, nominal_rate: 19.23 }),
-  ...wkLabels('Soto Serna, Cesar E', { regular_hours: 249, overtime_hours: 0, regular_amount: 4887.87, overtime_amount: 0, nominal_rate: 19.63 }),
-  ...wkLabels('Castaneda Juarez, Gustavo', { regular_hours: 7, overtime_hours: 0, regular_amount: 137.41, overtime_amount: 0, nominal_rate: 19.63 }),
-  ...wkLabels('Wilson, Garret A', { regular_hours: 32, overtime_hours: 0, regular_amount: 628.16, overtime_amount: 0, nominal_rate: 19.63 }),
-  ...wkLabels('Sanchez Garcia, Adelaido', { regular_hours: 155, overtime_hours: 0, regular_amount: 3042.66, overtime_amount: 0, nominal_rate: 19.63 }),
-  ...wkLabels('Ramos Garcia, Jose M', { regular_hours: 363, overtime_hours: 2, regular_amount: 7145.58, overtime_amount: 39, nominal_rate: 19.68 }),
-  ...wkLabels('Vega Arriaga, Jorge', { regular_hours: 316, overtime_hours: 57, regular_amount: 6265.79, overtime_amount: 1026, nominal_rate: 19.83 }),
-  ...wkLabels('Rivera, Eli P', { regular_hours: 746, overtime_hours: 110, regular_amount: 14895.85, overtime_amount: 1992, nominal_rate: 19.97 }),
-  ...wkLabels('Chavarria Lopez, Omar A', { regular_hours: 738, overtime_hours: 113, regular_amount: 14790.50, overtime_amount: 2046, nominal_rate: 20.04 }),
-  ...wkLabels('Holmes, Anthony R', { regular_hours: 162, overtime_hours: 12, regular_amount: 3299.40, overtime_amount: 234, nominal_rate: 20.37 }),
-  ...wkLabels('Gonzalez Hernandez, Josue', { regular_hours: 1001, overtime_hours: 134, regular_amount: 20748.44, overtime_amount: 2418, nominal_rate: 20.73 }),
-  ...wkLabels('Velasquez Cruz, Denis M', { regular_hours: 94, overtime_hours: 12, regular_amount: 1964.57, overtime_amount: 234, nominal_rate: 20.90 }),
-  ...wkLabels('Castaneda Juarez, Edgar D', { regular_hours: 197.25, overtime_hours: 0, regular_amount: 4141.74, overtime_amount: 0, nominal_rate: 21.00 }),
-  ...wkLabels('Garcia, Jordan X', { regular_hours: 32, overtime_hours: 0, regular_amount: 676.48, overtime_amount: 0, nominal_rate: 21.14 }),
-  ...wkLabels('Spears, Gregory M', { regular_hours: 262, overtime_hours: 46, regular_amount: 5600.53, overtime_amount: 897, nominal_rate: 21.38 }),
-  ...wkLabels('Arreola, Israel A', { regular_hours: 42, overtime_hours: 0, regular_amount: 919.59, overtime_amount: 0, nominal_rate: 21.89 }),
-  ...wkLabels('Monico Brambila, Jesus S', { regular_hours: 660, overtime_hours: 150, regular_amount: 14509.49, overtime_amount: 2928, nominal_rate: 21.98 }),
-  ...wkLabels('Paco Leyva, Orlando', { regular_hours: 450.50, overtime_hours: 38, regular_amount: 9963.60, overtime_amount: 826.50, nominal_rate: 22.12 }),
+  ...wkLabels('Rendon Villasenor, Ismael', { regular_hours: 36, overtime_hours: 0, regular_amount: 432.00, overtime_amount: 0, nominal_rate: 12.00 }),
+  ...wkLabels('Hubbard, Dustin R', { regular_hours: 5, overtime_hours: 0, regular_amount: 60.00, overtime_amount: 0, nominal_rate: 12.00 }),
+  ...wkLabels('Lopez Martinez, Abimael', { regular_hours: 201, overtime_hours: 10, regular_amount: 2412.00, overtime_amount: 180, nominal_rate: 12.00 }),
+  ...wkLabels('Agustin Rodriguez, Ezequiel', { regular_hours: 83, overtime_hours: 10, regular_amount: 996.00, overtime_amount: 180, nominal_rate: 12.00 }),
+  ...wkLabels('Soto Serna, Cesar E', { regular_hours: 249, overtime_hours: 0, regular_amount: 3237.00, overtime_amount: 0, nominal_rate: 13.00 }),
+  ...wkLabels('Castaneda Juarez, Gustavo', { regular_hours: 7, overtime_hours: 0, regular_amount: 91.00, overtime_amount: 0, nominal_rate: 13.00 }),
+  ...wkLabels('Wilson, Garret A', { regular_hours: 32, overtime_hours: 0, regular_amount: 416.00, overtime_amount: 0, nominal_rate: 13.00 }),
+  ...wkLabels('Sanchez Garcia, Adelaido', { regular_hours: 155, overtime_hours: 0, regular_amount: 2015.00, overtime_amount: 0, nominal_rate: 13.00 }),
+  ...wkLabels('Ramos Garcia, Jose M', { regular_hours: 363, overtime_hours: 2, regular_amount: 4719.00, overtime_amount: 39, nominal_rate: 13.00 }),
+  ...wkLabels('Vega Arriaga, Jorge', { regular_hours: 316, overtime_hours: 57, regular_amount: 3803.00, overtime_amount: 1026, nominal_rate: 12.04 }),
+  ...wkLabels('Rivera, Eli P', { regular_hours: 746, overtime_hours: 110, regular_amount: 9192.00, overtime_amount: 1992, nominal_rate: 12.32 }),
+  ...wkLabels('Chavarria Lopez, Omar A', { regular_hours: 738, overtime_hours: 113, regular_amount: 9104.00, overtime_amount: 2046, nominal_rate: 12.34 }),
+  ...wkLabels('Holmes, Anthony R', { regular_hours: 162, overtime_hours: 12, regular_amount: 2106.00, overtime_amount: 234, nominal_rate: 13.00 }),
+  ...wkLabels('Gonzalez Hernandez, Josue', { regular_hours: 1001, overtime_hours: 134, regular_amount: 12924.00, overtime_amount: 2418, nominal_rate: 12.91 }),
+  ...wkLabels('Velasquez Cruz, Denis M', { regular_hours: 94, overtime_hours: 12, regular_amount: 1222.00, overtime_amount: 234, nominal_rate: 13.00 }),
+  ...wkLabels('Castaneda Juarez, Edgar D', { regular_hours: 197.25, overtime_hours: 0, regular_amount: 2742.88, overtime_amount: 0, nominal_rate: 13.91 }),
+  ...wkLabels('Garcia, Jordan X', { regular_hours: 32, overtime_hours: 0, regular_amount: 448.00, overtime_amount: 0, nominal_rate: 14.00 }),
+  ...wkLabels('Spears, Gregory M', { regular_hours: 262, overtime_hours: 46, regular_amount: 3406.00, overtime_amount: 897, nominal_rate: 13.00 }),
+  ...wkLabels('Arreola, Israel A', { regular_hours: 42, overtime_hours: 0, regular_amount: 609.00, overtime_amount: 0, nominal_rate: 14.50 }),
+  ...wkLabels('Monico Brambila, Jesus S', { regular_hours: 660, overtime_hours: 150, regular_amount: 8620.00, overtime_amount: 2928, nominal_rate: 13.06 }),
+  ...wkLabels('Paco Leyva, Orlando', { regular_hours: 450.50, overtime_hours: 38, regular_amount: 6319.25, overtime_amount: 826.50, nominal_rate: 14.03 }),
 
   // JOURNEYMAN tier
-  ...wkLabels('Vaughan, Tyler J', { regular_hours: 168.50, overtime_hours: 0, regular_amount: 4070.96, overtime_amount: 0, nominal_rate: 24.16 }),
-  ...wkLabels('Soto Cruz, Jovani', { regular_hours: 280, overtime_hours: 0, regular_amount: 6764.80, overtime_amount: 0, nominal_rate: 24.16 }),
-  ...wkLabels('Castro Hernandez, Jose A', { regular_hours: 763, overtime_hours: 99, regular_amount: 19124.93, overtime_amount: 2257.50, nominal_rate: 25.07 }),
-  ...wkLabels('Rivera, Jorge A', { regular_hours: 501, overtime_hours: 60, regular_amount: 14443.38, overtime_amount: 1620, nominal_rate: 28.83 }),
-  ...wkLabels('Lima Romero, Melvin A', { regular_hours: 946, overtime_hours: 105, regular_amount: 28515.91, overtime_amount: 2992.50, nominal_rate: 30.14 }),
-  ...wkLabels('Meza Fuentes, Erick A', { regular_hours: 575.50, overtime_hours: 4, regular_amount: 17438.27, overtime_amount: 114, nominal_rate: 30.30 }),
-  ...wkLabels('McCabe, Thomas C', { regular_hours: 8, overtime_hours: 4.50, regular_amount: 279.40, overtime_amount: 121.50, nominal_rate: 34.92 }),
+  ...wkLabels('Vaughan, Tyler J', { regular_hours: 168.50, overtime_hours: 0, regular_amount: 2696.00, overtime_amount: 0, nominal_rate: 16.00 }),
+  ...wkLabels('Soto Cruz, Jovani', { regular_hours: 280, overtime_hours: 0, regular_amount: 4480.00, overtime_amount: 0, nominal_rate: 16.00 }),
+  ...wkLabels('Castro Hernandez, Jose A', { regular_hours: 763, overtime_hours: 99, regular_amount: 11903.00, overtime_amount: 2257.50, nominal_rate: 15.60 }),
+  ...wkLabels('Rivera, Jorge A', { regular_hours: 501, overtime_hours: 60, regular_amount: 9018.00, overtime_amount: 1620, nominal_rate: 18.00 }),
+  ...wkLabels('Lima Romero, Melvin A', { regular_hours: 946, overtime_hours: 105, regular_amount: 18406.00, overtime_amount: 2992.50, nominal_rate: 19.46 }),
+  ...wkLabels('Meza Fuentes, Erick A', { regular_hours: 575.50, overtime_hours: 4, regular_amount: 11510.00, overtime_amount: 114, nominal_rate: 20.00 }),
+  ...wkLabels('McCabe, Thomas C', { regular_hours: 8, overtime_hours: 4.50, regular_amount: 144.00, overtime_amount: 121.50, nominal_rate: 18.00 }),
 
   // LEAD/SUPERVISOR tier
-  ...wkLabels('Cortes Mendiola, Victor H', { regular_hours: 193, overtime_hours: 48, regular_amount: 7855.21, overtime_amount: 1726.50, nominal_rate: 40.70 }),
-  ...wkLabels('Sepulveda Gonzalez, Alfredo', { regular_hours: 176, overtime_hours: 66, regular_amount: 7296.24, overtime_amount: 1800, nominal_rate: 41.46 }),
-  ...wkLabels('Veley, Nathaniel S', { regular_hours: 381, overtime_hours: 13, regular_amount: 16030.04, overtime_amount: 544.50, nominal_rate: 42.07 }),
-  ...wkLabels('Waites, Thaddeus Z', { regular_hours: 319, overtime_hours: 0, regular_amount: 13487.32, overtime_amount: 0, nominal_rate: 42.28 }),
-  ...wkLabels('Castaneda Martinez, Gustavo', { regular_hours: 248, overtime_hours: 35, regular_amount: 10833.89, overtime_amount: 1417.50, nominal_rate: 43.69 }),
-  ...wkLabels('Sanders, Allen O', { regular_hours: 337.50, overtime_hours: 3.50, regular_amount: 14799.76, overtime_amount: 147, nominal_rate: 43.85 }),
-  ...wkLabels('Palma Vides, Hugo', { regular_hours: 790, overtime_hours: 138, regular_amount: 35221.85, overtime_amount: 5601, nominal_rate: 44.58 }),
-  ...wkLabels('Castro Hernandez, Carlos E', { regular_hours: 171, overtime_hours: 37.50, regular_amount: 7884.47, overtime_amount: 1529.25, nominal_rate: 46.11 }),
-  ...wkLabels('Quintanilla, Esteban R', { regular_hours: 1111, overtime_hours: 88, regular_amount: 54757.33, overtime_amount: 4104, nominal_rate: 49.29 }),
-  ...wkLabels('Hubbard, Robert W', { regular_hours: 3.50, overtime_hours: 0, regular_amount: 174.41, overtime_amount: 0, nominal_rate: 49.83 }),
-  ...wkLabels('Gerard, Jeffrey S', { regular_hours: 406, overtime_hours: 0, regular_amount: 22032.46, overtime_amount: 0, nominal_rate: 54.27 }),
-  ...wkLabels('Barnhart, Joseph N', { regular_hours: 11, overtime_hours: 14, regular_amount: 798.32, overtime_amount: 609, nominal_rate: 72.57 }),
+  ...wkLabels('Cortes Mendiola, Victor H', { regular_hours: 193, overtime_hours: 48, regular_amount: 4619.00, overtime_amount: 1726.50, nominal_rate: 23.94 }),
+  ...wkLabels('Sepulveda Gonzalez, Alfredo', { regular_hours: 176, overtime_hours: 66, regular_amount: 4224.00, overtime_amount: 2352.00, nominal_rate: 24.00 }),
+  ...wkLabels('Veley, Nathaniel S', { regular_hours: 381, overtime_hours: 13, regular_amount: 10432.00, overtime_amount: 544.50, nominal_rate: 27.38 }),
+  ...wkLabels('Waites, Thaddeus Z', { regular_hours: 319, overtime_hours: 0, regular_amount: 8932.00, overtime_amount: 0, nominal_rate: 28.00 }),
+  ...wkLabels('Castaneda Martinez, Gustavo', { regular_hours: 248, overtime_hours: 35, regular_amount: 6696.00, overtime_amount: 1417.50, nominal_rate: 27.00 }),
+  ...wkLabels('Sanders, Allen O', { regular_hours: 337.50, overtime_hours: 3.50, regular_amount: 9751.50, overtime_amount: 147, nominal_rate: 28.89 }),
+  ...wkLabels('Palma Vides, Hugo', { regular_hours: 790, overtime_hours: 138, regular_amount: 21434.00, overtime_amount: 5601, nominal_rate: 27.13 }),
+  ...wkLabels('Castro Hernandez, Carlos E', { regular_hours: 171, overtime_hours: 37.50, regular_amount: 4705.00, overtime_amount: 1529.25, nominal_rate: 27.51 }),
+  ...wkLabels('Quintanilla, Esteban R', { regular_hours: 1111, overtime_hours: 88, regular_amount: 34877.00, overtime_amount: 4104, nominal_rate: 31.39 }),
+  ...wkLabels('Hubbard, Robert W', { regular_hours: 3.50, overtime_hours: 0, regular_amount: 115.50, overtime_amount: 0, nominal_rate: 33.00 }),
+  ...wkLabels('Gerard, Jeffrey S', { regular_hours: 406, overtime_hours: 0, regular_amount: 14595.00, overtime_amount: 0, nominal_rate: 35.95 }),
+  ...wkLabels('Barnhart, Joseph N', { regular_hours: 11, overtime_hours: 14, regular_amount: 323.00, overtime_amount: 609, nominal_rate: 29.36 }),
 
   // OT-ONLY workers (no regular hours — nominal_rate not applicable)
-  ...wkLabels('Salazar, Hajdar L', { regular_hours: 0, overtime_hours: 14, regular_amount: 128.52, overtime_amount: 252 }),
-  ...wkLabels('Reed, Reuben H', { regular_hours: 0, overtime_hours: 8, regular_amount: 165.24, overtime_amount: 324 }),
+  ...wkLabels('Salazar, Hajdar L', { regular_hours: 0, overtime_hours: 14, regular_amount: 0, overtime_amount: 252 }),
+  ...wkLabels('Reed, Reuben H', { regular_hours: 0, overtime_hours: 8, regular_amount: 0, overtime_amount: 324 }),
 ];
 
 // ── Combine all extraction labels ─────────────────────────────────
