@@ -305,6 +305,72 @@ function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
   return results;
 }
 
+// ── Safety-net reconciliation (log-only) ─────────────────────
+
+function reconcilePrTransactions(
+  transactions: RecordRow[],
+  costCodeRecords: RecordRow[],
+  codeRanges: CodeRanges,
+  runId: string,
+): void {
+  if (transactions.length === 0 || costCodeRecords.length === 0) return;
+
+  const laborRanges = codeRanges.labor ?? [11, [100, 199]];
+
+  let ccRegHours = 0;
+  let ccOtHours = 0;
+  for (const rec of costCodeRecords) {
+    const code = parseInt(String(rec.cost_code?.value ?? '0'), 10);
+    if (!codeInRanges(code, laborRanges)) continue;
+    ccRegHours += (rec.regular_hours?.value as number) || 0;
+    ccOtHours += (rec.overtime_hours?.value as number) || 0;
+  }
+
+  let txnRegHours = 0;
+  let txnOtHours = 0;
+  let txnAmountSum = 0;
+  let txnWithHoursNoAmount = 0;
+  for (const txn of transactions) {
+    const regH = (txn.regular_hours?.value as number) || 0;
+    const otH = (txn.overtime_hours?.value as number) || 0;
+    txnRegHours += regH;
+    txnOtHours += otH;
+    const amt = (txn.actual_amount?.value as number) || (txn.regular_amount?.value as number) || 0;
+    txnAmountSum += amt;
+    if ((regH + otH) > 0 && amt === 0) txnWithHoursNoAmount++;
+  }
+
+  const totalCcHours = ccRegHours + ccOtHours;
+  const totalTxnHours = txnRegHours + txnOtHours;
+  const hoursCoverage = totalCcHours > 0 ? Math.round((totalTxnHours / totalCcHours) * 100) : 100;
+
+  if (hoursCoverage < 90) {
+    console.warn(
+      `[jcr-model] RECONCILIATION WARNING run=${runId}: PR transactions account for only ${hoursCoverage}% of cost code hours ` +
+      `(txn=${totalTxnHours.toFixed(1)}h vs cc=${totalCcHours.toFixed(1)}h). Gap may indicate missing transaction lines.`,
+    );
+  } else {
+    console.log(
+      `[jcr-model] Reconciliation OK run=${runId}: PR hours coverage ${hoursCoverage}% ` +
+      `(txn=${totalTxnHours.toFixed(1)}h vs cc=${totalCcHours.toFixed(1)}h)`,
+    );
+  }
+
+  if (txnWithHoursNoAmount > 0) {
+    const pct = Math.round((txnWithHoursNoAmount / transactions.length) * 100);
+    if (pct > 10) {
+      console.warn(
+        `[jcr-model] RECONCILIATION WARNING run=${runId}: ${txnWithHoursNoAmount} of ${transactions.length} PR transactions (${pct}%) have hours but zero dollar amounts.`,
+      );
+    }
+  }
+
+  console.log(
+    `[jcr-model] Reconciliation summary run=${runId}: ${transactions.length} PR txns, ` +
+    `amount_sum=$${txnAmountSum.toFixed(2)}, hours_coverage=${hoursCoverage}%`,
+  );
+}
+
 // ── Orchestrator ─────────────────────────────────────────────
 
 export async function runJcrModel(
@@ -352,6 +418,9 @@ export async function runJcrModel(
   }
 
   const finalFields = computeSourceAmounts(fixedFields, extractedData.workerRecords ?? [], fixedRecords, codeRanges);
+
+  // ── Safety-net reconciliation logging (log-only, no data changes) ──
+  reconcilePrTransactions(extractedData.workerRecords ?? [], fixedRecords, codeRanges, runId);
 
   console.log(`[jcr-model] Fixed column swap for ${fixedRecords.length} cost codes, aggregated ${workerAgg.length} workers from ${extractedData.workerRecords?.length ?? 0} transactions`);
 

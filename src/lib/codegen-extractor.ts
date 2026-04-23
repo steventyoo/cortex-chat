@@ -103,6 +103,16 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF. It c
    - \`<AMOUNT>\` after "Regular:" is the **BASE WAGE** (not burdened)
    - Overtime lines appear as: \`MM/DD/YY  Overtime: <hours> hours  <AMOUNT>\`
    - Some workers span multiple cost codes — group by worker name
+   - **CRITICAL — DOLLAR AMOUNTS**: Every hours line has a dollar amount as the LAST number. Do NOT default to 0.
+   - Example regex for parsing hours lines:
+     \`\`\`python
+     # "09/13/13  Regular: 7.00 hours    192.50"
+     hours_pat = re.compile(r'(\\d{2}/\\d{2}/\\d{2})\\s+(Regular|Overtime|Double Time):\\s*([\\d.]+)\\s*hours?\\s+([\\d,.]+)')
+     m = hours_pat.search(line)
+     if m:
+         hours = float(m.group(3))
+         amount = float(m.group(4).replace(',', ''))  # NEVER default to 0
+     \`\`\`
 5. **Burden Codes** (995, 998): Special cost codes for payroll burden and taxes
    - 995 = Payroll Burden (benefits, insurance)
    - 998 = Payroll Taxes (FICA, FUTA, SUTA)
@@ -723,6 +733,87 @@ function validateJcrExtraction(raw: RawCodegenOutput): { passed: boolean; checks
       checks.push({ name: 'labor_codes_have_hours', status: 'fail', actual: laborNoHours.length, hint: `${laborNoHours.length} labor codes (011, 1xx) have no hours. Hours appear in the last two columns of Cost Code Totals rows: "Regular Hours | Overtime Hours".` });
     } else {
       checks.push({ name: 'labor_codes_have_hours', status: 'pass' });
+    }
+  }
+
+  // Check 9: PR transaction hours vs cost code hours (aggregate cross-check)
+  if (records.length > 0 && prTable.length > 0) {
+    const isLabor = (code: number) => (code >= 100 && code < 200) || code === 11;
+    let ccRegHours = 0;
+    for (const rec of records) {
+      const code = toNum(rec.cost_code);
+      if (code != null && isLabor(code)) {
+        ccRegHours += toNum(rec.regular_hours) || 0;
+      }
+    }
+    let txnRegHours = 0;
+    for (const txn of prTable) {
+      txnRegHours += toNum(txn.regular_hours) || 0;
+    }
+    if (ccRegHours > 0) {
+      const coveragePct = Math.round((txnRegHours / ccRegHours) * 100);
+      if (coveragePct < 80) {
+        checks.push({ name: 'pr_hours_vs_cost_code_hours', status: 'fail', expected: ccRegHours, actual: txnRegHours,
+          hint: `Only ${txnRegHours.toFixed(1)} of ${ccRegHours.toFixed(1)} total regular hours are accounted for in PR transactions (${coveragePct}%). You're missing transaction lines. Make sure you parse PR lines from ALL cost code sections across all pages, not just the first few.` });
+      } else {
+        checks.push({ name: 'pr_hours_vs_cost_code_hours', status: 'pass', actual: coveragePct });
+      }
+    }
+  }
+
+  // Check 10: Per-cost-code hours consistency
+  if (records.length > 0 && prTable.length > 0) {
+    const isLabor = (code: number) => (code >= 100 && code < 200) || code === 11;
+    const txnHoursByCode = new Map<number, number>();
+    for (const txn of prTable) {
+      const code = toNum(txn.cost_code);
+      if (code != null) {
+        txnHoursByCode.set(code, (txnHoursByCode.get(code) || 0) + (toNum(txn.regular_hours) || 0));
+      }
+    }
+    const badCodes: string[] = [];
+    for (const rec of records) {
+      const code = toNum(rec.cost_code);
+      if (code == null || !isLabor(code)) continue;
+      const ccHours = toNum(rec.regular_hours) || 0;
+      if (ccHours < 10) continue;
+      const txnHours = txnHoursByCode.get(code) || 0;
+      const ratio = txnHours / ccHours;
+      if (ratio < 0.5) {
+        const rawDesc = rec.description as Record<string, unknown> | string | undefined;
+        const desc = typeof rawDesc === 'string' ? rawDesc : (rawDesc?.value ?? rawDesc ?? '');
+        badCodes.push(`${code} (${desc}): totals=${ccHours.toFixed(1)}h, transactions=${txnHours.toFixed(1)}h`);
+      }
+    }
+    if (badCodes.length > 0) {
+      const listed = badCodes.slice(0, 5).join('; ');
+      checks.push({ name: 'cost_code_hours_consistency', status: 'fail', actual: badCodes.length,
+        hint: `${badCodes.length} labor cost code(s) have significantly fewer PR transaction hours than their totals row: ${listed}. Check parsing for those specific cost code sections — you may be skipping lines or misidentifying the cost code.` });
+    } else {
+      checks.push({ name: 'cost_code_hours_consistency', status: 'pass' });
+    }
+  }
+
+  // Check 11: PR transactions with hours should have amounts
+  if (prTable.length > 0) {
+    let withHours = 0;
+    let withHoursAndAmounts = 0;
+    for (const txn of prTable) {
+      const hrs = (toNum(txn.regular_hours) || 0) + (toNum(txn.overtime_hours) || 0);
+      if (hrs > 0) {
+        withHours++;
+        const amt = toNum(txn.actual_amount) || toNum(txn.regular_amount) || toNum(txn.overtime_amount) || toNum(txn.amount);
+        if (amt != null && amt !== 0) withHoursAndAmounts++;
+      }
+    }
+    if (withHours > 0) {
+      const missingPct = Math.round(((withHours - withHoursAndAmounts) / withHours) * 100);
+      if (missingPct > 20) {
+        checks.push({ name: 'pr_amounts_match_hours', status: 'fail', expected: withHours, actual: withHoursAndAmounts,
+          hint: `${withHours - withHoursAndAmounts} of ${withHours} PR transactions have hours but zero dollar amounts (${missingPct}% missing). The amount is the LAST number on each hours line: "09/13/13 Regular: 8.00 hours    192.50" → actual_amount=192.50. Do NOT default to 0.` });
+      } else {
+        checks.push({ name: 'pr_amounts_match_hours', status: 'pass', actual: withHoursAndAmounts });
+      }
     }
   }
 
