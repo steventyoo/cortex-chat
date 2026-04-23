@@ -223,7 +223,9 @@ function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
   ]);
 
   for (const txn of transactions) {
-    const workerName = String(txn.name?.value ?? 'unknown');
+    const workerName = String(
+      txn.name?.value ?? txn.worker_name?.value ?? txn.employee_name?.value ?? txn.employee?.value ?? 'unknown'
+    ).trim();
     const key = workerName;
 
     if (!groups.has(key)) {
@@ -312,6 +314,15 @@ export async function runJcrModel(
   const fixedFields = fixDocLevelFields(extractedData.fields, fixedRecords, codeRanges);
   const workerAgg = aggregateWorkerRecords(extractedData.workerRecords ?? []);
 
+  // Diagnostic: log sample transaction keys to debug worker aggregation
+  const sampleTxns = extractedData.workerRecords ?? [];
+  if (sampleTxns.length > 0 && workerAgg.length <= 1) {
+    const sample = sampleTxns[0];
+    const keys = Object.keys(sample);
+    const nameVal = sample.name?.value ?? sample.worker_name?.value ?? sample.employee_name?.value;
+    console.warn(`[jcr-model] Worker aggregation produced only ${workerAgg.length} worker(s) from ${sampleTxns.length} txns. Sample txn keys: [${keys.join(', ')}] name=${nameVal}`);
+  }
+
   const finalFields = computeSourceAmounts(fixedFields, extractedData.workerRecords ?? [], fixedRecords, codeRanges);
 
   console.log(`[jcr-model] Fixed column swap for ${fixedRecords.length} cost codes, aggregated ${workerAgg.length} workers from ${extractedData.workerRecords?.length ?? 0} transactions`);
@@ -319,6 +330,7 @@ export async function runJcrModel(
   const collections: Record<string, RecordRow[]> = {
     cost_code: fixedRecords,
     worker: workerAgg,
+    payroll_transactions: extractedData.workerRecords ?? [],
   };
 
   const extractedRows = emitExtractedRows(skillId, finalFields, collections);
