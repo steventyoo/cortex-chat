@@ -46,16 +46,26 @@ WHERE skill_id = 'job_cost_report'
   AND field_id = (SELECT id FROM field_catalog WHERE canonical_name = 'contract_value');
 
 -- ============================================================
--- PART 2: Insert job_totals_by_source fields
--- The "by Source" section in Job Totals breaks total expenses by PR/AP/GL
+-- PART 2: Insert missing field_catalog entries
+-- job_totals_* were added as derived_fields + field_definitions JSONB
+-- in 20260429 but never inserted into field_catalog proper.
 -- ============================================================
 
 INSERT INTO field_catalog (canonical_name, display_name, field_type, category, description) VALUES
+  ('job_totals_revenue', 'Job Totals Revenue', 'number', 'financial', 'Total AR billings (revenue) from the Job Totals section'),
+  ('job_totals_expenses', 'Job Totals Expenses', 'number', 'financial', 'Total expenses (PR+AP+GL) from the Job Totals section'),
+  ('job_totals_net', 'Job Totals Net', 'number', 'financial', 'Net profit (revenue minus expenses) from the Job Totals section'),
+  ('job_totals_retainage', 'Job Totals Retainage', 'number', 'financial', 'Total retainage held from AR billings'),
   ('job_totals_by_source_pr', 'Job Totals by Source: PR', 'number', 'financial', 'Total payroll cost from the "by Source" subsection of Job Totals — includes base wages + burden allocation'),
   ('job_totals_by_source_ap', 'Job Totals by Source: AP', 'number', 'financial', 'Total accounts payable cost from the "by Source" subsection of Job Totals'),
   ('job_totals_by_source_gl', 'Job Totals by Source: GL', 'number', 'financial', 'Total general ledger cost from the "by Source" subsection of Job Totals'),
   ('job_totals_net_due', 'Job Totals Net Due', 'number', 'financial', 'Net amount due (revenue - expenses - retainage) from the Job Totals section')
 ON CONFLICT (canonical_name) DO NOTHING;
+
+-- ============================================================
+-- PART 3: Insert job_totals_by_source fields into skill_fields
+-- The "by Source" section in Job Totals breaks total expenses by PR/AP/GL
+-- ============================================================
 
 -- Insert into skill_fields for codegen visibility
 INSERT INTO skill_fields (skill_id, field_id, display_override, tier, required, importance, description, scope, sort_order, extraction_hint)
@@ -82,8 +92,8 @@ VALUES
 ON CONFLICT (skill_id, field_id, scope) DO NOTHING;
 
 -- ============================================================
--- PART 3: Add extraction hints to job_totals fields added in 20260429
--- (field_definitions were added but not as skill_fields with hints)
+-- PART 4: Add job_totals_revenue/expenses/net/retainage to skill_fields
+-- (added as derived_fields in 20260429 but not as skill_fields with hints)
 -- ============================================================
 
 INSERT INTO skill_fields (skill_id, field_id, display_override, tier, required, importance, description, scope, sort_order, extraction_hint)
@@ -110,7 +120,7 @@ VALUES
 ON CONFLICT (skill_id, field_id, scope) DO NOTHING;
 
 -- ============================================================
--- PART 4: Add derived field for job_totals_net_due
+-- PART 5: Add derived field for job_totals_net_due
 -- ============================================================
 
 INSERT INTO derived_fields (canonical_name, display_name, source_skill_ids, primary_skill_id, tab, section, data_type, status, scope, formula, expression, depends_on, is_active)
@@ -122,7 +132,7 @@ VALUES
 ON CONFLICT (canonical_name) DO NOTHING;
 
 -- ============================================================
--- PART 5: Fix straight_time_rate and effective_hourly_rate to use base wages
+-- PART 6: Fix straight_time_rate and effective_hourly_rate to use base wages
 -- (These were computing from burdened amounts; schema v4 says use base PR line amounts)
 -- ============================================================
 
