@@ -623,11 +623,25 @@ function validateJcrExtraction(raw: RawCodegenOutput): { passed: boolean; checks
     checks.push({ name: 'cost_code_records_exist', status: 'pass', actual: records.length });
   }
 
-  // Check 2: PR transactions exist
+  // Check 2: PR transactions exist AND have dollar amounts
   if (prTable.length === 0) {
     checks.push({ name: 'payroll_transactions_exist', status: 'fail', hint: 'No payroll transactions extracted. PR lines appear inside each cost code section with format: "PR <ref> <date> <emp_code> <Name>" followed by hours/amounts on next lines.' });
   } else {
     checks.push({ name: 'payroll_transactions_exist', status: 'pass', actual: prTable.length });
+
+    // Check 2b: PR transactions should have non-zero amounts
+    const sampleSize = Math.min(prTable.length, 50);
+    let withAmount = 0;
+    for (let i = 0; i < sampleSize; i++) {
+      const amt = toNum(prTable[i].actual_amount) || toNum(prTable[i].regular_amount) || toNum(prTable[i].amount);
+      if (amt != null && amt !== 0) withAmount++;
+    }
+    if (withAmount === 0) {
+      checks.push({ name: 'pr_transactions_have_amounts', status: 'fail', actual: 0, expected: sampleSize,
+        hint: `All ${sampleSize} sampled PR transactions have zero/null dollar amounts. Each PR line should have actual_amount (the dollar figure after "Regular: N hours AMOUNT" or "Overtime: N hours AMOUNT"). The amount appears as the LAST number on the hours line, e.g. "09/13/13 Regular: 7.00 hours    192.50" → actual_amount=192.50, regular_amount=192.50. Parse the number after "hours" on each line.` });
+    } else {
+      checks.push({ name: 'pr_transactions_have_amounts', status: 'pass', actual: withAmount });
+    }
   }
 
   // Check 3: JTD Cost should NOT equal Over/Under Budget for most codes (column swap detection)
