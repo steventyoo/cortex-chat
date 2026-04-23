@@ -129,7 +129,7 @@ VALUES
    'Extracted from JDR Job Totals. Fallback: net - retainage',
    'safe(() => { const extracted = ctx.doc.job_totals_net_due; if (extracted != null && extracted !== 0) return extracted; const net = ctx.doc.job_totals_net; const ret = ctx.doc.job_totals_retainage; return (net != null && ret != null) ? rd(net - ret, 2) : null; })',
    ARRAY['job_totals_net', 'job_totals_retainage']::text[], true)
-ON CONFLICT (canonical_name) DO NOTHING;
+ON CONFLICT (primary_skill_id, canonical_name) DO NOTHING;
 
 -- ============================================================
 -- PART 6: Fix straight_time_rate and effective_hourly_rate to use base wages
