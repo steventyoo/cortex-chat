@@ -152,6 +152,7 @@ export type PipelineStatus =
   | 'tier2_validated'
   | 'tier2_flagged'
   | 'pending_review'
+  | 'pending_operator_review'
   | 'approved'
   | 'rejected'
   | 'pushed'
@@ -185,6 +186,13 @@ export interface ValidationFlag {
   field: string;
   issue: string;
   severity: 'info' | 'warning' | 'error';
+  check_type?: 'extraction' | 'consistency';
+  classification?: 'extraction_error' | 'document_anomaly';
+  resolution?: 'passed' | 'resolved' | 'anomaly' | 'withheld';
+  tier?: number;
+  expected?: number | string | null;
+  actual?: number | string | null;
+  record_key?: string;
 }
 
 export interface PipelineItem {
@@ -220,6 +228,7 @@ export interface PipelineItem {
   categoryId: string | null;
   canonicalName: string | null;
   pageCount: number | null;
+  reconciliationScore: number | null;
 }
 
 // Generate a pipeline ID
@@ -311,6 +320,8 @@ export function getStatusDisplay(status: PipelineStatus): { label: string; color
       return { label: 'Pushed to DB', color: 'text-green-800', bgColor: 'bg-green-100' };
     case 'deleted':
       return { label: 'Deleted', color: 'text-gray-400', bgColor: 'bg-gray-50' };
+    case 'pending_operator_review':
+      return { label: 'Operator Review', color: 'text-orange-700', bgColor: 'bg-orange-100' };
   }
 }
 
@@ -365,5 +376,6 @@ export function parsePipelineItem(record: { id: string; fields: Record<string, u
     categoryId: f['Category ID'] ? String(f['Category ID']) : null,
     canonicalName: f['Canonical Name'] ? String(f['Canonical Name']) : null,
     pageCount: f['Page Count'] != null ? Number(f['Page Count']) : null,
+    reconciliationScore: f['Reconciliation Score'] != null ? Number(f['Reconciliation Score']) : null,
   };
 }

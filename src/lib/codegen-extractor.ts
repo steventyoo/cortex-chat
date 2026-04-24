@@ -1031,3 +1031,118 @@ export async function extractWithCodegen(
 
   throw new Error('[codegen] Exhausted all retry attempts');
 }
+
+// ── Targeted field re-extraction ──────────────────────────────
+// Lightweight function that asks Claude to re-read specific fields
+// from a document section when consistency checks fail.
+
+export interface TargetedExtractionRequest {
+  failingChecks: Array<{
+    check_name: string;
+    message: string;
+    affected_fields: string[];
+    hint_template: string | null;
+    expected: number | string | null;
+    actual: number | string | null;
+  }>;
+  tailText: string;
+  currentValues: Record<string, number | string | null>;
+}
+
+export interface TargetedExtractionResult {
+  correctedFields: Record<string, number | null>;
+  reasoning: string;
+  fieldsChanged: string[];
+}
+
+export async function targetedFieldExtraction(
+  request: TargetedExtractionRequest,
+): Promise<TargetedExtractionResult> {
+  const client = new Anthropic();
+
+  const affectedFields = new Set<string>();
+  for (const check of request.failingChecks) {
+    for (const f of check.affected_fields) {
+      affectedFields.add(f);
+    }
+  }
+
+  const checkDescriptions = request.failingChecks.map(c => {
+    let desc = `- ${c.check_name}: ${c.message}`;
+    if (c.hint_template && c.expected != null) {
+      desc += `\n  Hint: ${c.hint_template.replace('{{expected}}', String(c.expected))}`;
+    }
+    return desc;
+  }).join('\n');
+
+  const currentValueLines = [...affectedFields].map(f => {
+    const val = request.currentValues[f];
+    return `- ${f}: ${val != null ? val : 'null (not extracted)'}`;
+  }).join('\n');
+
+  const prompt = `You are re-reading a construction Job Cost Report to correct extraction errors.
+
+The following consistency checks FAILED on the extracted data:
+${checkDescriptions}
+
+Current extracted values for the affected fields:
+${currentValueLines}
+
+Below is the relevant section of the document (typically the last few pages containing Job Totals, summary sections, and source breakdowns):
+
+<document_section>
+${request.tailText.slice(0, 30_000)}
+</document_section>
+
+TASK: Re-read the document section above and provide corrected numeric values for ONLY the fields that need fixing. If a value is correct, do not include it. If a value cannot be determined from the text, set it to null.
+
+Respond with ONLY valid JSON in this exact format:
+{
+  "corrected_fields": { "field_name": numeric_value_or_null, ... },
+  "reasoning": "brief explanation of what was wrong and how you fixed it"
+}`;
+
+  try {
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    const text = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('');
+
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('[targeted-reextract] No JSON found in response');
+      return { correctedFields: {}, reasoning: 'No valid JSON in response', fieldsChanged: [] };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      corrected_fields: Record<string, number | null>;
+      reasoning: string;
+    };
+
+    const fieldsChanged = Object.keys(parsed.corrected_fields).filter(f => {
+      const oldVal = request.currentValues[f];
+      const newVal = parsed.corrected_fields[f];
+      return oldVal !== newVal;
+    });
+
+    console.log(
+      `[targeted-reextract] Corrected ${fieldsChanged.length} fields: ` +
+      fieldsChanged.map(f => `${f}: ${request.currentValues[f]} → ${parsed.corrected_fields[f]}`).join(', ')
+    );
+
+    return {
+      correctedFields: parsed.corrected_fields,
+      reasoning: parsed.reasoning || '',
+      fieldsChanged,
+    };
+  } catch (err) {
+    console.error('[targeted-reextract] Failed:', err);
+    return { correctedFields: {}, reasoning: `Error: ${err instanceof Error ? err.message : String(err)}`, fieldsChanged: [] };
+  }
+}

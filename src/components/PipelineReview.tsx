@@ -1067,7 +1067,7 @@ export default function PipelineReview({ projectId: externalProjectId }: { proje
   const filteredItems = items.filter((item) => {
     if (filterStatus === 'all') return true;
     if (filterStatus === 'needs_action') {
-      return item.status === 'pending_review' || item.status === 'tier2_flagged';
+      return item.status === 'pending_review' || item.status === 'tier2_flagged' || item.status === 'pending_operator_review';
     }
     if (filterStatus === 'approved') {
       return item.status === 'approved' || item.status === 'pushed';
@@ -2512,6 +2512,18 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function ReconciliationBadge({ score }: { score: number | null }) {
+  if (score == null) return null;
+  const color = score >= 90 ? 'text-green-700 bg-green-50 border-green-200'
+    : score >= 70 ? 'text-amber-700 bg-amber-50 border-amber-200'
+    : 'text-red-700 bg-red-50 border-red-200';
+  return (
+    <span className={`text-[10px] font-medium px-2 py-0.5 rounded-md border flex-shrink-0 ${color}`} title={`Reconciliation: ${score}% of checks passed`}>
+      R:{score}%
+    </span>
+  );
+}
+
 function StatPill({
   label,
   value,
@@ -2984,6 +2996,7 @@ function DocumentRow({
       )}
 
       <StatusBadge status={item.status} />
+      <ReconciliationBadge score={item.reconciliationScore} />
 
       {(item.status === 'queued' || item.status === 'processing') && (
         <div className="flex items-center gap-1.5 flex-shrink-0">

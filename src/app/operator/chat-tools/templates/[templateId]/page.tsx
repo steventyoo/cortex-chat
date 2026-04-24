@@ -13,6 +13,8 @@ function OperatorNav() {
     { label: 'Chat Tools', href: '/operator/chat-tools' },
     { label: 'Context Cards', href: '/operator/context-cards' },
     { label: 'Evals', href: '/operator/evals' },
+    { label: 'Derived Fields', href: '/operator/derived-fields' },
+    { label: 'Checks', href: '/operator/checks' },
   ];
   return (
     <nav className="border-b border-[#e8e8e8] bg-[#fafafa]">

@@ -164,6 +164,7 @@ export async function GET(request: NextRequest) {
       fields['Category ID'] = row.category_id;
       fields['Canonical Name'] = row.canonical_name;
       fields['Page Count'] = row.page_count;
+      fields['Reconciliation Score'] = row.reconciliation_score;
       return parsePipelineItem({ id: String(row.id), fields });
     });
 

@@ -46,3 +46,16 @@ export type LinkStatus = z.infer<typeof LinkStatusEnum>;
 
 export const HealthStatusEnum = z.enum(['healthy', 'warning', 'critical']);
 export type HealthStatus = z.infer<typeof HealthStatusEnum>;
+
+// ─── Derived Fields ─────────────────────────────────────────────
+
+export const DerivedFieldDataTypeEnum = z.enum(['currency', 'number', 'string', 'percent', 'integer', 'ratio', 'date']);
+export type DerivedFieldDataType = z.infer<typeof DerivedFieldDataTypeEnum>;
+
+export const DerivedFieldStatusEnum = z.enum(['Derived', 'Cross-Ref']);
+export type DerivedFieldStatus = z.infer<typeof DerivedFieldStatusEnum>;
+
+// ─── Consistency Checks ─────────────────────────────────────────
+
+export const CheckClassificationEnum = z.enum(['extraction_error', 'document_anomaly']);
+export type CheckClassification = z.infer<typeof CheckClassificationEnum>;

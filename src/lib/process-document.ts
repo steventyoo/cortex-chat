@@ -8,6 +8,7 @@ import { ValidationFlag, ExtractionResult, resolveCategoryKey, generateCanonical
 import { ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
 import { runJcrModel } from '@/lib/jcr-model';
+import { runPostExtractionValidation } from '@/lib/post-extraction-validator';
 import { getLangfuse } from '@/lib/langfuse';
 import { extractText as pdfExtractText } from 'unpdf';
 import { countPdfPagesSync } from 'pdf-pages-count';
@@ -326,19 +327,63 @@ async function processLargePdfVision(opts: {
   }
   timing.db_final_update = Date.now() - tStep;
 
+  // Post-extraction validation for non-JCR skills
+  if (extraction.skillId && extraction.skillId !== JCR_SKILL_ID) {
+    try {
+      const valT = Date.now();
+      let tailText: string | undefined;
+      try {
+        tailText = await extractTextFromLargePdf(rawBuffer, 0, 5);
+      } catch { /* non-fatal */ }
+
+      const fields = extraction.fields as Record<string, { value: string | number | null; confidence: number }>;
+      const collections: Record<string, Array<Record<string, { value: string | number | null; confidence: number }>>> = {};
+      if (extraction.records?.length) {
+        collections.records = extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+      }
+      for (const tt of extraction.targetTables ?? []) {
+        if (tt.table && tt.records?.length) {
+          collections[tt.table] = tt.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+        }
+      }
+
+      const valResult = await runPostExtractionValidation({
+        pipelineLogId: recordId,
+        skillId: extraction.skillId,
+        fields,
+        collections,
+        tailText,
+      });
+      timing.validation = Date.now() - valT;
+      console.log(
+        `[process:large-pdf] Validation complete for skill=${extraction.skillId}: ` +
+        `score=${valResult.reconciliationScore}% elapsed=${timing.validation}ms`
+      );
+    } catch (err) {
+      console.warn(`[process:large-pdf] Post-extraction validation failed (non-fatal):`, err);
+    }
+  }
+
   if (extraction.skillId === JCR_SKILL_ID && extraction.records?.length) {
     try {
       const jcrT = Date.now();
       const workerRecords = extraction.targetTables
         ?.find(t => t.table === 'payroll_transactions' || t.table === 'worker_transactions')?.records;
+
+      // Extract tail pages for targeted re-extraction if consistency checks fail
+      let jcrTailText: string | undefined;
+      try {
+        jcrTailText = await extractTextFromLargePdf(rawBuffer, 0, 5);
+      } catch { /* non-fatal */ }
+
       const jcrResult = await runJcrModel(recordId, projectId || '', orgId, {
         fields: extraction.fields as Record<string, { value: string | number | null; confidence: number }>,
         records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
         skillId: extraction.skillId,
         workerRecords: workerRecords as Array<Record<string, { value: string | number | null; confidence: number }>> | undefined,
-      });
+      }, {}, { tailText: jcrTailText });
       timing.jcr_model = Date.now() - jcrT;
-      console.log(`[process:large-pdf] JCR model complete: rows=${jcrResult.rowCount} workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
+      console.log(`[process:large-pdf] JCR model complete: rows=${jcrResult.rowCount} recon=${jcrResult.reconciliationScore}% workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
     } catch (err) {
       console.warn(`[process:large-pdf] JCR model failed (non-fatal):`, err);
     }
@@ -396,6 +441,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   let tStep = Date.now();
   let sourceText: string;
   let finalStoragePath = storagePath;
+  let pdfBuffer: Buffer | null = null;
 
   if (driveFileId) {
     let rawBuffer: Buffer | null = null;
@@ -404,6 +450,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       console.log(`[process] Downloading raw file from Drive: drive_id=${driveFileId}`);
       const { buffer, effectiveMimeType } = await downloadFileRaw(driveFileId, mimeType);
       rawBuffer = buffer;
+      if (isPdf(mimeType, fileName)) pdfBuffer = buffer;
       timing.drive_raw_download = Date.now() - tStep;
       console.log(`[process] Drive raw download complete: ${buffer.length} bytes, effectiveMime=${effectiveMimeType}`);
 
@@ -538,6 +585,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         throw new Error(error?.message || 'No data returned from storage');
       }
       fileBuffer = Buffer.from(await data.arrayBuffer());
+      if (isPdf(mimeType, fileName)) pdfBuffer = fileBuffer;
       console.log(`[process] Storage download complete: ${fileBuffer.length} bytes`);
     } catch (err) {
       console.error(`[process] Failed to download file for ${recordId}:`, err);
@@ -840,20 +888,70 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   }
   timing.db_final_update = Date.now() - tStep;
 
+  // ── Post-extraction validation (runs for ALL document skills) ──
+  // For JCR, this is called internally by runJcrModel after its transforms.
+  // For all other skills, run the generic validator directly here.
+  if (extraction.skillId && extraction.skillId !== JCR_SKILL_ID) {
+    try {
+      const valT = Date.now();
+      let tailText: string | undefined;
+      if (pdfBuffer) {
+        try {
+          tailText = await extractTextFromLargePdf(pdfBuffer, 0, 5);
+        } catch { /* non-fatal */ }
+      }
+
+      const fields = extraction.fields as Record<string, { value: string | number | null; confidence: number }>;
+      const collections: Record<string, Array<Record<string, { value: string | number | null; confidence: number }>>> = {};
+      if (extraction.records?.length) {
+        collections.records = extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+      }
+      for (const tt of extraction.targetTables ?? []) {
+        if (tt.table && tt.records?.length) {
+          collections[tt.table] = tt.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+        }
+      }
+
+      const valResult = await runPostExtractionValidation({
+        pipelineLogId: recordId,
+        skillId: extraction.skillId,
+        fields,
+        collections,
+        tailText,
+      });
+      timing.validation = Date.now() - valT;
+      console.log(
+        `[process] Validation complete for skill=${extraction.skillId}: ` +
+        `score=${valResult.reconciliationScore}% elapsed=${timing.validation}ms`
+      );
+    } catch (err) {
+      console.warn(`[process] Post-extraction validation failed (non-fatal):`, err);
+    }
+  }
+
   // Run JCR Model Engine if this is a job cost report with records
   if (extraction.skillId === JCR_SKILL_ID && extraction.records?.length) {
     try {
       const jcrT = Date.now();
       const workerRecords = extraction.targetTables
         ?.find(t => t.table === 'payroll_transactions' || t.table === 'worker_transactions')?.records;
+
+      // Extract tail pages for targeted re-extraction if consistency checks fail
+      let jcrTailText: string | undefined;
+      if (pdfBuffer) {
+        try {
+          jcrTailText = await extractTextFromLargePdf(pdfBuffer, 0, 5);
+        } catch { /* non-fatal */ }
+      }
+
       const jcrResult = await runJcrModel(recordId, projectId || '', orgId, {
         fields: extraction.fields as Record<string, { value: string | number | null; confidence: number }>,
         records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
         skillId: extraction.skillId,
         workerRecords: workerRecords as Array<Record<string, { value: string | number | null; confidence: number }>> | undefined,
-      });
+      }, {}, { tailText: jcrTailText });
       timing.jcr_model = Date.now() - jcrT;
-      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
+      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} recon=${jcrResult.reconciliationScore}% workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
     } catch (err) {
       console.warn(`[process] JCR model failed (non-fatal):`, err);
     }
