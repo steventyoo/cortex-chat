@@ -1065,9 +1065,114 @@ export async function pushRecordsToTable(
   return ids;
 }
 
-// ── Document Storage ──────────────────────────────────────────
+// ── Project Sources ───────────────────────────────────────────
 
-const DOCUMENTS_BUCKET = 'documents';
+export type SourceKind = 'file' | 'api';
+
+export interface ProjectSource {
+  id: string;
+  projectId: string;
+  orgId: string;
+  kind: SourceKind;
+  provider: string;
+  config: Record<string, unknown>;
+  integrationId: string | null;
+  label: string;
+  active: boolean;
+  lastSyncedAt: string | null;
+  createdAt: string;
+}
+
+function mapProjectSource(row: Record<string, unknown>): ProjectSource {
+  return {
+    id: String(row.id || ''),
+    projectId: String(row.project_id || ''),
+    orgId: String(row.org_id || ''),
+    kind: (row.kind as SourceKind) || 'file',
+    provider: String(row.provider || 'gdrive'),
+    config: (row.config as Record<string, unknown>) || {},
+    integrationId: row.integration_id ? String(row.integration_id) : null,
+    label: String(row.label || ''),
+    active: row.active !== false,
+    lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : null,
+    createdAt: String(row.created_at || ''),
+  };
+}
+
+export async function listProjectSources(orgId: string, projectId?: string): Promise<ProjectSource[]> {
+  const sb = getSupabase();
+  let query = sb.from('project_sources').select('*').eq('org_id', orgId);
+  if (projectId) query = query.eq('project_id', projectId);
+  query = query.order('created_at', { ascending: true });
+  const { data } = await query;
+  return (data || []).map(mapProjectSource);
+}
+
+export async function listActiveFileSourcesForOrg(orgId: string): Promise<ProjectSource[]> {
+  const sb = getSupabase();
+  const { data } = await sb
+    .from('project_sources')
+    .select('*')
+    .eq('org_id', orgId)
+    .eq('kind', 'file')
+    .eq('active', true)
+    .order('created_at', { ascending: true });
+  return (data || []).map(mapProjectSource);
+}
+
+export async function addProjectSource(opts: {
+  orgId: string;
+  projectId: string;
+  kind: SourceKind;
+  provider: string;
+  config: Record<string, unknown>;
+  label: string;
+  integrationId?: string;
+}): Promise<ProjectSource | null> {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('project_sources')
+    .insert({
+      project_id: opts.projectId,
+      org_id: opts.orgId,
+      kind: opts.kind,
+      provider: opts.provider,
+      config: opts.config,
+      label: opts.label,
+      ...(opts.integrationId ? { integration_id: opts.integrationId } : {}),
+    })
+    .select()
+    .single();
+  if (error) {
+    console.error('Failed to add project source:', error.message);
+    return null;
+  }
+  return mapProjectSource(data);
+}
+
+export async function removeProjectSource(sourceId: string, orgId: string): Promise<boolean> {
+  const sb = getSupabase();
+  const { error } = await sb
+    .from('project_sources')
+    .delete()
+    .eq('id', sourceId)
+    .eq('org_id', orgId);
+  if (error) {
+    console.error('Failed to remove project source:', error.message);
+    return false;
+  }
+  return true;
+}
+
+export async function updateSourceLastSynced(sourceId: string): Promise<void> {
+  const sb = getSupabase();
+  await sb
+    .from('project_sources')
+    .update({ last_synced_at: new Date().toISOString() })
+    .eq('id', sourceId);
+}
+
+// ── Document Storage ──────────────────────────────────────────
 
 /**
  * Upload a file to Supabase Storage.

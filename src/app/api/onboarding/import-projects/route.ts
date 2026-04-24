@@ -46,6 +46,25 @@ export async function POST(req: NextRequest) {
 
   const created = (data || []).map((r: { project_id: string }) => r.project_id);
 
+  // Persist project_sources rows for projects that came from Drive subfolders
+  const sourceRows = projects
+    .filter((p: { driveFolderId?: string }) => p.driveFolderId)
+    .map((p: { name: string; projectId?: string; driveFolderId?: string }) => ({
+      project_id: p.projectId || p.name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase(),
+      org_id: session.orgId,
+      kind: 'file',
+      provider: 'gdrive',
+      config: { folder_id: p.driveFolderId, relative_to_org_root: true },
+      label: p.name,
+    }));
+
+  if (sourceRows.length > 0) {
+    const { error: srcError } = await sb.from('project_sources').insert(sourceRows);
+    if (srcError) {
+      console.error('Failed to create project sources:', srcError.message);
+    }
+  }
+
   return Response.json({
     success: true,
     created: created.length,
