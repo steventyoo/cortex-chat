@@ -26,6 +26,13 @@ import type { SkillEvalLabels, DerivedLabel, RecordLabel } from '../src/lib/eval
 
 const RUN_LABEL = `data-eval-${new Date().toISOString().slice(0, 19).replace(/[:]/g, '-')}`;
 
+function getSupabaseClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('Missing SUPABASE env vars');
+  return createClient(url, key);
+}
+
 /* ── CLI args ──────────────────────────────────────────────── */
 
 function parseArgs() {
@@ -67,11 +74,7 @@ async function loadLabels(skillId: string): Promise<SkillEvalLabels> {
 type ExportPivot = Map<string, Map<string, number>>;
 
 async function fetchExportPivot(projectId: string, skillId: string): Promise<ExportPivot> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('Missing SUPABASE env vars');
-
-  const sb = createClient(url, key);
+  const sb = getSupabaseClient();
   const pivot: ExportPivot = new Map();
 
   let from = 0;
@@ -319,6 +322,68 @@ function fmt(v: number | null): string {
   return v.toFixed(2);
 }
 
+/* ── Supabase persistence ──────────────────────────────────── */
+
+async function persistToSupabase(
+  runLabel: string,
+  skillId: string,
+  suite: string,
+  orgId: string,
+  results: FieldResult[],
+): Promise<void> {
+  const sb = getSupabaseClient();
+  const pass = results.filter((r) => r.status === 'pass').length;
+  const fail = results.filter((r) => r.status === 'fail').length;
+  const miss = results.filter((r) => r.status === 'missing').length;
+  const computable = results.filter((r) => r.status !== 'not_computable');
+  const accuracy = computable.length > 0 ? pass / computable.length : 0;
+
+  const { data: run, error: runErr } = await sb
+    .from('eval_runs')
+    .insert({
+      org_id: orgId,
+      run_label: `${runLabel}--${suite}`,
+      run_type: 'data_accuracy',
+      skill_id: skillId,
+      suite,
+      total_items: results.length,
+      passed: pass,
+      failed: fail,
+      missing: miss,
+      accuracy,
+      metadata: { computable: computable.length, not_computable: results.length - computable.length },
+    })
+    .select()
+    .single();
+
+  if (runErr) {
+    console.error(`  ⚠ Failed to persist run to Supabase: ${runErr.message}`);
+    return;
+  }
+
+  const rows = results.map((r) => ({
+    run_id: run.id,
+    item_key: r.key,
+    field: r.field,
+    category: suite,
+    status: r.status,
+    score: r.score,
+    expected: r.expected != null ? String(r.expected) : null,
+    actual: r.actual != null ? String(r.actual) : null,
+    delta: r.delta,
+  }));
+
+  for (let i = 0; i < rows.length; i += 500) {
+    const batch = rows.slice(i, i + 500);
+    const { error: batchErr } = await sb.from('eval_run_results').insert(batch);
+    if (batchErr) {
+      console.error(`  ⚠ Failed to persist ${batch.length} results: ${batchErr.message}`);
+    }
+  }
+
+  console.log(`  → Persisted to Supabase: eval_runs.id=${run.id}`);
+}
+
 /* ── Main ──────────────────────────────────────────────────── */
 
 async function main() {
@@ -349,6 +414,7 @@ async function main() {
       await syncToLangfuse(labels.langfuse.derivedDataset, derivedResults);
       console.log(`  → Synced to Langfuse dataset: ${labels.langfuse.derivedDataset}\n`);
     }
+    await persistToSupabase(RUN_LABEL, labels.skillId, 'derived', 'org_owp_001', derivedResults);
   }
 
   // Run extraction suite
@@ -380,6 +446,7 @@ async function main() {
       await syncToLangfuse(labels.langfuse.extractionDataset, extractionResults);
       console.log(`  → Synced to Langfuse dataset: ${labels.langfuse.extractionDataset}\n`);
     }
+    await persistToSupabase(RUN_LABEL, labels.skillId, 'extraction', 'org_owp_001', extractionResults);
   }
 
   console.log(`\nRun label: ${RUN_LABEL}`);

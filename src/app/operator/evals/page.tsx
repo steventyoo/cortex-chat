@@ -130,6 +130,22 @@ export default function EvalsPage() {
       <OperatorNav />
 
       <div className="max-w-7xl mx-auto px-6 py-6">
+        {/* Sub-nav for Evals section */}
+        <div className="flex items-center gap-1 p-0.5 bg-[#f5f5f5] rounded-lg w-fit mb-6">
+          <Link
+            href="/operator/evals"
+            className="px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors bg-white shadow-sm text-[#1a1a1a]"
+          >
+            Dataset
+          </Link>
+          <Link
+            href="/operator/evals/results"
+            className="px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors text-[#666] hover:text-[#333]"
+          >
+            Results
+          </Link>
+        </div>
+
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
