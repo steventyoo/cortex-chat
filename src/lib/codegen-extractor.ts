@@ -99,7 +99,10 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF. It c
    PR  <ref_number>  <date>  <employee_code>  <Worker Name>
    MM/DD/YY  Regular: <hours> hours  <AMOUNT>
    \`\`\`
-   - The worker name appears on one line, hours/amounts on the NEXT line(s)
+   - The **worker name** is the LAST element on the PR header line — it MUST be captured as the \`name\` field. Example:
+     \`PR  166  09/11/13  4235  John Smith\` → name="John Smith"
+     Regex: \`r'PR\\s+\\d+\\s+\\d{2}/\\d{2}/\\d{2}\\s+\\d+\\s+(.+)'\` — group(1) is the name. NEVER leave name as null.
+   - The hours/amounts appear on the NEXT line(s)
    - \`<AMOUNT>\` after "Regular:" is the **BASE WAGE** (not burdened)
    - Overtime lines appear as: \`MM/DD/YY  Overtime: <hours> hours  <AMOUNT>\`
    - Some workers span multiple cost codes — group by worker name
@@ -814,6 +817,23 @@ function validateJcrExtraction(raw: RawCodegenOutput): { passed: boolean; checks
       } else {
         checks.push({ name: 'pr_amounts_match_hours', status: 'pass', actual: withHoursAndAmounts });
       }
+    }
+  }
+
+  // Check 12: PR transactions should have worker names
+  if (prTable.length > 5) {
+    let withName = 0;
+    for (const txn of prTable) {
+      const raw = txn.name ?? txn.worker_name ?? txn.employee_name ?? txn.employee;
+      const v = raw != null && typeof raw === 'object' && 'value' in (raw as Record<string, unknown>) ? (raw as Record<string, unknown>).value : raw;
+      if (v != null && String(v).trim() !== '') withName++;
+    }
+    const missingPct = Math.round(((prTable.length - withName) / prTable.length) * 100);
+    if (missingPct > 50) {
+      checks.push({ name: 'pr_transactions_have_names', status: 'fail', expected: prTable.length, actual: withName,
+        hint: `${prTable.length - withName} of ${prTable.length} PR transactions (${missingPct}%) have no worker name. The name appears on the PR header line: "PR  166  09/11/13  4235  John Smith". Parse the LAST element(s) on the PR header line as the worker name. Example regex: r'PR\\s+\\d+\\s+\\d{2}/\\d{2}/\\d{2}\\s+\\d+\\s+(.+)'` });
+    } else {
+      checks.push({ name: 'pr_transactions_have_names', status: 'pass', actual: withName });
     }
   }
 
