@@ -232,7 +232,7 @@ interface PaginationInfo {
   hasPrev: boolean;
 }
 
-export default function PipelineReview() {
+export default function PipelineReview({ projectId: externalProjectId }: { projectId?: string | null } = {}) {
   const [items, setItems] = useState<PipelineItem[]>([]);
   const [stats, setStats] = useState<PipelineStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -268,6 +268,8 @@ export default function PipelineReview() {
   const [collapsedPanel, setCollapsedPanel] = useState<'left' | 'right' | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+
+  const isProjectScoped = !!externalProjectId;
 
   const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -356,7 +358,7 @@ export default function PipelineReview() {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
 
   // Global project selector (persists across all tabs, used by Reconciliation + Profile)
-  const [globalProjectId, setGlobalProjectId] = useState<string | null>(null);
+  const [globalProjectId, setGlobalProjectId] = useState<string | null>(externalProjectId ?? null);
 
   // Drive folder drill-down state (for Drive Folders tab)
   const [selectedDrivePath, setSelectedDrivePath] = useState<string | null>(null);
@@ -1843,6 +1845,7 @@ export default function PipelineReview() {
           projectId={globalProjectId}
           projectOptions={projectOptions}
           onProjectChange={setGlobalProjectId}
+          hideProjectSelector={isProjectScoped}
         />
       </div>
 
@@ -2538,11 +2541,12 @@ function StatPill({
   );
 }
 
-function ViewToggle({ value, onChange, projectId, projectOptions, onProjectChange }: {
+function ViewToggle({ value, onChange, projectId, projectOptions, onProjectChange, hideProjectSelector }: {
   value: ListView; onChange: (v: ListView) => void;
   projectId: string | null;
   projectOptions: Array<{ projectId: string; projectName: string }>;
   onProjectChange: (id: string | null) => void;
+  hideProjectSelector?: boolean;
 }) {
   const baseOptions: { key: ListView; label: string }[] = [
     { key: 'recent', label: 'Recent' },
@@ -2595,16 +2599,18 @@ function ViewToggle({ value, onChange, projectId, projectOptions, onProjectChang
       </div>
 
       {/* Global project selector */}
-      <select
-        value={projectId || ''}
-        onChange={e => onProjectChange(e.target.value || null)}
-        className="px-2.5 py-1.5 border border-[#ddd] rounded-lg text-[12px] text-[#444] bg-white focus:outline-none focus:border-[#999] transition-colors max-w-[200px]"
-      >
-        <option value="">All Projects</option>
-        {projectOptions.map(p => (
-          <option key={p.projectId} value={p.projectId}>{p.projectName}</option>
-        ))}
-      </select>
+      {!hideProjectSelector && (
+        <select
+          value={projectId || ''}
+          onChange={e => onProjectChange(e.target.value || null)}
+          className="px-2.5 py-1.5 border border-[#ddd] rounded-lg text-[12px] text-[#444] bg-white focus:outline-none focus:border-[#999] transition-colors max-w-[200px]"
+        >
+          <option value="">All Projects</option>
+          {projectOptions.map(p => (
+            <option key={p.projectId} value={p.projectId}>{p.projectName}</option>
+          ))}
+        </select>
+      )}
     </div>
   );
 }
