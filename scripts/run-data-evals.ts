@@ -330,6 +330,7 @@ async function persistToSupabase(
   suite: string,
   orgId: string,
   results: FieldResult[],
+  projectId?: string,
 ): Promise<void> {
   const sb = getSupabaseClient();
   const pass = results.filter((r) => r.status === 'pass').length;
@@ -351,7 +352,7 @@ async function persistToSupabase(
       failed: fail,
       missing: miss,
       accuracy,
-      metadata: { computable: computable.length, not_computable: results.length - computable.length },
+      metadata: { computable: computable.length, not_computable: results.length - computable.length, projectId: projectId || null },
     })
     .select()
     .single();
@@ -414,7 +415,7 @@ async function main() {
       await syncToLangfuse(labels.langfuse.derivedDataset, derivedResults);
       console.log(`  → Synced to Langfuse dataset: ${labels.langfuse.derivedDataset}\n`);
     }
-    await persistToSupabase(RUN_LABEL, labels.skillId, 'derived', 'org_owp_001', derivedResults);
+    await persistToSupabase(RUN_LABEL, labels.skillId, 'derived', 'org_owp_001', derivedResults, labels.projectId);
   }
 
   // Run extraction suite
@@ -446,7 +447,7 @@ async function main() {
       await syncToLangfuse(labels.langfuse.extractionDataset, extractionResults);
       console.log(`  → Synced to Langfuse dataset: ${labels.langfuse.extractionDataset}\n`);
     }
-    await persistToSupabase(RUN_LABEL, labels.skillId, 'extraction', 'org_owp_001', extractionResults);
+    await persistToSupabase(RUN_LABEL, labels.skillId, 'extraction', 'org_owp_001', extractionResults, labels.projectId);
   }
 
   console.log(`\nRun label: ${RUN_LABEL}`);
