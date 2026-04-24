@@ -444,12 +444,12 @@ async function generateParserCode(
       isRetry: !!previousError,
       ...(previousError ? { previousError: previousError.slice(0, 1000) } : {}),
     },
-    modelParameters: { maxTokens: 16384 },
+    modelParameters: { maxTokens: 32768 },
   });
 
   const response = await client.messages.create({
     model: 'claude-opus-4-6',
-    max_tokens: 16384,
+    max_tokens: 32768,
     messages,
   });
 
