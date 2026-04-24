@@ -354,7 +354,7 @@ function RunRow({ run, expanded, results, loadingResults, onToggle }: {
         <td className="px-4 py-2.5 text-[#666]">{run.suite || '—'}</td>
         <td className="px-4 py-2.5">
           <div className="text-[12px] text-[#444] font-medium">{run.skill_id || '—'}</div>
-          {(run.metadata as Record<string, unknown>)?.projectId && (
+          {!!(run.metadata as Record<string, unknown>)?.projectId && (
             <div className="text-[11px] text-[#999]">{String((run.metadata as Record<string, unknown>).projectId)}</div>
           )}
         </td>
