@@ -198,12 +198,24 @@ function computeSourceAmounts(
 ): FieldsMap {
   const fixed = { ...fields };
 
+  // PR amount = base wages from transactions + burden codes (995/998)
+  // This matches the "Job Totals by Source" burdened PR total per JCR Schema v4
+  let prTotal = 0;
   if (workerTransactions.length > 0) {
-    const prTotal = workerTransactions.reduce(
+    prTotal = workerTransactions.reduce(
       (s, t) => s + ((t.actual_amount?.value as number) || 0), 0,
     );
-    fixed.pr_amount = { value: Math.round(prTotal * 100) / 100, confidence: 0.9 };
   }
+  const burdenRanges = codeRanges.burden ?? [995, 998];
+  let burdenTotal = 0;
+  for (const rec of costCodeRecords) {
+    const code = parseInt(String(rec.cost_code?.value ?? '0'), 10);
+    if (codeInRanges(code, burdenRanges)) {
+      burdenTotal += (rec.jtd_cost?.value as number) || 0;
+    }
+  }
+  prTotal = Math.round((prTotal + burdenTotal) * 100) / 100;
+  fixed.pr_amount = { value: prTotal, confidence: 0.9 };
 
   const totalDirect = (fixed.total_jtd_cost?.value as number) || 0;
   const prAmt = (fixed.pr_amount?.value as number) || 0;
