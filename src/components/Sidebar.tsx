@@ -529,62 +529,97 @@ export default function Sidebar({
             </button>
           ) : (
             <div className="space-y-0.5 mb-4">
-              {projects.map((project) => (
-                <motion.button
-                  key={project.projectId}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => onSelectProject(project.projectId)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-[13px] transition-colors ${
-                    selectedProject === project.projectId
-                      ? 'bg-[#ebebea] text-[#1a1a1a]'
-                      : 'text-[#6b6b6b] hover:bg-[#ebebea] hover:text-[#37352f]'
-                  }`}
-                >
-                  <div className="font-medium truncate flex items-center gap-2">
-                    <span
-                      className={`inline-block w-[8px] h-[8px] rounded-full flex-shrink-0 ${
-                        project.status.toLowerCase().includes('complete') ||
-                        project.status.toLowerCase().includes('closed')
-                          ? 'bg-[#c0c0c0]'
-                          : 'bg-[#34c759]'
+              {projects.map((project) => {
+                const isSelected = pathname.startsWith(`/project/${project.projectId}`);
+                const projectBase = `/project/${project.projectId}`;
+
+                return (
+                  <div key={project.projectId}>
+                    <motion.button
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => {
+                        router.push(`${projectBase}/dashboard`);
+                        onSelectProject(project.projectId);
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-[13px] transition-colors ${
+                        isSelected
+                          ? 'bg-[#ebebea] text-[#1a1a1a]'
+                          : 'text-[#6b6b6b] hover:bg-[#ebebea] hover:text-[#37352f]'
                       }`}
-                    />
-                    {project.projectName}
-                  </div>
-                  <div className="flex items-center justify-between mt-0.5 ml-[16px]">
-                    <span className="text-[11px] text-[#aeaeb2] truncate">
-                      {project.address || formatCurrency(project.contractValue)}
-                    </span>
-                    {!(
-                      project.status.toLowerCase().includes('complete') ||
-                      project.status.toLowerCase().includes('closed')
-                    ) && (
-                      <span className="flex items-center gap-1.5 flex-shrink-0">
-                        {/* Daily Notes indicator */}
-                        <span title={dailyStatus[project.projectId]?.hasNotes ? 'Daily note submitted' : 'Daily note missing'}>
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-                            stroke={dailyStatus[project.projectId]?.hasNotes ? '#34c759' : '#ff3b30'}
-                            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                            <path d="M14 2v6h6" />
-                            <line x1="16" y1="13" x2="8" y2="13" />
-                            <line x1="16" y1="17" x2="8" y2="17" />
-                          </svg>
+                    >
+                      <div className="font-medium truncate flex items-center gap-2">
+                        <span
+                          className={`inline-block w-[8px] h-[8px] rounded-full flex-shrink-0 ${
+                            project.status.toLowerCase().includes('complete') ||
+                            project.status.toLowerCase().includes('closed')
+                              ? 'bg-[#c0c0c0]'
+                              : 'bg-[#34c759]'
+                          }`}
+                        />
+                        {project.projectName}
+                      </div>
+                      <div className="flex items-center justify-between mt-0.5 ml-[16px]">
+                        <span className="text-[11px] text-[#aeaeb2] truncate">
+                          {project.address || formatCurrency(project.contractValue)}
                         </span>
-                        {/* Staffing indicator */}
-                        <span title={dailyStatus[project.projectId]?.hasStaffing ? 'Staffing submitted' : 'Staffing missing'}>
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-                            stroke={dailyStatus[project.projectId]?.hasStaffing ? '#34c759' : '#ff3b30'}
-                            strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2" />
-                            <circle cx="9" cy="7" r="4" />
-                          </svg>
-                        </span>
-                      </span>
+                        {!(
+                          project.status.toLowerCase().includes('complete') ||
+                          project.status.toLowerCase().includes('closed')
+                        ) && (
+                          <span className="flex items-center gap-1.5 flex-shrink-0">
+                            <span title={dailyStatus[project.projectId]?.hasNotes ? 'Daily note submitted' : 'Daily note missing'}>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                                stroke={dailyStatus[project.projectId]?.hasNotes ? '#34c759' : '#ff3b30'}
+                                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                                <path d="M14 2v6h6" />
+                                <line x1="16" y1="13" x2="8" y2="13" />
+                                <line x1="16" y1="17" x2="8" y2="17" />
+                              </svg>
+                            </span>
+                            <span title={dailyStatus[project.projectId]?.hasStaffing ? 'Staffing submitted' : 'Staffing missing'}>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                                stroke={dailyStatus[project.projectId]?.hasStaffing ? '#34c759' : '#ff3b30'}
+                                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2" />
+                                <circle cx="9" cy="7" r="4" />
+                              </svg>
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    </motion.button>
+
+                    {/* Sub-navigation links when project is selected */}
+                    {isSelected && (
+                      <div className="ml-[28px] mt-0.5 mb-1 space-y-0.5 border-l border-[#e0e0e0] pl-2.5">
+                        {([
+                          { label: 'Dashboard', segment: 'dashboard' },
+                          { label: 'Chat', segment: 'chat' },
+                          { label: 'Pipeline', segment: 'pipeline' },
+                          { label: 'Sources', segment: 'sources' },
+                        ] as const).map(({ label, segment }) => {
+                          const href = `${projectBase}/${segment}`;
+                          const isActive = pathname === href || pathname.startsWith(`${href}/`);
+                          return (
+                            <Link
+                              key={segment}
+                              href={href}
+                              className={`block px-2 py-1 rounded-md text-[11px] transition-colors ${
+                                isActive
+                                  ? 'text-[#1a1a1a] font-medium bg-[#e5e5e4]'
+                                  : 'text-[#8b8b8b] hover:text-[#555] hover:bg-[#ebebea]'
+                              }`}
+                            >
+                              {label}
+                            </Link>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
-                </motion.button>
-              ))}
+                );
+              })}
             </div>
           )}
 

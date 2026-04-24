@@ -35,8 +35,12 @@ export default function AppShell({ projects, children }: AppShellProps) {
   } = useConversationHistory();
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [selectedProject, setSelectedProject] = useState<string | null>(null);
   const [footer, setFooter] = useState<ReactNode>(null);
+
+  // Derive selected project from URL instead of state
+  const selectedProject = pathname.startsWith('/project/')
+    ? pathname.split('/')[2] || null
+    : null;
 
   const hasFooter = footer != null;
   const currentView = deriveView(pathname);
@@ -53,9 +57,8 @@ export default function AppShell({ projects, children }: AppShellProps) {
 
   const handleSelectProject = useCallback(
     (projectId: string) => {
-      setSelectedProject(projectId);
       setSidebarOpen(false);
-      router.push(`/?project=${projectId}`);
+      router.push(`/project/${projectId}/dashboard`);
     },
     [router]
   );
@@ -184,6 +187,8 @@ export default function AppShell({ projects, children }: AppShellProps) {
 
 function deriveView(pathname: string): 'chat' | 'pipeline' | 'dashboard' {
   if (pathname === '/review') return 'pipeline';
+  if (pathname.startsWith('/project/') && pathname.endsWith('/pipeline')) return 'pipeline';
+  if (pathname.startsWith('/project/') && pathname.endsWith('/dashboard')) return 'dashboard';
   if (pathname.startsWith('/staff-')) return 'chat';
   if (pathname === '/daily-notes') return 'chat';
   return 'chat';
