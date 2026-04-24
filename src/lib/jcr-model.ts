@@ -6,8 +6,8 @@
 
 import { getSupabase } from './supabase';
 import { evaluateDerivedFields, emitExtractedRows, buildContext } from './derived-evaluator';
-import { evaluateConsistencyChecks, computeReconciliationScore, type CheckResult } from './consistency-evaluator';
-import { targetedFieldExtraction } from './codegen-extractor';
+import type { CheckResult } from './consistency-evaluator';
+import { runPostExtractionValidation } from './post-extraction-validator';
 import type { ExportRow } from '@/types/export';
 
 export type { ExportRow };
@@ -472,130 +472,26 @@ export async function runJcrModel(
     payroll_transactions: extractedData.workerRecords ?? [],
   };
 
-  // ── Consistency checks with auto-fix loop ──
-  // Runs checks like unit tests. If doc-scoped Tier 1 extraction errors
-  // are found and we have tail text, attempt targeted re-extraction
-  // to fix them. Max 1 retry to avoid timeouts.
-  const MAX_REEXTRACT_RETRIES = 1;
-  let checkResults: CheckResult[] = [];
-  let reconciliationScore = 100;
-  let reextractAttempts = 0;
-  let resolvedChecks: string[] = [];
+  // Use the generic post-extraction validator for consistency checks + auto-fix.
+  // This runs for any skill, not just JCR — but JCR provides collections and meta.
+  const validation = await runPostExtractionValidation({
+    pipelineLogId,
+    skillId,
+    fields: finalFields,
+    collections,
+    meta: { ...meta, code_ranges: codeRanges } as Record<string, unknown>,
+    tailText: options?.tailText,
+  });
 
-  for (let attempt = 0; attempt <= MAX_REEXTRACT_RETRIES; attempt++) {
-    const evalCtx = buildContext(finalFields, collections, { ...meta, code_ranges: codeRanges } as Record<string, unknown>);
+  const { withheldFields, anomalyFields, checkResults, reconciliationScore } = validation;
 
-    try {
-      checkResults = await evaluateConsistencyChecks(skillId, evalCtx);
-      reconciliationScore = computeReconciliationScore(checkResults);
-      console.log(`[jcr-model] Consistency checks (attempt ${attempt + 1}): score=${reconciliationScore}% (${checkResults.filter(r => r.status === 'pass').length} passed, ${checkResults.filter(r => r.status === 'fail').length} failed)`);
-    } catch (err) {
-      console.error(`[jcr-model] Consistency checks failed (non-fatal):`, err);
-      break;
-    }
-
-    // Find doc-scoped Tier 1 extraction errors that could be fixed by re-reading
-    const retriableErrors = checkResults.filter(r =>
-      r.status === 'fail' &&
-      r.classification === 'extraction_error' &&
-      r.scope === 'doc' &&
-      r.tier <= 2 &&
-      r.affected_fields.length > 0
-    );
-
-    if (retriableErrors.length === 0 || attempt === MAX_REEXTRACT_RETRIES) {
-      if (attempt > 0 && retriableErrors.length === 0) {
-        console.log(`[jcr-model] All extraction errors resolved after ${attempt} re-extraction(s)`);
+  // Apply any corrections from re-extraction back into our fields
+  if (validation.correctedFields) {
+    for (const [field, val] of Object.entries(validation.correctedFields)) {
+      if (val && finalFields[field] && val.value !== finalFields[field].value) {
+        console.log(`[jcr-model] Applying validated correction: ${field}: ${finalFields[field].value} → ${val.value}`);
+        finalFields[field] = val;
       }
-      break;
-    }
-
-    // Need tail text to do targeted re-extraction
-    const tailText = options?.tailText;
-    if (!tailText) {
-      console.log(`[jcr-model] ${retriableErrors.length} retriable error(s) but no tail text available — skipping re-extraction`);
-      break;
-    }
-
-    reextractAttempts++;
-    console.log(
-      `[jcr-model] Attempting targeted re-extraction (attempt ${reextractAttempts}) for ${retriableErrors.length} failing checks: ` +
-      retriableErrors.map(e => e.check_name).join(', ')
-    );
-
-    try {
-      const currentValues: Record<string, number | string | null> = {};
-      for (const err of retriableErrors) {
-        for (const f of err.affected_fields) {
-          currentValues[f] = (finalFields[f]?.value as number | string | null) ?? null;
-        }
-      }
-
-      const reextractResult = await targetedFieldExtraction({
-        failingChecks: retriableErrors.map(e => ({
-          check_name: e.check_name,
-          message: e.message,
-          affected_fields: e.affected_fields,
-          hint_template: e.hint_template,
-          expected: e.expected,
-          actual: e.actual,
-        })),
-        tailText,
-        currentValues,
-      });
-
-      if (reextractResult.fieldsChanged.length > 0) {
-        for (const [field, value] of Object.entries(reextractResult.correctedFields)) {
-          if (value != null && finalFields[field]) {
-            const oldVal = finalFields[field].value;
-            finalFields[field] = { value, confidence: 0.85 };
-            console.log(`[jcr-model] Re-extracted ${field}: ${oldVal} → ${value}`);
-          }
-        }
-        resolvedChecks.push(...reextractResult.fieldsChanged.map(f => `${f} corrected`));
-      } else {
-        console.log('[jcr-model] Targeted re-extraction returned no changes');
-        break;
-      }
-    } catch (err) {
-      console.error(`[jcr-model] Targeted re-extraction failed:`, err);
-      break;
-    }
-  }
-
-  // Classify final failures into extraction errors and document anomalies
-  const extractionErrors = checkResults.filter(r => r.status === 'fail' && r.classification === 'extraction_error');
-  const docAnomalies = checkResults.filter(r => r.status === 'fail' && r.classification === 'document_anomaly');
-
-  if (extractionErrors.length > 0) {
-    console.warn(
-      `[jcr-model] ${extractionErrors.length} unresolved extraction error(s) after ${reextractAttempts} retry attempt(s): ` +
-      extractionErrors.map(e => `${e.check_name}: ${e.message}`).join('; ')
-    );
-  }
-  if (docAnomalies.length > 0) {
-    console.log(
-      `[jcr-model] ${docAnomalies.length} document anomaly/anomalies: ` +
-      docAnomalies.map(a => `${a.check_name}: ${a.message}`).join('; ')
-    );
-  }
-  if (resolvedChecks.length > 0) {
-    console.log(`[jcr-model] Resolved via re-extraction: ${resolvedChecks.join(', ')}`);
-  }
-
-  // Build set of fields affected by unresolved extraction errors (to withhold)
-  const withheldFields = new Set<string>();
-  for (const err of extractionErrors) {
-    for (const f of err.affected_fields) {
-      withheldFields.add(f);
-    }
-  }
-
-  // Build set of fields affected by document anomalies (to flag)
-  const anomalyFields = new Set<string>();
-  for (const anomaly of docAnomalies) {
-    for (const f of anomaly.affected_fields) {
-      anomalyFields.add(f);
     }
   }
 
@@ -647,36 +543,6 @@ export async function runJcrModel(
     if (error) {
       console.error(`[jcr-model] Insert batch ${i} failed:`, error.message);
     }
-  }
-
-  // ── Store check results on pipeline_log ──
-  try {
-    const validationFlags = checkResults.map(r => ({
-      field: r.check_name,
-      issue: r.message,
-      severity: r.status === 'fail' ? 'error' as const : 'info' as const,
-      check_type: 'consistency',
-      classification: r.classification,
-      resolution: r.status === 'pass'
-        ? (resolvedChecks.some(rc => r.check_name.includes(rc.split(' ')[0])) ? 'resolved' : 'passed')
-        : (r.classification === 'document_anomaly' ? 'anomaly' : 'withheld'),
-      tier: r.tier,
-      expected: r.expected,
-      actual: r.actual,
-      ...(r.record_key ? { record_key: r.record_key } : {}),
-    }));
-
-    const pipelineStatus = extractionErrors.length > 0 ? 'pending_operator_review' : undefined;
-
-    await sb.from('pipeline_log').update({
-      reconciliation_score: reconciliationScore,
-      ...(validationFlags.length > 0 ? { validation_flags: validationFlags } : {}),
-      ...(pipelineStatus ? { status: pipelineStatus } : {}),
-    }).eq('id', pipelineLogId);
-
-    console.log(`[jcr-model] Stored ${validationFlags.length} check results on pipeline_log, score=${reconciliationScore}%`);
-  } catch (err) {
-    console.error(`[jcr-model] Failed to store check results:`, err);
   }
 
   console.log(`[jcr-model] Done: run=${runId} rows=${allRows.length} recon_score=${reconciliationScore}%`);

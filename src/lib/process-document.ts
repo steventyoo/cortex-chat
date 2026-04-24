@@ -8,6 +8,7 @@ import { ValidationFlag, ExtractionResult, resolveCategoryKey, generateCanonical
 import { ProcessPayload } from '@/lib/qstash';
 import { downloadFileContent, downloadFileRaw } from '@/lib/google-drive';
 import { runJcrModel } from '@/lib/jcr-model';
+import { runPostExtractionValidation } from '@/lib/post-extraction-validator';
 import { getLangfuse } from '@/lib/langfuse';
 import { extractText as pdfExtractText } from 'unpdf';
 import { countPdfPagesSync } from 'pdf-pages-count';
@@ -325,6 +326,43 @@ async function processLargePdfVision(opts: {
     console.error(`[process:large-pdf] Failed to update pipeline record:`, err);
   }
   timing.db_final_update = Date.now() - tStep;
+
+  // Post-extraction validation for non-JCR skills
+  if (extraction.skillId && extraction.skillId !== JCR_SKILL_ID) {
+    try {
+      const valT = Date.now();
+      let tailText: string | undefined;
+      try {
+        tailText = await extractTextFromLargePdf(rawBuffer, 0, 5);
+      } catch { /* non-fatal */ }
+
+      const fields = extraction.fields as Record<string, { value: string | number | null; confidence: number }>;
+      const collections: Record<string, Array<Record<string, { value: string | number | null; confidence: number }>>> = {};
+      if (extraction.records?.length) {
+        collections.records = extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+      }
+      for (const tt of extraction.targetTables ?? []) {
+        if (tt.table && tt.records?.length) {
+          collections[tt.table] = tt.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+        }
+      }
+
+      const valResult = await runPostExtractionValidation({
+        pipelineLogId: recordId,
+        skillId: extraction.skillId,
+        fields,
+        collections,
+        tailText,
+      });
+      timing.validation = Date.now() - valT;
+      console.log(
+        `[process:large-pdf] Validation complete for skill=${extraction.skillId}: ` +
+        `score=${valResult.reconciliationScore}% elapsed=${timing.validation}ms`
+      );
+    } catch (err) {
+      console.warn(`[process:large-pdf] Post-extraction validation failed (non-fatal):`, err);
+    }
+  }
 
   if (extraction.skillId === JCR_SKILL_ID && extraction.records?.length) {
     try {
@@ -849,6 +887,47 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
     console.error(`[process] Failed to update pipeline record ${recordId}:`, err);
   }
   timing.db_final_update = Date.now() - tStep;
+
+  // ── Post-extraction validation (runs for ALL document skills) ──
+  // For JCR, this is called internally by runJcrModel after its transforms.
+  // For all other skills, run the generic validator directly here.
+  if (extraction.skillId && extraction.skillId !== JCR_SKILL_ID) {
+    try {
+      const valT = Date.now();
+      let tailText: string | undefined;
+      if (pdfBuffer) {
+        try {
+          tailText = await extractTextFromLargePdf(pdfBuffer, 0, 5);
+        } catch { /* non-fatal */ }
+      }
+
+      const fields = extraction.fields as Record<string, { value: string | number | null; confidence: number }>;
+      const collections: Record<string, Array<Record<string, { value: string | number | null; confidence: number }>>> = {};
+      if (extraction.records?.length) {
+        collections.records = extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+      }
+      for (const tt of extraction.targetTables ?? []) {
+        if (tt.table && tt.records?.length) {
+          collections[tt.table] = tt.records as Array<Record<string, { value: string | number | null; confidence: number }>>;
+        }
+      }
+
+      const valResult = await runPostExtractionValidation({
+        pipelineLogId: recordId,
+        skillId: extraction.skillId,
+        fields,
+        collections,
+        tailText,
+      });
+      timing.validation = Date.now() - valT;
+      console.log(
+        `[process] Validation complete for skill=${extraction.skillId}: ` +
+        `score=${valResult.reconciliationScore}% elapsed=${timing.validation}ms`
+      );
+    } catch (err) {
+      console.warn(`[process] Post-extraction validation failed (non-fatal):`, err);
+    }
+  }
 
   // Run JCR Model Engine if this is a job cost report with records
   if (extraction.skillId === JCR_SKILL_ID && extraction.records?.length) {
