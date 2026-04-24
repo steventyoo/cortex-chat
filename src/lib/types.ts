@@ -1,3 +1,7 @@
+import { HealthStatus } from './schemas/enums';
+
+export type { HealthStatus };
+
 export interface ToolCallEntry {
   name: string;
   displayName?: string;
@@ -54,7 +58,6 @@ export interface StreamEvent {
 }
 
 // Dashboard types
-export type HealthStatus = 'healthy' | 'warning' | 'critical';
 
 export interface ProjectHealth {
   projectId: string;

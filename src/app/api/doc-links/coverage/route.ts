@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
 import { getSupabase } from '@/lib/supabase';
+import type { LinkStatus } from '@/lib/schemas/enums';
 
 const CHAIN_GROUPS: Record<string, string[]> = {
   'Revenue Pipeline': [
@@ -37,8 +38,6 @@ const CHAIN_GROUPS: Record<string, string[]> = {
     'subbid_vs_punchlist',
   ],
 };
-
-type LinkStatus = 'complete' | 'partial' | 'missing' | 'not_applicable';
 
 interface LinkTypeCoverage {
   linkTypeKey: string;

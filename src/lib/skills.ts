@@ -28,17 +28,19 @@ import {
 } from './stores/field-catalog.store';
 import type { LangfuseParent } from './langfuse';
 
+import type { FieldType, FieldImportance, SkillStatus } from './schemas/enums';
+
 // ── Types ─────────────────────────────────────────────────────
 
 export interface FieldDefinition {
   name: string;
-  type: 'string' | 'number' | 'date' | 'enum' | 'boolean' | 'array';
+  type: FieldType;
   tier: 0 | 1 | 2 | 3;
   required: boolean;
   description: string;
   options?: string[];
   disambiguationRules?: string;
-  importance?: 'P' | 'S' | 'E' | 'A';
+  importance?: FieldImportance;
 }
 
 export interface DocumentSkill {
@@ -46,7 +48,7 @@ export interface DocumentSkill {
   skillId: string;
   displayName: string;
   version: number;
-  status: 'active' | 'draft' | 'archived';
+  status: SkillStatus;
   systemPrompt: string;
   /** @deprecated Use field_catalog + skill_fields instead. Kept as JSONB fallback for unmigrated skills. */
   fieldDefinitions: FieldDefinition[];

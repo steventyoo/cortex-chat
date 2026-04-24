@@ -5,6 +5,11 @@
 
 import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
+import type { UserRole } from './schemas/enums';
+import { ADMIN_ROLES } from './schemas/enums';
+
+export { ADMIN_ROLES };
+export type { UserRole };
 
 export const SESSION_COOKIE = 'cortex-session';
 const MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // 7 days
@@ -14,7 +19,7 @@ export interface SessionPayload {
   orgId: string;
   email: string;
   name: string;
-  role: 'owner' | 'admin' | 'member' | 'viewer';
+  role: UserRole;
 }
 
 function getSecret() {
@@ -75,5 +80,5 @@ export function sessionCookieOptions() {
 
 /** Check if a role has admin-level access (owner or admin). */
 export function isAdminRole(role: string): boolean {
-  return role === 'owner' || role === 'admin';
+  return (ADMIN_ROLES as readonly string[]).includes(role);
 }

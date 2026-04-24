@@ -7,6 +7,7 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { nanoid } from 'nanoid';
 import { ProjectData, ProjectSummary, ProjectHealth, ProjectAlert, HealthStatus } from './types';
 import { DEFAULT_CATEGORIES, generateClientCode } from './pipeline';
+import type { UserRole } from './schemas/enums';
 
 // ── Client ────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ export interface UserRecord {
   email: string;
   name: string;
   passwordHash: string;
-  role: 'owner' | 'admin' | 'member' | 'viewer';
+  role: UserRole;
   active: boolean;
   createdAt: string;
   lastLogin: string;

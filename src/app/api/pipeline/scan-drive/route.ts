@@ -19,6 +19,7 @@ import {
 } from '@/lib/google-drive';
 import { generatePipelineId, MAX_RETRY_COUNT } from '@/lib/pipeline';
 import { fetchProjectList, getSupabase, getOrganization } from '@/lib/supabase';
+import { listActiveFileSources, updateSourceLastSynced } from '@/lib/stores/project-sources.store';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { publishProcessBatch, publishScanContinuation, ProcessPayload, ScanContinuationPayload } from '@/lib/qstash';
 import { getQStashReceiver } from '@/lib/qstash';
@@ -123,12 +124,49 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
   const { urls: processedFileUrls, nameKeys: processedNameKeys, driveStatusMap } = await getProcessedDriveFiles(orgId);
   timing.dedup_query = Date.now() - tStep;
 
+  // ── Per-project source scanning ──
+  // Scan each project's explicit file sources first. Files found here are
+  // tagged with the source's project_id directly (no fuzzy matching).
+  tStep = Date.now();
+  const perSourceFiles: typeof supportedFiles = [];
+  const claimedDriveIds = new Set<string>();
+  const scannedSourceIds: string[] = [];
+
+  if (orgId) {
+    try {
+      const fileSources = await listActiveFileSources(orgId);
+      const gdriveSources = fileSources.filter((s) => s.provider === 'gdrive' && s.config.folder_id);
+
+      for (const source of gdriveSources) {
+        const fid = String(source.config.folder_id);
+        try {
+          const sourceFiles = await listAllDriveFiles(fid);
+          const supported = sourceFiles.filter((f) => isSupportedFileType(f.mimeType));
+          for (const f of supported) {
+            (f as typeof f & { _sourceProjectId?: string })._sourceProjectId = source.projectId;
+            perSourceFiles.push(f);
+            claimedDriveIds.add(f.id);
+          }
+          scannedSourceIds.push(source.id);
+        } catch (err) {
+          console.error(`[scan-drive] Failed to scan source ${source.id} (folder=${fid}):`, err);
+        }
+      }
+    } catch (err) {
+      console.error('[scan-drive] Failed to fetch project sources:', err);
+    }
+  }
+  timing.per_source_scan = Date.now() - tStep;
+
   const newFiles: typeof supportedFiles = [];
   const updatedFiles: Array<{ file: typeof supportedFiles[0]; previousRecordId: string }> = [];
   const retryFiles: Array<{ file: typeof supportedFiles[0]; existingRecordId: string; retryCount: number }> = [];
   let skippedMaxRetries = 0;
 
   for (const f of supportedFiles) {
+    // Skip files already claimed by an explicit per-project source
+    if (claimedDriveIds.has(f.id)) continue;
+
     const existing = driveStatusMap.get(f.id);
 
     if (!existing) {
@@ -167,6 +205,17 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
         }
         continue;
       }
+    }
+  }
+
+  // Add per-source files into newFiles (they have _sourceProjectId pre-tagged)
+  for (const f of perSourceFiles) {
+    const existing = driveStatusMap.get(f.id);
+    if (!existing) {
+      if (processedFileUrls.has(buildDriveFileUrl(f.id))) continue;
+      const nameKey = `${f.name.toLowerCase()}|${f.parentFolderName?.toLowerCase() || ''}`;
+      if (processedNameKeys.has(nameKey)) continue;
+      newFiles.push(f);
     }
   }
 
@@ -296,7 +345,11 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
   for (const file of filesToQueue) {
     try {
       let projectId = '';
-      if (file.parentFolderName && file.parentFolderName !== '_Root') {
+      // Use pre-assigned source project ID if available, otherwise fuzzy-match
+      const sourceProjectId = (file as typeof file & { _sourceProjectId?: string })._sourceProjectId;
+      if (sourceProjectId) {
+        projectId = sourceProjectId;
+      } else if (file.parentFolderName && file.parentFolderName !== '_Root') {
         projectId = matchProject(file.parentFolderName, folderLookup);
       }
 
@@ -433,6 +486,16 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
   }
 
   timing.queue_files = Date.now() - tStep;
+
+  // Update last_synced_at for per-project sources that were scanned
+  if (scannedSourceIds.length > 0) {
+    for (const sid of scannedSourceIds) {
+      await updateSourceLastSynced(sid).catch((err) =>
+        console.error(`[scan-drive] Failed to update last_synced_at for source ${sid}:`, err)
+      );
+    }
+  }
+
   timing.total = Date.now() - t0;
 
   const queuedCount = results.filter((r) => r.status === 'queued').length;

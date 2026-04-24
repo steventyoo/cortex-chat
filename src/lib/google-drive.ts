@@ -78,6 +78,50 @@ function getRootFolderId(): string {
 // ─── Folder Operations ─────────────────────────────────────────
 
 /**
+ * Validate that a Google Drive folder is accessible and return its metadata.
+ * Reusable by onboarding test-drive and project source connection.
+ */
+export async function testDriveFolderAccess(folderId: string): Promise<{
+  success: boolean;
+  folderName?: string;
+  subfolders?: DriveFolder[];
+  error?: string;
+}> {
+  try {
+    const drive = getDriveClient();
+    const folderMeta = await drive.files.get({
+      fileId: folderId.trim(),
+      fields: 'id, name, mimeType',
+    });
+
+    if (folderMeta.data.mimeType !== 'application/vnd.google-apps.folder') {
+      return { success: false, error: 'The ID provided is not a folder' };
+    }
+
+    const res = await drive.files.list({
+      q: `'${folderId.trim()}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: 'files(id, name)',
+      orderBy: 'name',
+      pageSize: 100,
+    });
+
+    const subfolders = (res.data.files || []).map((f) => ({
+      id: f.id!,
+      name: f.name!,
+    }));
+
+    return { success: true, folderName: folderMeta.data.name || '', subfolders };
+  } catch (err) {
+    const message =
+      err instanceof Error && err.message.includes('not found')
+        ? 'Folder not found. Make sure you shared it with the service account.'
+        : 'Could not access folder. Share it with: ' +
+          (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'the service account');
+    return { success: false, error: message };
+  }
+}
+
+/**
  * List all sub-folders inside a given folder, handling pagination.
  */
 export async function listProjectFolders(rootFolderIdOverride?: string): Promise<DriveFolder[]> {

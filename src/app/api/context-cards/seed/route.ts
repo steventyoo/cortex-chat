@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
+import { validateUserSession, SESSION_COOKIE, SessionPayload, ADMIN_ROLES } from '@/lib/auth-v2';
 import { getSupabase } from '@/lib/supabase';
 import { generateEmbedding } from '@/lib/embeddings';
 
@@ -882,7 +882,7 @@ Key metric: Billing Progress % and Over/Under Billing vs JTD Cost.`,
 export async function POST(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
-  if (!session || !['owner', 'admin'].includes(session.role)) {
+  if (!session || !ADMIN_ROLES.includes(session.role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

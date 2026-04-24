@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import type { UserRole } from '@/lib/schemas/enums';
 
 export interface SessionUser {
   userId: string;
   orgId: string;
   email: string;
   name: string;
-  role: 'owner' | 'admin' | 'member' | 'viewer';
+  role: UserRole;
   orgName: string;
   onboardingComplete: boolean;
 }
