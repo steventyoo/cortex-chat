@@ -1174,6 +1174,8 @@ export async function updateSourceLastSynced(sourceId: string): Promise<void> {
 
 // ── Document Storage ──────────────────────────────────────────
 
+const DOCUMENTS_BUCKET = 'documents';
+
 /**
  * Upload a file to Supabase Storage.
  * Path convention: {orgId}/{projectId}/{pipelineLogId}/{fileName}
