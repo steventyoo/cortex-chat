@@ -6,3 +6,4 @@ export * from './chat-tools.schema';
 export * from './context-cards.schema';
 export * from './link-types.schema';
 export * from './project-sources.schema';
+export * from './eval-runs.schema';

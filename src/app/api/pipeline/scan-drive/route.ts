@@ -52,12 +52,29 @@ export async function GET(request: NextRequest) {
   let driveFolderId: string | undefined;
 
   const explicitFolder = request.nextUrl.searchParams.get('folderId');
+  const scopedProjectId = request.nextUrl.searchParams.get('projectId');
 
   const session = sessionToken ? await validateUserSession(sessionToken) : null;
   if (session?.orgId) {
     const org = await getOrganization(session.orgId);
     if (org?.driveFolderId) {
       driveFolderId = org.driveFolderId;
+    }
+  }
+
+  // Project-scoped scan: look up the project's gdrive source folder
+  if (scopedProjectId && session?.orgId) {
+    const sources = await listActiveFileSources(session.orgId);
+    const projectSource = sources.find(
+      (s) => s.provider === 'gdrive' && s.config && (s.config as Record<string, unknown>).folder_id && s.project_id === scopedProjectId
+    );
+    if (projectSource) {
+      driveFolderId = String((projectSource.config as Record<string, unknown>).folder_id);
+    } else {
+      return Response.json({
+        error: 'No Google Drive folder configured for this project',
+        hint: 'Add a Google Drive source in the project Sources tab',
+      }, { status: 404 });
     }
   }
 
@@ -79,7 +96,7 @@ export async function GET(request: NextRequest) {
   const orgId = session?.orgId || '';
 
   try {
-    return await runScan(request, orgId, driveFolderId);
+    return await runScan(request, orgId, driveFolderId, scopedProjectId || undefined);
   } catch (err) {
     console.error('Drive scan error:', err);
     const detail = err instanceof Error ? err.message : 'Unknown';
@@ -99,7 +116,7 @@ export async function GET(request: NextRequest) {
 
 // ─── Core scan logic shared by GET (manual/cron) and POST (QStash continuation) ───
 
-async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: string): Promise<Response> {
+async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: string, scopedProjectId?: string): Promise<Response> {
   const t0 = Date.now();
   const timing: Record<string, number> = {};
 
@@ -279,7 +296,9 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
         .eq('id', previousRecordId);
 
       let projectId = '';
-      if (file.parentFolderName && file.parentFolderName !== '_Root') {
+      if (scopedProjectId) {
+        projectId = scopedProjectId;
+      } else if (file.parentFolderName && file.parentFolderName !== '_Root') {
         projectId = matchProject(file.parentFolderName, folderLookup);
       }
 
@@ -345,12 +364,16 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
   for (const file of filesToQueue) {
     try {
       let projectId = '';
-      // Use pre-assigned source project ID if available, otherwise fuzzy-match
-      const sourceProjectId = (file as typeof file & { _sourceProjectId?: string })._sourceProjectId;
-      if (sourceProjectId) {
-        projectId = sourceProjectId;
-      } else if (file.parentFolderName && file.parentFolderName !== '_Root') {
-        projectId = matchProject(file.parentFolderName, folderLookup);
+      // Use scoped project ID, then pre-assigned source project ID, then fuzzy-match
+      if (scopedProjectId) {
+        projectId = scopedProjectId;
+      } else {
+        const sourceProjectId = (file as typeof file & { _sourceProjectId?: string })._sourceProjectId;
+        if (sourceProjectId) {
+          projectId = sourceProjectId;
+        } else if (file.parentFolderName && file.parentFolderName !== '_Root') {
+          projectId = matchProject(file.parentFolderName, folderLookup);
+        }
       }
 
       const pipelineId = generatePipelineId();

@@ -24,11 +24,19 @@ dotenv.config({ path: '.env.local', override: true });
 dotenv.config({ path: '.env' });
 
 import { SignJWT } from 'jose';
+import { createClient } from '@supabase/supabase-js';
 import { EVAL_ITEMS, DATASET_NAME, EvalItem } from '../src/lib/eval-dataset';
 import { getLangfuse, scoreChatTrace, EvalScores, shutdownLangfuse } from '../src/lib/langfuse';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const RUN_LABEL = `eval-${new Date().toISOString().slice(0, 19).replace(/[:]/g, '-')}`;
+
+function getSupabaseClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('Missing SUPABASE env vars');
+  return createClient(url, key);
+}
 
 /* ── Fetch items from API ─────────────────────────────────── */
 
@@ -202,6 +210,76 @@ async function syncDataset(items: EvalItem[]): Promise<void> {
   console.log(`Synced ${items.length} dataset items to Langfuse\n`);
 }
 
+/* ── Supabase persistence ─────────────────────────────────── */
+
+async function persistChatEvalToSupabase(
+  runLabel: string,
+  results: RunResult[],
+): Promise<void> {
+  try {
+    const sb = getSupabaseClient();
+    const withExpected = results.filter((r) => r.hasExpected);
+    const passCount = withExpected.filter((r) => r.passed).length;
+    const failCount = withExpected.filter((r) => !r.passed).length;
+    const skipCount = results.filter((r) => !r.hasExpected).length;
+    const accuracy = withExpected.length > 0 ? passCount / withExpected.length : 0;
+
+    const { data: run, error: runErr } = await sb
+      .from('eval_runs')
+      .insert({
+        org_id: 'org_owp_001',
+        run_label: runLabel,
+        run_type: 'chat',
+        total_items: results.length,
+        passed: passCount,
+        failed: failCount,
+        missing: skipCount,
+        accuracy,
+        metadata: {
+          base_url: BASE_URL,
+          avg_correctness: withExpected.length > 0
+            ? withExpected.reduce((s, r) => s + r.scores.correctness, 0) / withExpected.length
+            : 0,
+        },
+      })
+      .select()
+      .single();
+
+    if (runErr) {
+      console.error(`  ⚠ Failed to persist run to Supabase: ${runErr.message}`);
+      return;
+    }
+
+    const rows = results.map((r) => ({
+      run_id: run.id,
+      item_key: r.id,
+      field: r.category,
+      category: 'chat',
+      status: r.error ? 'error' : r.passed ? 'pass' : r.hasExpected ? 'fail' : 'not_computable',
+      score: r.scores.correctness,
+      expected: r.question,
+      actual: r.toolsUsed.join(',') || null,
+      metadata: {
+        tool_routing: r.scores.tool_routing,
+        answer_match: r.scores.answer_match,
+        error: r.error,
+      },
+    }));
+
+    for (let i = 0; i < rows.length; i += 500) {
+      const batch = rows.slice(i, i + 500);
+      const { error: batchErr } = await sb.from('eval_run_results').insert(batch);
+      if (batchErr) {
+        console.error(`  ⚠ Failed to persist ${batch.length} results: ${batchErr.message}`);
+      }
+    }
+
+    console.log(`  → Persisted to Supabase: eval_runs.id=${run.id}`);
+  } catch (err) {
+    console.error(`  ⚠ Supabase persistence failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 /* ── Main ─────────────────────────────────────────────────── */
 
 interface RunResult {
@@ -308,6 +386,9 @@ async function main() {
       passed, scores, toolsUsed: chatResult.toolsUsed, error: null, hasExpected,
     });
   }
+
+  /* ── Persist to Supabase ─────────────────────────────── */
+  await persistChatEvalToSupabase(RUN_LABEL, results);
 
   /* ── Summary ──────────────────────────────────────────── */
   console.log('\n' + '═'.repeat(60));
