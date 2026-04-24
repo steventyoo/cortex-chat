@@ -395,7 +395,7 @@ function FieldModal({
               <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Type</label>
               <select
                 value={fieldType}
-                onChange={e => setFieldType(e.target.value)}
+                onChange={e => setFieldType(e.target.value as FieldType)}
                 className="mt-1 w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 focus:border-[#007aff] bg-white"
               >
                 {FIELD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -405,7 +405,7 @@ function FieldModal({
               <label className="text-[11px] font-medium text-[#999] uppercase tracking-wide">Category</label>
               <select
                 value={category}
-                onChange={e => setCategory(e.target.value)}
+                onChange={e => setCategory(e.target.value as FieldCategory)}
                 className="mt-1 w-full px-3 py-2 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 focus:border-[#007aff] bg-white"
               >
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}

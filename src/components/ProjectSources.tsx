@@ -258,7 +258,7 @@ function AddSourceForm({
               key={p.name}
               onClick={() => {
                 if (p.implemented) {
-                  setSelectedProvider(p.name);
+                  setSelectedProvider(p.name as ProviderName);
                   setConfigValues({});
                 }
               }}

@@ -77,19 +77,19 @@ export const PROVIDERS: Record<ProviderName, SourceProviderDef> = {
 };
 
 export function getProvider(name: string): SourceProviderDef | undefined {
-  return PROVIDERS[name];
+  return PROVIDERS[name as ProviderName];
 }
 
-export function listProviders(): Array<{ name: string } & SourceProviderDef> {
-  return Object.entries(PROVIDERS).map(([name, def]) => ({ name, ...def }));
+export function listProviders(): Array<{ name: ProviderName } & SourceProviderDef> {
+  return (Object.entries(PROVIDERS) as [ProviderName, SourceProviderDef][]).map(([name, def]) => ({ name, ...def }));
 }
 
-export function listImplementedProviders(): Array<{ name: string } & SourceProviderDef> {
+export function listImplementedProviders(): Array<{ name: ProviderName } & SourceProviderDef> {
   return listProviders().filter((p) => p.implemented);
 }
 
 export function validateConfig(provider: string, config: Record<string, unknown>): string | null {
-  const def = PROVIDERS[provider];
+  const def = PROVIDERS[provider as ProviderName];
   if (!def) return `Unknown provider: ${provider}`;
   for (const [key, field] of Object.entries(def.configSchema)) {
     if (field.required && !config[key]) {
