@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { runJcrModel } from '@/lib/jcr-model';
+import { extractTextFromLargePdf } from '@/lib/file-parser';
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,7 +18,7 @@ export async function POST(req: NextRequest) {
 
     const { data: jcrDocs } = await sb
       .from('pipeline_log')
-      .select('id, org_id, project_id, extracted_data')
+      .select('id, org_id, project_id, extracted_data, storage_path')
       .eq('project_id', projectId)
       .eq('document_type', 'job_cost_report')
       .not('extracted_data', 'is', null)
@@ -43,11 +44,27 @@ export async function POST(req: NextRequest) {
     const workerRecords = ed.targetTables
       ?.find(t => t.table === 'payroll_transactions' || t.table === 'worker_transactions')?.records;
 
+    // Try to load tail text from stored PDF for targeted re-extraction
+    let tailText: string | undefined;
+    if (doc.storage_path) {
+      try {
+        const { data: dlData } = await sb.storage.from('documents').download(doc.storage_path);
+        if (dlData) {
+          const buf = Buffer.from(await dlData.arrayBuffer());
+          tailText = await extractTextFromLargePdf(buf, 0, 5);
+        }
+      } catch (err) {
+        console.warn('[jcr-model/run] Failed to load tail text (non-fatal):', err);
+      }
+    }
+
     const result = await runJcrModel(
       doc.id,
       doc.project_id,
       doc.org_id,
       { ...ed, workerRecords },
+      {},
+      { tailText },
     );
 
     return NextResponse.json({
@@ -55,6 +72,8 @@ export async function POST(req: NextRequest) {
       runId: result.runId,
       rowCount: result.rowCount,
       reconciliationScore: result.reconciliationScore,
+      checksPassed: result.checkResults.filter(r => r.status === 'pass').length,
+      checksFailed: result.checkResults.filter(r => r.status === 'fail').length,
       pipelineLogId: doc.id,
       workerCount: workerRecords?.length ?? 0,
     });

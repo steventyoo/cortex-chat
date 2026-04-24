@@ -331,14 +331,21 @@ async function processLargePdfVision(opts: {
       const jcrT = Date.now();
       const workerRecords = extraction.targetTables
         ?.find(t => t.table === 'payroll_transactions' || t.table === 'worker_transactions')?.records;
+
+      // Extract tail pages for targeted re-extraction if consistency checks fail
+      let jcrTailText: string | undefined;
+      try {
+        jcrTailText = await extractTextFromLargePdf(rawBuffer, 0, 5);
+      } catch { /* non-fatal */ }
+
       const jcrResult = await runJcrModel(recordId, projectId || '', orgId, {
         fields: extraction.fields as Record<string, { value: string | number | null; confidence: number }>,
         records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
         skillId: extraction.skillId,
         workerRecords: workerRecords as Array<Record<string, { value: string | number | null; confidence: number }>> | undefined,
-      });
+      }, {}, { tailText: jcrTailText });
       timing.jcr_model = Date.now() - jcrT;
-      console.log(`[process:large-pdf] JCR model complete: rows=${jcrResult.rowCount} workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
+      console.log(`[process:large-pdf] JCR model complete: rows=${jcrResult.rowCount} recon=${jcrResult.reconciliationScore}% workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
     } catch (err) {
       console.warn(`[process:large-pdf] JCR model failed (non-fatal):`, err);
     }
@@ -396,6 +403,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   let tStep = Date.now();
   let sourceText: string;
   let finalStoragePath = storagePath;
+  let pdfBuffer: Buffer | null = null;
 
   if (driveFileId) {
     let rawBuffer: Buffer | null = null;
@@ -404,6 +412,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       console.log(`[process] Downloading raw file from Drive: drive_id=${driveFileId}`);
       const { buffer, effectiveMimeType } = await downloadFileRaw(driveFileId, mimeType);
       rawBuffer = buffer;
+      if (isPdf(mimeType, fileName)) pdfBuffer = buffer;
       timing.drive_raw_download = Date.now() - tStep;
       console.log(`[process] Drive raw download complete: ${buffer.length} bytes, effectiveMime=${effectiveMimeType}`);
 
@@ -538,6 +547,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         throw new Error(error?.message || 'No data returned from storage');
       }
       fileBuffer = Buffer.from(await data.arrayBuffer());
+      if (isPdf(mimeType, fileName)) pdfBuffer = fileBuffer;
       console.log(`[process] Storage download complete: ${fileBuffer.length} bytes`);
     } catch (err) {
       console.error(`[process] Failed to download file for ${recordId}:`, err);
@@ -846,14 +856,23 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       const jcrT = Date.now();
       const workerRecords = extraction.targetTables
         ?.find(t => t.table === 'payroll_transactions' || t.table === 'worker_transactions')?.records;
+
+      // Extract tail pages for targeted re-extraction if consistency checks fail
+      let jcrTailText: string | undefined;
+      if (pdfBuffer) {
+        try {
+          jcrTailText = await extractTextFromLargePdf(pdfBuffer, 0, 5);
+        } catch { /* non-fatal */ }
+      }
+
       const jcrResult = await runJcrModel(recordId, projectId || '', orgId, {
         fields: extraction.fields as Record<string, { value: string | number | null; confidence: number }>,
         records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
         skillId: extraction.skillId,
         workerRecords: workerRecords as Array<Record<string, { value: string | number | null; confidence: number }>> | undefined,
-      });
+      }, {}, { tailText: jcrTailText });
       timing.jcr_model = Date.now() - jcrT;
-      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
+      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} recon=${jcrResult.reconciliationScore}% workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
     } catch (err) {
       console.warn(`[process] JCR model failed (non-fatal):`, err);
     }
