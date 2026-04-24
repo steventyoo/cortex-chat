@@ -5,7 +5,8 @@
  */
 
 import { getSupabase } from './supabase';
-import { evaluateDerivedFields, emitExtractedRows } from './derived-evaluator';
+import { evaluateDerivedFields, emitExtractedRows, buildContext } from './derived-evaluator';
+import { evaluateConsistencyChecks, computeReconciliationScore, type CheckResult } from './consistency-evaluator';
 import type { ExportRow } from '@/types/export';
 
 export type { ExportRow };
@@ -243,7 +244,34 @@ function computeSourceAmounts(
 
 // ── Aggregate payroll transactions into per-worker summaries ──
 
-function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
+function aggregateWorkerRecords(transactions: RecordRow[]): { aggregated: RecordRow[]; dedupCount: number } {
+  // Deduplication pass: remove (name, date, amount) duplicates
+  const seen = new Set<string>();
+  const deduped: RecordRow[] = [];
+  let dedupCount = 0;
+
+  for (const txn of transactions) {
+    const rawName =
+      txn.name?.value ?? txn.worker_name?.value ?? txn.employee_name?.value
+      ?? txn.employee?.value ?? txn.emp_name?.value ?? txn.worker?.value ?? null;
+    const name = rawName != null ? String(rawName).trim() : 'unknown';
+    const date = String(txn.document_date?.value ?? txn.date?.value ?? '');
+    const amt = (txn.actual_amount?.value as number) || 0;
+    const hrs = ((txn.regular_hours?.value as number) || 0) + ((txn.overtime_hours?.value as number) || 0);
+    const key = `${name}|${date}|${amt.toFixed(2)}|${hrs.toFixed(2)}`;
+
+    if (seen.has(key)) {
+      dedupCount++;
+      continue;
+    }
+    seen.add(key);
+    deduped.push(txn);
+  }
+
+  if (dedupCount > 0) {
+    console.log(`[jcr-model] Deduplicated ${dedupCount} PR transactions (${transactions.length} → ${deduped.length})`);
+  }
+
   const groups = new Map<string, RecordRow>();
   const costCodeSets = new Map<string, Set<string>>();
 
@@ -252,7 +280,7 @@ function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
     'actual_amount', 'regular_amount', 'overtime_amount', 'doubletime_amount',
   ]);
 
-  for (const txn of transactions) {
+  for (const txn of deduped) {
     const rawName =
       txn.name?.value ?? txn.worker_name?.value ?? txn.employee_name?.value
       ?? txn.employee?.value ?? txn.emp_name?.value ?? txn.worker?.value ?? null;
@@ -314,7 +342,7 @@ function aggregateWorkerRecords(transactions: RecordRow[]): RecordRow[] {
     results.push(agg);
   }
 
-  return results;
+  return { aggregated: results, dedupCount };
 }
 
 // ── Safety-net reconciliation (log-only) ─────────────────────
@@ -391,7 +419,7 @@ export async function runJcrModel(
   orgId: string,
   extractedData: { fields: FieldsMap; records: RecordRow[]; skillId?: string; workerRecords?: RecordRow[] },
   meta: ProjectMeta = {},
-): Promise<{ runId: string; rowCount: number }> {
+): Promise<{ runId: string; rowCount: number; reconciliationScore: number; checkResults: CheckResult[] }> {
   const sb = getSupabase();
   const runId = crypto.randomUUID();
   const skillId = 'job_cost_report';
@@ -411,7 +439,7 @@ export async function runJcrModel(
 
   const fixedRecords = fixCostCodeColumnSwap(extractedData.records);
   const fixedFields = fixDocLevelFields(extractedData.fields, fixedRecords, codeRanges);
-  const workerAgg = aggregateWorkerRecords(extractedData.workerRecords ?? []);
+  const { aggregated: workerAgg, dedupCount } = aggregateWorkerRecords(extractedData.workerRecords ?? []);
 
   // Diagnostic: log sample transaction keys to debug worker aggregation
   const sampleTxns = extractedData.workerRecords ?? [];
@@ -434,13 +462,59 @@ export async function runJcrModel(
   // ── Safety-net reconciliation logging (log-only, no data changes) ──
   reconcilePrTransactions(extractedData.workerRecords ?? [], fixedRecords, codeRanges, runId);
 
-  console.log(`[jcr-model] Fixed column swap for ${fixedRecords.length} cost codes, aggregated ${workerAgg.length} workers from ${extractedData.workerRecords?.length ?? 0} transactions`);
+  console.log(`[jcr-model] Fixed column swap for ${fixedRecords.length} cost codes, aggregated ${workerAgg.length} workers from ${extractedData.workerRecords?.length ?? 0} transactions (deduped ${dedupCount})`);
 
   const collections: Record<string, RecordRow[]> = {
     cost_code: fixedRecords,
     worker: workerAgg,
     payroll_transactions: extractedData.workerRecords ?? [],
   };
+
+  // ── Consistency checks (runs AFTER transforms, BEFORE derived fields) ──
+  const evalCtx = buildContext(finalFields, collections, { ...meta, code_ranges: codeRanges } as Record<string, unknown>);
+  let checkResults: CheckResult[] = [];
+  let reconciliationScore = 100;
+
+  try {
+    checkResults = await evaluateConsistencyChecks(skillId, evalCtx);
+    reconciliationScore = computeReconciliationScore(checkResults);
+    console.log(`[jcr-model] Consistency checks complete: score=${reconciliationScore}% (${checkResults.filter(r => r.status === 'pass').length} passed, ${checkResults.filter(r => r.status === 'fail').length} failed)`);
+  } catch (err) {
+    console.error(`[jcr-model] Consistency checks failed (non-fatal):`, err);
+  }
+
+  // Classify failures into extraction errors and document anomalies
+  const extractionErrors = checkResults.filter(r => r.status === 'fail' && r.classification === 'extraction_error');
+  const docAnomalies = checkResults.filter(r => r.status === 'fail' && r.classification === 'document_anomaly');
+
+  if (extractionErrors.length > 0) {
+    console.warn(
+      `[jcr-model] ${extractionErrors.length} extraction error(s) detected: ` +
+      extractionErrors.map(e => `${e.check_name}: ${e.message}`).join('; ')
+    );
+  }
+  if (docAnomalies.length > 0) {
+    console.log(
+      `[jcr-model] ${docAnomalies.length} document anomaly/anomalies: ` +
+      docAnomalies.map(a => `${a.check_name}: ${a.message}`).join('; ')
+    );
+  }
+
+  // Build set of fields affected by unresolved extraction errors (to withhold)
+  const withheldFields = new Set<string>();
+  for (const err of extractionErrors) {
+    for (const f of err.affected_fields) {
+      withheldFields.add(f);
+    }
+  }
+
+  // Build set of fields affected by document anomalies (to flag)
+  const anomalyFields = new Set<string>();
+  for (const anomaly of docAnomalies) {
+    for (const f of anomaly.affected_fields) {
+      anomalyFields.add(f);
+    }
+  }
 
   const extractedRows = emitExtractedRows(skillId, finalFields, collections);
 
@@ -455,25 +529,34 @@ export async function runJcrModel(
 
   await sb.from('computed_export').delete().eq('project_id', projectId).eq('org_id', orgId);
 
-  const dbRows = allRows.map(r => ({
-    org_id: orgId,
-    project_id: projectId,
-    run_id: runId,
-    pipeline_log_id: pipelineLogId,
-    skill_id: r.skill_id,
-    tab: r.tab,
-    section: r.section,
-    record_key: r.record_key,
-    field: r.field,
-    canonical_name: r.canonical_name,
-    display_name: r.display_name,
-    data_type: r.data_type,
-    status: r.status,
-    value_text: r.value_text,
-    value_number: r.value_number,
-    notes: r.notes,
-    confidence: 'Verified',
-  }));
+  const dbRows = allRows.map(r => {
+    let confidence = 'Verified';
+    if (withheldFields.has(r.field)) {
+      confidence = 'Withheld';
+    } else if (anomalyFields.has(r.field)) {
+      confidence = 'Anomaly';
+    }
+
+    return {
+      org_id: orgId,
+      project_id: projectId,
+      run_id: runId,
+      pipeline_log_id: pipelineLogId,
+      skill_id: r.skill_id,
+      tab: r.tab,
+      section: r.section,
+      record_key: r.record_key,
+      field: r.field,
+      canonical_name: r.canonical_name,
+      display_name: r.display_name,
+      data_type: r.data_type,
+      status: r.status,
+      value_text: confidence === 'Withheld' ? null : r.value_text,
+      value_number: confidence === 'Withheld' ? null : r.value_number,
+      notes: r.notes,
+      confidence,
+    };
+  });
 
   for (let i = 0; i < dbRows.length; i += 100) {
     const batch = dbRows.slice(i, i + 100);
@@ -483,6 +566,36 @@ export async function runJcrModel(
     }
   }
 
-  console.log(`[jcr-model] Done: run=${runId} rows=${allRows.length}`);
-  return { runId, rowCount: allRows.length };
+  // ── Store check results on pipeline_log ──
+  try {
+    const validationFlags = checkResults.map(r => ({
+      field: r.check_name,
+      issue: r.message,
+      severity: r.status === 'fail' ? 'error' as const : 'info' as const,
+      check_type: 'consistency',
+      classification: r.classification,
+      resolution: r.status === 'pass' ? 'passed' : (
+        r.classification === 'document_anomaly' ? 'anomaly' : 'withheld'
+      ),
+      tier: r.tier,
+      expected: r.expected,
+      actual: r.actual,
+      ...(r.record_key ? { record_key: r.record_key } : {}),
+    }));
+
+    const pipelineStatus = extractionErrors.length > 0 ? 'pending_operator_review' : undefined;
+
+    await sb.from('pipeline_log').update({
+      reconciliation_score: reconciliationScore,
+      ...(validationFlags.length > 0 ? { validation_flags: validationFlags } : {}),
+      ...(pipelineStatus ? { status: pipelineStatus } : {}),
+    }).eq('id', pipelineLogId);
+
+    console.log(`[jcr-model] Stored ${validationFlags.length} check results on pipeline_log, score=${reconciliationScore}%`);
+  } catch (err) {
+    console.error(`[jcr-model] Failed to store check results:`, err);
+  }
+
+  console.log(`[jcr-model] Done: run=${runId} rows=${allRows.length} recon_score=${reconciliationScore}%`);
+  return { runId, rowCount: allRows.length, reconciliationScore, checkResults };
 }

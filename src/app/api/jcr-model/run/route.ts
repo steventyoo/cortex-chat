@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
       success: true,
       runId: result.runId,
       rowCount: result.rowCount,
+      reconciliationScore: result.reconciliationScore,
       pipelineLogId: doc.id,
       workerCount: workerRecords?.length ?? 0,
     });
