@@ -155,7 +155,7 @@ export default function ProjectSources({ projectId }: { projectId: string }) {
                 )}
               </div>
               <div className="flex items-center gap-1">
-                {source.provider === 'gdrive' && source.config.folder_id && (
+                {source.provider === 'gdrive' && !!source.config.folder_id && (
                   <button
                     onClick={() => handleScanNow(source)}
                     disabled={scanning === source.id}
