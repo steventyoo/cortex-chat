@@ -63,6 +63,51 @@ export const EMAIL_TYPES = [
   'application/vnd.ms-outlook',
 ];
 
+// ── MIME inference from file extension ───────────────────────────
+
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.tiff': 'image/tiff',
+  '.tif': 'image/tiff',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.rtf': 'application/rtf',
+  '.eml': 'message/rfc822',
+  '.msg': 'application/vnd.ms-outlook',
+};
+
+function inferMimeFromFileName(fileName: string): string | null {
+  const ext = fileName.slice(fileName.lastIndexOf('.')).toLowerCase();
+  return EXTENSION_MIME_MAP[ext] || null;
+}
+
+function resolveMimeType(mimeType: string, fileName?: string): string {
+  if (mimeType === 'application/octet-stream' && fileName) {
+    const inferred = inferMimeFromFileName(fileName);
+    if (inferred) {
+      console.log(`[file-parser] Resolved ${mimeType} → ${inferred} from filename "${fileName}"`);
+      return inferred;
+    }
+  }
+  return mimeType;
+}
+
 // ── Result type ─────────────────────────────────────────────────
 
 export interface ParseResult {
@@ -86,13 +131,15 @@ export async function parseFileBuffer(
   _fileName?: string,
   options?: ParseOptions
 ): Promise<ParseResult> {
+  const resolvedMime = resolveMimeType(mimeType, _fileName);
+
   // Text files
-  if (TEXT_TYPES.some((t) => mimeType.startsWith(t))) {
+  if (TEXT_TYPES.some((t) => resolvedMime.startsWith(t))) {
     return { text: buffer.toString('utf-8'), method: 'text' };
   }
 
   // PDF -> try unpdf first (local, fast), fall back to Claude for scanned docs
-  if (PDF_TYPES.includes(mimeType)) {
+  if (PDF_TYPES.includes(resolvedMime)) {
     if (options?.forceClaudeOcr) {
       console.log(`[parseFileBuffer] forceClaudeOcr=true — skipping unpdf for better table fidelity`);
       const base64 = buffer.toString('base64');
@@ -125,54 +172,55 @@ export async function parseFileBuffer(
   }
 
   // Images -> Claude vision API
-  if (IMAGE_TYPES.some((t) => mimeType.startsWith(t))) {
+  if (IMAGE_TYPES.some((t) => resolvedMime.startsWith(t))) {
     const base64 = buffer.toString('base64');
-    const claudeMime = mimeType.startsWith('image/tiff') ? 'image/png' : mimeType;
+    const claudeMime = resolvedMime.startsWith('image/tiff') ? 'image/png' : resolvedMime;
     const text = await extractTextWithClaude(base64, claudeMime, 'image');
     return { text, method: 'image-ocr' };
   }
 
   // Excel -> SheetJS
-  if (EXCEL_TYPES.some((t) => mimeType === t)) {
+  if (EXCEL_TYPES.some((t) => resolvedMime === t)) {
     const text = parseExcel(buffer);
     return { text, method: 'excel' };
   }
 
   // Word -> ZIP XML extraction
-  if (WORD_TYPES.some((t) => mimeType === t)) {
+  if (WORD_TYPES.some((t) => resolvedMime === t)) {
     const text = extractTextFromDocx(buffer);
     if (text) return { text, method: 'word' };
     throw new Error('Failed to extract text from Word document');
   }
 
   // PowerPoint -> ZIP XML extraction
-  if (PPT_TYPES.some((t) => mimeType === t)) {
+  if (PPT_TYPES.some((t) => resolvedMime === t)) {
     const text = extractTextFromPptx(buffer);
     if (text) return { text, method: 'pptx' };
     throw new Error('Failed to extract text from PowerPoint');
   }
 
   // Email
-  if (EMAIL_TYPES.some((t) => mimeType === t)) {
+  if (EMAIL_TYPES.some((t) => resolvedMime === t)) {
     const text = parseEmailText(buffer.toString('utf-8'));
     return { text, method: 'email' };
   }
 
-  throw new Error(`Unsupported file type: ${mimeType}`);
+  throw new Error(`Unsupported file type: ${resolvedMime}`);
 }
 
 /**
  * Check if a MIME type is supported for parsing.
  */
-export function isSupportedMimeType(mimeType: string): boolean {
+export function isSupportedMimeType(mimeType: string, fileName?: string): boolean {
+  const resolved = resolveMimeType(mimeType, fileName);
   return (
-    TEXT_TYPES.some((t) => mimeType.startsWith(t)) ||
-    PDF_TYPES.includes(mimeType) ||
-    IMAGE_TYPES.some((t) => mimeType.startsWith(t)) ||
-    EXCEL_TYPES.some((t) => mimeType === t) ||
-    WORD_TYPES.some((t) => mimeType === t) ||
-    PPT_TYPES.some((t) => mimeType === t) ||
-    EMAIL_TYPES.some((t) => mimeType === t)
+    TEXT_TYPES.some((t) => resolved.startsWith(t)) ||
+    PDF_TYPES.includes(resolved) ||
+    IMAGE_TYPES.some((t) => resolved.startsWith(t)) ||
+    EXCEL_TYPES.some((t) => resolved === t) ||
+    WORD_TYPES.some((t) => resolved === t) ||
+    PPT_TYPES.some((t) => resolved === t) ||
+    EMAIL_TYPES.some((t) => resolved === t)
   );
 }
 

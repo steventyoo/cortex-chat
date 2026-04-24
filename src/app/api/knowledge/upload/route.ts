@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'No file provided' }, { status: 400 });
   }
 
-  if (!isSupportedMimeType(file.type)) {
+  if (!isSupportedMimeType(file.type, file.name)) {
     return Response.json({ error: `Unsupported file type: ${file.type}` }, { status: 400 });
   }
 
