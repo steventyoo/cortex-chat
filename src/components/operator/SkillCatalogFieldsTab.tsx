@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import type { CatalogField, SkillField } from '@/lib/schemas/field-catalog.schema';
+import type { FieldImportance } from '@/lib/schemas/enums';
 
 interface Props {
   skillId: string;
@@ -239,7 +240,7 @@ export default function SkillCatalogFieldsTab({ skillId }: Props) {
                           <label className="block text-[10px] font-semibold text-[#999] uppercase tracking-wide mb-1">Importance</label>
                           <select
                             value={editForm.importance || ''}
-                            onChange={e => setEditForm(f => ({ ...f, importance: e.target.value || null }))}
+                            onChange={e => setEditForm(f => ({ ...f, importance: (e.target.value || null) as FieldImportance | null }))}
                             className="w-full px-3 py-1.5 rounded-lg border border-[#e0e0e0] text-[13px] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20"
                           >
                             <option value="">—</option>
