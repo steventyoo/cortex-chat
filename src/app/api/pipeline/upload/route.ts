@@ -44,14 +44,13 @@ export async function POST(request: NextRequest) {
   }
 
   const mimeType = file.type || 'application/octet-stream';
-  if (!isSupportedMimeType(mimeType)) {
+  const fileName = fileNameOverride || file.name || 'Untitled Document';
+  if (!isSupportedMimeType(mimeType, fileName)) {
     return Response.json(
       { error: `Unsupported file type: ${mimeType}. Supported: PDF, images, XLSX, DOCX, PPTX, CSV, TXT.` },
       { status: 415 }
     );
   }
-
-  const fileName = fileNameOverride || file.name || 'Untitled Document';
   const orgId = (session as SessionPayload).orgId;
   const pipelineId = generatePipelineId();
   const now = new Date().toISOString();
