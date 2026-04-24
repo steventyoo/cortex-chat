@@ -293,6 +293,7 @@ export async function extractTextWithClaude(
 export async function extractTextFromLargePdf(
   pdfBuffer: Buffer,
   maxPages?: number,
+  tailPages?: number,
 ): Promise<string> {
   const t0 = Date.now();
   const CHUNK_PAGES = 10;
@@ -300,13 +301,25 @@ export async function extractTextFromLargePdf(
 
   const pdfDoc = await PDFDocument.load(pdfBuffer);
   const totalPages = pdfDoc.getPageCount();
-  const pagesToProcess = maxPages ? Math.min(totalPages, maxPages) : totalPages;
 
-  console.log(`[extractTextFromLargePdf] Splitting ${totalPages} pages (processing ${pagesToProcess}) into chunks of ${CHUNK_PAGES}, parallelism=${PARALLEL_CHUNKS}, buffer=${(pdfBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+  // Build the set of page indices to process
+  const pageIndices = new Set<number>();
+  const headLimit = maxPages ? Math.min(totalPages, maxPages) : totalPages;
+  for (let i = 0; i < headLimit; i++) pageIndices.add(i);
+  if (tailPages && tailPages > 0) {
+    const tailStart = Math.max(headLimit, totalPages - tailPages);
+    for (let i = tailStart; i < totalPages; i++) pageIndices.add(i);
+  }
 
-  const chunks: { startPage: number; endPage: number }[] = [];
-  for (let i = 0; i < pagesToProcess; i += CHUNK_PAGES) {
-    chunks.push({ startPage: i, endPage: Math.min(i + CHUNK_PAGES, pagesToProcess) });
+  const sortedPages = [...pageIndices].sort((a, b) => a - b);
+  const pagesToProcess = sortedPages.length;
+
+  console.log(`[extractTextFromLargePdf] Splitting ${totalPages} pages (processing ${pagesToProcess}${tailPages ? `, head=${headLimit} tail=${tailPages}` : ''}) into chunks of ${CHUNK_PAGES}, parallelism=${PARALLEL_CHUNKS}, buffer=${(pdfBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+
+  const chunks: { startPage: number; endPage: number; pageList: number[] }[] = [];
+  for (let i = 0; i < sortedPages.length; i += CHUNK_PAGES) {
+    const pageList = sortedPages.slice(i, i + CHUNK_PAGES);
+    chunks.push({ startPage: pageList[0], endPage: pageList[pageList.length - 1] + 1, pageList });
   }
 
   const chunkTexts: string[] = new Array(chunks.length).fill('');
@@ -318,10 +331,8 @@ export async function extractTextFromLargePdf(
     const results = await Promise.allSettled(
       batchSlice.map(async (chunk, batchIdx) => {
         const chunkIdx = batch + batchIdx;
-        const pageCount = chunk.endPage - chunk.startPage;
         const chunkDoc = await PDFDocument.create();
-        const pageIndices = Array.from({ length: pageCount }, (_, j) => chunk.startPage + j);
-        const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
+        const copiedPages = await chunkDoc.copyPages(pdfDoc, chunk.pageList);
         copiedPages.forEach(p => chunkDoc.addPage(p));
         const chunkBytes = await chunkDoc.save();
         const chunkBase64 = Buffer.from(chunkBytes).toString('base64');
@@ -329,7 +340,7 @@ export async function extractTextFromLargePdf(
         if (chunkBase64.length > CLAUDE_MAX_BASE64_BYTES) {
           console.warn(`[extractTextFromLargePdf] Chunk ${chunkIdx + 1} (pages ${chunk.startPage + 1}-${chunk.endPage}) is ${(chunkBase64.length / 1024 / 1024).toFixed(1)}MB — falling back to single-page OCR`);
           const singlePageTexts: string[] = [];
-          for (let p = chunk.startPage; p < chunk.endPage; p++) {
+          for (const p of chunk.pageList) {
             const singleDoc = await PDFDocument.create();
             const [cp] = await singleDoc.copyPages(pdfDoc, [p]);
             singleDoc.addPage(cp);

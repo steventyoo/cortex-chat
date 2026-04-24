@@ -195,7 +195,8 @@ async function processLargePdfVision(opts: {
       console.log(`[process:large-pdf] Starting codegen extraction: skill=${skill.skillId} pages=${pageCount}`);
       const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
 
-      const sourceText = await extractTextFromLargePdf(rawBuffer, LARGE_PDF_SAMPLE_PAGES);
+      const tailPages = isJcr ? 5 : 0;
+      const sourceText = await extractTextFromLargePdf(rawBuffer, LARGE_PDF_SAMPLE_PAGES, tailPages || undefined);
 
       const codegenResult: CodegenExtractionResult = await extractWithCodegen(
         rawBuffer, sourceText, skill, catalogFields, contextCardFields,
