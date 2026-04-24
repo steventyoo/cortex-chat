@@ -67,7 +67,7 @@ export default function ProjectSources({ projectId }: { projectId: string }) {
     }
   };
 
-  const providerLabel = (provider: string) => PROVIDERS[provider]?.label || provider;
+  const providerLabel = (provider: ProviderName) => PROVIDERS[provider]?.label || provider;
 
   const configSummary = (source: Source) => {
     if (source.provider === 'gdrive') {
