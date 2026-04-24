@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { normalizeStringArray, normalizeJsonObject, normalizeJsonArray } from './helpers';
+import { SkillStatusEnum } from './enums';
 
 // ─── Skill (document_skills table) ──────────────────────────────────
 
@@ -8,7 +9,7 @@ export const SkillSchema = z.object({
   skill_id: z.string(),
   display_name: z.string(),
   version: z.coerce.number().default(1),
-  status: z.string().default('active'),
+  status: SkillStatusEnum.default('active'),
   system_prompt: z.string().nullable().default(null),
   extraction_instructions: z.string().nullable().default(null),
   field_definitions: normalizeJsonArray,

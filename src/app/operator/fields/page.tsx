@@ -2,21 +2,23 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { FieldCategoryEnum, FieldTypeEnum } from '@/lib/schemas/enums';
+import type { FieldCategory, FieldType } from '@/lib/schemas/enums';
 
 interface CatalogField {
   id: string;
   canonical_name: string;
   display_name: string;
-  field_type: string;
-  category: string;
+  field_type: FieldType;
+  category: FieldCategory;
   description: string;
   enum_options: string[] | null;
   usage_count?: number;
   used_by_skills?: { skill_id: string; skill_name: string }[];
 }
 
-const CATEGORIES = ['identity', 'financial', 'schedule', 'technical', 'quality', 'admin', 'general'] as const;
-const FIELD_TYPES = ['string', 'number', 'date', 'enum', 'boolean', 'array'] as const;
+const CATEGORIES = FieldCategoryEnum.options;
+const FIELD_TYPES = FieldTypeEnum.options;
 
 const CATEGORY_COLORS: Record<string, string> = {
   identity: 'bg-[#dbeafe] text-[#1e40af]',

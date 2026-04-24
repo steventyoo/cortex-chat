@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { getOrganization, getSupabase } from '@/lib/supabase';
+import { insertProjectSource } from '@/lib/stores/project-sources.store';
 
 export const maxDuration = 30;
 
@@ -47,21 +48,23 @@ export async function POST(req: NextRequest) {
   const created = (data || []).map((r: { project_id: string }) => r.project_id);
 
   // Persist project_sources rows for projects that came from Drive subfolders
-  const sourceRows = projects
-    .filter((p: { driveFolderId?: string }) => p.driveFolderId)
-    .map((p: { name: string; projectId?: string; driveFolderId?: string }) => ({
-      project_id: p.projectId || p.name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase(),
-      org_id: session.orgId,
-      kind: 'file',
-      provider: 'gdrive',
-      config: { folder_id: p.driveFolderId, relative_to_org_root: true },
-      label: p.name,
-    }));
+  const driveProjects = projects.filter(
+    (p: { driveFolderId?: string }) => p.driveFolderId,
+  );
 
-  if (sourceRows.length > 0) {
-    const { error: srcError } = await sb.from('project_sources').insert(sourceRows);
-    if (srcError) {
-      console.error('Failed to create project sources:', srcError.message);
+  for (const p of driveProjects) {
+    const proj = p as { name: string; projectId?: string; driveFolderId?: string };
+    try {
+      await insertProjectSource({
+        project_id: proj.projectId || proj.name.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase(),
+        org_id: session.orgId,
+        kind: 'file',
+        provider: 'gdrive',
+        config: { folder_id: proj.driveFolderId, relative_to_org_root: true },
+        label: proj.name,
+      });
+    } catch (srcError) {
+      console.error('Failed to create project source:', srcError);
     }
   }
 

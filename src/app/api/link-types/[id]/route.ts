@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
+import { validateUserSession, SESSION_COOKIE, ADMIN_ROLES } from '@/lib/auth-v2';
 import { LinkTypeSchema, UpdateLinkTypeInput } from '@/lib/schemas/link-types.schema';
 import { updateLinkType, deleteLinkType } from '@/lib/stores/link-types.store';
 
@@ -10,7 +10,7 @@ interface RouteParams {
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
-  if (!session || !['owner', 'admin'].includes(session.role)) {
+  if (!session || !ADMIN_ROLES.includes(session.role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -52,7 +52,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
-  if (!session || !['owner', 'admin'].includes(session.role)) {
+  if (!session || !ADMIN_ROLES.includes(session.role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

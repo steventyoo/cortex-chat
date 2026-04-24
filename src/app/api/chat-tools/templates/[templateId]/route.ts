@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { validateUserSession, SESSION_COOKIE, SessionPayload } from '@/lib/auth-v2';
+import { validateUserSession, SESSION_COOKIE, SessionPayload, ADMIN_ROLES } from '@/lib/auth-v2';
 import { ChatPromptTemplateSchema, UpdateChatTemplateInput } from '@/lib/schemas/chat-tools.schema';
 import {
   getChatTemplateById,
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
-  if (!session || !['owner', 'admin'].includes(session.role)) {
+  if (!session || !ADMIN_ROLES.includes(session.role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -83,7 +83,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await validateUserSession(token) : null;
-  if (!session || !['owner', 'admin'].includes(session.role)) {
+  if (!session || !ADMIN_ROLES.includes(session.role)) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

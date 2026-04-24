@@ -18,7 +18,8 @@ import {
   isSupportedFileType,
 } from '@/lib/google-drive';
 import { generatePipelineId, MAX_RETRY_COUNT } from '@/lib/pipeline';
-import { fetchProjectList, getSupabase, getOrganization, listActiveFileSourcesForOrg, updateSourceLastSynced } from '@/lib/supabase';
+import { fetchProjectList, getSupabase, getOrganization } from '@/lib/supabase';
+import { listActiveFileSources, updateSourceLastSynced } from '@/lib/stores/project-sources.store';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
 import { publishProcessBatch, publishScanContinuation, ProcessPayload, ScanContinuationPayload } from '@/lib/qstash';
 import { getQStashReceiver } from '@/lib/qstash';
@@ -133,7 +134,7 @@ async function runScan(request: NextRequest, orgIdInput: string, driveFolderId: 
 
   if (orgId) {
     try {
-      const fileSources = await listActiveFileSourcesForOrg(orgId);
+      const fileSources = await listActiveFileSources(orgId);
       const gdriveSources = fileSources.filter((s) => s.provider === 'gdrive' && s.config.folder_id);
 
       for (const source of gdriveSources) {

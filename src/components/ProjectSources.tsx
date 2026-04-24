@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { PROVIDERS, listProviders, type SourceProviderDef, type ConfigField } from '@/lib/source-registry';
+import type { SourceKind, ProviderName } from '@/lib/schemas/enums';
 
 interface Source {
   id: string;
   projectId: string;
   orgId: string;
-  kind: 'file' | 'api';
-  provider: string;
+  kind: SourceKind;
+  provider: ProviderName;
   config: Record<string, unknown>;
   label: string;
   active: boolean;
@@ -203,7 +204,7 @@ function AddSourceForm({
   onCancel: () => void;
 }) {
   const allProviders = listProviders();
-  const [selectedProvider, setSelectedProvider] = useState('gdrive');
+  const [selectedProvider, setSelectedProvider] = useState<ProviderName>('gdrive');
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [label, setLabel] = useState('');
   const [submitting, setSubmitting] = useState(false);

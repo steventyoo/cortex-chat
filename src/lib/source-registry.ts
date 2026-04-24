@@ -6,6 +6,8 @@
  * The scan pipeline reads it to dispatch to the correct file lister.
  */
 
+import type { SourceKind, ProviderName } from './schemas/enums';
+
 export interface ConfigField {
   type: 'string' | 'boolean';
   required: boolean;
@@ -14,7 +16,7 @@ export interface ConfigField {
 }
 
 export interface SourceProviderDef {
-  kind: 'file' | 'api';
+  kind: SourceKind;
   label: string;
   icon: string;
   configSchema: Record<string, ConfigField>;
@@ -22,7 +24,7 @@ export interface SourceProviderDef {
   implemented: boolean;
 }
 
-export const PROVIDERS: Record<string, SourceProviderDef> = {
+export const PROVIDERS: Record<ProviderName, SourceProviderDef> = {
   gdrive: {
     kind: 'file',
     label: 'Google Drive',

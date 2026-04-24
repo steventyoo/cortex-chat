@@ -1,11 +1,9 @@
 import { NextRequest } from 'next/server';
+import { z } from 'zod';
 import { validateUserSession, SESSION_COOKIE } from '@/lib/auth-v2';
-import {
-  verifyProjectAccess,
-  listProjectSources,
-  addProjectSource,
-  removeProjectSource,
-} from '@/lib/supabase';
+import { verifyProjectAccess } from '@/lib/supabase';
+import { ProjectSourceSchema, CreateSourceInput } from '@/lib/schemas/project-sources.schema';
+import { listProjectSources, insertProjectSource, deleteProjectSource } from '@/lib/stores/project-sources.store';
 import { testDriveFolderAccess } from '@/lib/google-drive';
 import { getProvider, validateConfig } from '@/lib/source-registry';
 
@@ -27,8 +25,14 @@ export async function GET(
     return Response.json({ error: 'Project not found' }, { status: 404 });
   }
 
-  const sources = await listProjectSources(session.orgId, projectId);
-  return Response.json({ sources });
+  try {
+    const raw = await listProjectSources(session.orgId, projectId);
+    const sources = z.array(ProjectSourceSchema).parse(raw);
+    return Response.json({ sources });
+  } catch (err) {
+    console.error('[project-sources] GET error:', err);
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
+  }
 }
 
 export async function POST(
@@ -47,16 +51,22 @@ export async function POST(
     return Response.json({ error: 'Project not found' }, { status: 404 });
   }
 
-  const body = await req.json();
-  const { provider, config, label } = body as {
-    provider?: string;
-    config?: Record<string, unknown>;
-    label?: string;
-  };
-
-  if (!provider || !config) {
-    return Response.json({ error: 'provider and config are required' }, { status: 400 });
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: 'Invalid request body' }, { status: 400 });
   }
+
+  const parsed = CreateSourceInput.safeParse(body);
+  if (!parsed.success) {
+    return Response.json(
+      { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
+      { status: 400 },
+    );
+  }
+
+  const { provider, config, label } = parsed.data;
 
   const providerDef = getProvider(provider);
   if (!providerDef) {
@@ -71,7 +81,6 @@ export async function POST(
     return Response.json({ error: configError }, { status: 400 });
   }
 
-  // For gdrive, validate the folder is accessible
   if (provider === 'gdrive' && config.folder_id) {
     const testResult = await testDriveFolderAccess(String(config.folder_id));
     if (!testResult.success) {
@@ -79,20 +88,22 @@ export async function POST(
     }
   }
 
-  const source = await addProjectSource({
-    orgId: session.orgId,
-    projectId,
-    kind: providerDef.kind,
-    provider,
-    config,
-    label: label || providerDef.label,
-  });
-
-  if (!source) {
-    return Response.json({ error: 'Failed to create source' }, { status: 500 });
+  try {
+    const raw = await insertProjectSource({
+      org_id: session.orgId,
+      project_id: projectId,
+      kind: providerDef.kind,
+      provider,
+      config,
+      label: label || providerDef.label,
+    });
+    const source = ProjectSourceSchema.parse(raw);
+    return Response.json({ source }, { status: 201 });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[project-sources] POST error:', err);
+    return Response.json({ error: pgErr.message ?? 'Internal server error' }, { status: 500 });
   }
-
-  return Response.json({ source }, { status: 201 });
 }
 
 export async function DELETE(
@@ -116,10 +127,12 @@ export async function DELETE(
     return Response.json({ error: 'sourceId query param required' }, { status: 400 });
   }
 
-  const ok = await removeProjectSource(sourceId, session.orgId);
-  if (!ok) {
-    return Response.json({ error: 'Failed to remove source' }, { status: 500 });
+  try {
+    await deleteProjectSource(sourceId, session.orgId);
+    return Response.json({ success: true });
+  } catch (err: unknown) {
+    const pgErr = err as { message?: string };
+    console.error('[project-sources] DELETE error:', err);
+    return Response.json({ error: pgErr.message ?? 'Failed to remove source' }, { status: 500 });
   }
-
-  return Response.json({ success: true });
 }

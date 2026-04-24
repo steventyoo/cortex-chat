@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import type { LinkStatus } from '@/lib/schemas/enums';
 
 interface LinkType {
   id: string;
@@ -16,8 +17,6 @@ interface LinkType {
   is_active: boolean;
   created_at: string;
 }
-
-type LinkStatus = 'complete' | 'partial' | 'missing' | 'not_applicable';
 
 interface LinkTypeCoverage {
   linkTypeKey: string;
