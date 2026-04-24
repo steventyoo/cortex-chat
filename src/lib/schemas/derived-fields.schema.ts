@@ -1,12 +1,5 @@
 import { z } from 'zod';
-
-// ─── Enums ───────────────────────────────────────────────────────
-
-export const DerivedFieldDataTypeEnum = z.enum(['currency', 'number', 'string', 'percent', 'integer', 'ratio', 'date']);
-export type DerivedFieldDataType = z.infer<typeof DerivedFieldDataTypeEnum>;
-
-export const DerivedFieldStatusEnum = z.enum(['Derived', 'Cross-Ref']);
-export type DerivedFieldStatus = z.infer<typeof DerivedFieldStatusEnum>;
+import { DerivedFieldDataTypeEnum, DerivedFieldStatusEnum } from './enums';
 
 // ─── Read Schema ─────────────────────────────────────────────────
 

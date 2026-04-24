@@ -1,9 +1,5 @@
 import { z } from 'zod';
-
-// ─── Enums ───────────────────────────────────────────────────────
-
-export const CheckClassificationEnum = z.enum(['extraction_error', 'document_anomaly']);
-export type CheckClassification = z.infer<typeof CheckClassificationEnum>;
+import { CheckClassificationEnum } from './enums';
 
 // ─── Read Schema ─────────────────────────────────────────────────
 
