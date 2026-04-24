@@ -293,6 +293,7 @@ export default function EvalResultsPage() {
                   <th className="text-left px-4 py-2.5">Run Label</th>
                   <th className="text-left px-4 py-2.5 w-28">Type</th>
                   <th className="text-left px-4 py-2.5 w-28">Suite</th>
+                  <th className="text-left px-4 py-2.5 w-36">Skill / Project</th>
                   <th className="text-center px-4 py-2.5 w-28">Accuracy</th>
                   <th className="text-center px-4 py-2.5 w-16">Pass</th>
                   <th className="text-center px-4 py-2.5 w-16">Fail</th>
@@ -352,6 +353,12 @@ function RunRow({ run, expanded, results, loadingResults, onToggle }: {
         </td>
         <td className="px-4 py-2.5 text-[#666]">{run.suite || '—'}</td>
         <td className="px-4 py-2.5">
+          <div className="text-[12px] text-[#444] font-medium">{run.skill_id || '—'}</div>
+          {!!(run.metadata as Record<string, unknown>)?.projectId && (
+            <div className="text-[11px] text-[#999]">{String((run.metadata as Record<string, unknown>).projectId)}</div>
+          )}
+        </td>
+        <td className="px-4 py-2.5">
           <AccuracyBar accuracy={run.accuracy} />
         </td>
         <td className="px-4 py-2.5 text-center text-green-600 font-medium">{run.passed}</td>
@@ -366,7 +373,7 @@ function RunRow({ run, expanded, results, loadingResults, onToggle }: {
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={10} className="bg-[#fafafa] px-4 py-4">
+          <td colSpan={11} className="bg-[#fafafa] px-4 py-4">
             {loadingResults ? (
               <div className="text-center py-6 text-[#999] text-sm">Loading results...</div>
             ) : !results || results.length === 0 ? (

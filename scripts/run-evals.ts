@@ -237,6 +237,7 @@ async function persistChatEvalToSupabase(
         accuracy,
         metadata: {
           base_url: BASE_URL,
+          dataset: DATASET_NAME,
           avg_correctness: withExpected.length > 0
             ? withExpected.reduce((s, r) => s + r.scores.correctness, 0) / withExpected.length
             : 0,
