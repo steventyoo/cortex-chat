@@ -304,7 +304,7 @@ export async function extractTextFromLargePdf(
 
   // Build the set of page indices to process
   const pageIndices = new Set<number>();
-  const headLimit = maxPages ? Math.min(totalPages, maxPages) : totalPages;
+  const headLimit = maxPages != null && maxPages >= 0 ? Math.min(totalPages, maxPages) : totalPages;
   for (let i = 0; i < headLimit; i++) pageIndices.add(i);
   if (tailPages && tailPages > 0) {
     const tailStart = Math.max(headLimit, totalPages - tailPages);
