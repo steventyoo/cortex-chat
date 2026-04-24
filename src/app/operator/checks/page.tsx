@@ -3,23 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-
-interface ConsistencyCheck {
-  id: string;
-  skill_id: string;
-  check_name: string;
-  display_name: string;
-  description: string | null;
-  tier: number;
-  classification: 'extraction_error' | 'document_anomaly';
-  scope: string;
-  expression: string;
-  tolerance_abs: number;
-  affected_fields: string[];
-  hint_template: string | null;
-  is_active: boolean;
-  created_at: string;
-}
+import type { ConsistencyCheck } from '@/lib/schemas/consistency-checks.schema';
 
 function OperatorNav() {
   const pathname = usePathname();

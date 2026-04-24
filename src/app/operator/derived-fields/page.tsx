@@ -3,25 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-
-interface DerivedField {
-  id: string;
-  canonical_name: string;
-  display_name: string;
-  source_skill_ids: string[];
-  primary_skill_id: string;
-  tab: string;
-  section: string;
-  data_type: string;
-  status: string;
-  scope: string;
-  formula: string;
-  expression: string;
-  depends_on: string[];
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
+import type { DerivedField } from '@/lib/schemas/derived-fields.schema';
 
 function OperatorNav() {
   const pathname = usePathname();
@@ -412,7 +394,7 @@ function DerivedFieldModal({
             <select
               className="w-full px-3 py-1.5 text-[13px] border border-[#ddd] rounded-lg focus:outline-none focus:border-[#999]"
               value={form.data_type}
-              onChange={e => setForm(f => ({ ...f, data_type: e.target.value }))}
+              onChange={e => setForm(f => ({ ...f, data_type: e.target.value as DerivedField['data_type'] }))}
             >
               {['currency', 'number', 'percent', 'integer', 'ratio', 'string', 'date'].map(t => (
                 <option key={t} value={t}>{t}</option>
@@ -436,7 +418,7 @@ function DerivedFieldModal({
             <select
               className="w-full px-3 py-1.5 text-[13px] border border-[#ddd] rounded-lg focus:outline-none focus:border-[#999]"
               value={form.status}
-              onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
+              onChange={e => setForm(f => ({ ...f, status: e.target.value as DerivedField['status'] }))}
             >
               <option value="Derived">Derived</option>
               <option value="Cross-Ref">Cross-Ref</option>
