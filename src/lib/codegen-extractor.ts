@@ -447,11 +447,13 @@ async function generateParserCode(
     modelParameters: { maxTokens: 32768 },
   });
 
-  const response = await client.messages.create({
+  const stream = await client.messages.stream({
     model: 'claude-opus-4-6',
     max_tokens: 32768,
     messages,
   });
+
+  const response = await stream.finalMessage();
 
   const textBlock = response.content.find(b => b.type === 'text');
   if (!textBlock || textBlock.type !== 'text') {
