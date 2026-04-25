@@ -244,34 +244,7 @@ function computeSourceAmounts(
 
 // ── Aggregate payroll transactions into per-worker summaries ──
 
-function aggregateWorkerRecords(transactions: RecordRow[]): { aggregated: RecordRow[]; dedupCount: number } {
-  // Deduplication pass: remove (name, date, amount) duplicates
-  const seen = new Set<string>();
-  const deduped: RecordRow[] = [];
-  let dedupCount = 0;
-
-  for (const txn of transactions) {
-    const rawName =
-      txn.name?.value ?? txn.worker_name?.value ?? txn.employee_name?.value
-      ?? txn.employee?.value ?? txn.emp_name?.value ?? txn.worker?.value ?? null;
-    const name = rawName != null ? String(rawName).trim() : 'unknown';
-    const date = String(txn.document_date?.value ?? txn.date?.value ?? '');
-    const amt = (txn.actual_amount?.value as number) || 0;
-    const hrs = ((txn.regular_hours?.value as number) || 0) + ((txn.overtime_hours?.value as number) || 0);
-    const key = `${name}|${date}|${amt.toFixed(2)}|${hrs.toFixed(2)}`;
-
-    if (seen.has(key)) {
-      dedupCount++;
-      continue;
-    }
-    seen.add(key);
-    deduped.push(txn);
-  }
-
-  if (dedupCount > 0) {
-    console.log(`[jcr-model] Deduplicated ${dedupCount} PR transactions (${transactions.length} → ${deduped.length})`);
-  }
-
+function aggregateWorkerRecords(transactions: RecordRow[]): { aggregated: RecordRow[] } {
   const groups = new Map<string, RecordRow>();
   const costCodeSets = new Map<string, Set<string>>();
 
@@ -280,7 +253,7 @@ function aggregateWorkerRecords(transactions: RecordRow[]): { aggregated: Record
     'actual_amount', 'regular_amount', 'overtime_amount', 'doubletime_amount',
   ]);
 
-  for (const txn of deduped) {
+  for (const txn of transactions) {
     const rawName =
       txn.name?.value ?? txn.worker_name?.value ?? txn.employee_name?.value
       ?? txn.employee?.value ?? txn.emp_name?.value ?? txn.worker?.value ?? null;
@@ -342,7 +315,7 @@ function aggregateWorkerRecords(transactions: RecordRow[]): { aggregated: Record
     results.push(agg);
   }
 
-  return { aggregated: results, dedupCount };
+  return { aggregated: results };
 }
 
 // ── Safety-net reconciliation (log-only) ─────────────────────
@@ -356,7 +329,48 @@ function reconcilePrTransactions(
   if (transactions.length === 0 || costCodeRecords.length === 0) return;
 
   const laborRanges = codeRanges.labor ?? [11, [100, 199]];
+  const burdenRanges = codeRanges.burden ?? [995, 998];
 
+  // ── Per-cost-code amount reconciliation ──
+  // Sum PR txn amounts per cost code and compare against the cost code's JTD total.
+  // For labor codes, JTD should equal the sum of PR transactions under that code.
+  const txnSumByCode = new Map<string, number>();
+  for (const txn of transactions) {
+    const code = String(txn.cost_code?.value ?? '');
+    if (!code) continue;
+    const amt = (txn.actual_amount?.value as number) || 0;
+    txnSumByCode.set(code, (txnSumByCode.get(code) || 0) + amt);
+  }
+
+  let laborCodesMatched = 0;
+  let laborCodesTotal = 0;
+  const mismatches: string[] = [];
+  for (const rec of costCodeRecords) {
+    const code = parseInt(String(rec.cost_code?.value ?? '0'), 10);
+    if (!codeInRanges(code, laborRanges)) continue;
+    laborCodesTotal++;
+    const ccJtd = (rec.jtd_cost?.value as number) || 0;
+    const txnSum = Math.round((txnSumByCode.get(String(code)) || 0) * 100) / 100;
+    const jtdRounded = Math.round(ccJtd * 100) / 100;
+    if (Math.abs(txnSum - jtdRounded) < 0.01) {
+      laborCodesMatched++;
+    } else {
+      mismatches.push(`code=${code}: txn_sum=$${txnSum.toFixed(2)} vs jtd=$${jtdRounded.toFixed(2)} (Δ$${(txnSum - jtdRounded).toFixed(2)})`);
+    }
+  }
+
+  if (mismatches.length > 0) {
+    console.warn(
+      `[jcr-model] PR per-code reconciliation run=${runId}: ${laborCodesMatched}/${laborCodesTotal} labor codes match. Mismatches:\n  ` +
+      mismatches.join('\n  '),
+    );
+  } else {
+    console.log(
+      `[jcr-model] PR per-code reconciliation run=${runId}: ${laborCodesMatched}/${laborCodesTotal} labor codes match perfectly`,
+    );
+  }
+
+  // ── Aggregate hours reconciliation ──
   let ccRegHours = 0;
   let ccOtHours = 0;
   for (const rec of costCodeRecords) {
@@ -396,18 +410,20 @@ function reconcilePrTransactions(
     );
   }
 
-  if (txnWithHoursNoAmount > 0) {
-    const pct = Math.round((txnWithHoursNoAmount / transactions.length) * 100);
-    if (pct > 10) {
-      console.warn(
-        `[jcr-model] RECONCILIATION WARNING run=${runId}: ${txnWithHoursNoAmount} of ${transactions.length} PR transactions (${pct}%) have hours but zero dollar amounts.`,
-      );
+  // ── Doc-level PR source amount reconciliation ──
+  let burdenTotal = 0;
+  for (const rec of costCodeRecords) {
+    const code = parseInt(String(rec.cost_code?.value ?? '0'), 10);
+    if (codeInRanges(code, burdenRanges)) {
+      burdenTotal += (rec.jtd_cost?.value as number) || 0;
     }
   }
+  const computedPrBySource = Math.round((txnAmountSum + burdenTotal) * 100) / 100;
 
   console.log(
     `[jcr-model] Reconciliation summary run=${runId}: ${transactions.length} PR txns, ` +
-    `amount_sum=$${txnAmountSum.toFixed(2)}, hours_coverage=${hoursCoverage}%`,
+    `txn_sum=$${txnAmountSum.toFixed(2)} + burden=$${burdenTotal.toFixed(2)} = computed_pr_source=$${computedPrBySource.toFixed(2)}, ` +
+    `hours_coverage=${hoursCoverage}%, code_match=${laborCodesMatched}/${laborCodesTotal}`,
   );
 }
 
@@ -440,7 +456,7 @@ export async function runJcrModel(
 
   const fixedRecords = fixCostCodeColumnSwap(extractedData.records);
   const fixedFields = fixDocLevelFields(extractedData.fields, fixedRecords, codeRanges);
-  const { aggregated: workerAgg, dedupCount } = aggregateWorkerRecords(extractedData.workerRecords ?? []);
+  const { aggregated: workerAgg } = aggregateWorkerRecords(extractedData.workerRecords ?? []);
 
   // Diagnostic: log sample transaction keys to debug worker aggregation
   const sampleTxns = extractedData.workerRecords ?? [];
@@ -463,7 +479,7 @@ export async function runJcrModel(
   // ── Safety-net reconciliation logging (log-only, no data changes) ──
   reconcilePrTransactions(extractedData.workerRecords ?? [], fixedRecords, codeRanges, runId);
 
-  console.log(`[jcr-model] Fixed column swap for ${fixedRecords.length} cost codes, aggregated ${workerAgg.length} workers from ${extractedData.workerRecords?.length ?? 0} transactions (deduped ${dedupCount})`);
+  console.log(`[jcr-model] Fixed column swap for ${fixedRecords.length} cost codes, aggregated ${workerAgg.length} workers from ${extractedData.workerRecords?.length ?? 0} transactions`);
 
   const collections: Record<string, RecordRow[]> = {
     cost_code: fixedRecords,
