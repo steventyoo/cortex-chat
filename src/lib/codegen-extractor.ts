@@ -257,14 +257,20 @@ Parsing strategy:
 function getFileTypeHint(fileExt: string): string {
   switch (fileExt.toLowerCase()) {
     case 'pdf':
-      return `This is a PDF file. Use pdfplumber to extract text and tables:
+      return `This is a PDF file. A pre-extracted text version is available at \`/tmp/source_text.txt\` (extracted with a fast local parser, covers ALL pages). You can use it for string/regex parsing:
+\`\`\`python
+with open("/tmp/source_text.txt", "r") as f:
+    full_text = f.read()
+\`\`\`
+For higher-fidelity table extraction, you can also use pdfplumber on the original PDF:
 \`\`\`python
 import pdfplumber
 with pdfplumber.open("/tmp/input.pdf") as pdf:
     for page in pdf.pages:
         text = page.extract_text()
         tables = page.extract_tables()
-\`\`\``;
+\`\`\`
+Tip: For large PDFs (100+ pages), prefer /tmp/source_text.txt for initial parsing — it's instant. Use pdfplumber selectively for pages that need table structure.`;
     case 'xlsx':
       return `This is an Excel (.xlsx) file. Use openpyxl to preserve cell types, merged cells, and formulas:
 \`\`\`python
@@ -900,6 +906,14 @@ export async function extractWithCodegen(
     content: rawBuffer,
   };
 
+  const inputFiles: ExtractionFile[] = [inputFile];
+  if (fileExt === 'pdf' && sourceText.length > 1000) {
+    inputFiles.push({
+      path: '/tmp/source_text.txt',
+      content: Buffer.from(sourceText, 'utf-8'),
+    });
+  }
+
   let lastError: string | undefined;
   let lastCode: string | undefined;
   let retries = 0;
@@ -926,7 +940,7 @@ export async function extractWithCodegen(
     });
     let result;
     try {
-      result = await ExtractionSandbox.execute(code, [inputFile]);
+      result = await ExtractionSandbox.execute(code, inputFiles);
     } catch (err) {
       sandboxSpan?.end({ output: { error: err instanceof Error ? err.message : String(err) }, level: 'ERROR' as const });
       console.error(`[codegen] Sandbox execution error:`, err);

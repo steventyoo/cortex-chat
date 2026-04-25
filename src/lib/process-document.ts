@@ -198,10 +198,14 @@ async function processLargePdfVision(opts: {
 
       // Use unpdf (local, fast) for the codegen document preview instead of Claude OCR.
       // unpdf extracts all pages in ~1s vs ~120s for Claude OCR on a subset.
+      // IMPORTANT: use mergePages=false to preserve per-page newlines, then rejoin
+      // with page markers. mergePages=true strips all newlines, producing a flat
+      // string whose format doesn't match pdfplumber output — causing regex mismatches.
       let sourceText: string;
       try {
-        const unpdfResult = await pdfExtractText(new Uint8Array(rawBuffer), { mergePages: true });
-        const unpdfText = (unpdfResult.text as string).trim();
+        const unpdfResult = await pdfExtractText(new Uint8Array(rawBuffer), { mergePages: false });
+        const pages = unpdfResult.text as string[];
+        const unpdfText = pages.map((p, i) => `=== Page ${i + 1} ===\n${p}`).join('\n\n');
         if (unpdfText.length > 500) {
           sourceText = unpdfText;
           console.log(`[process:large-pdf] unpdf preview: ${sourceText.length} chars (all ${pageCount} pages, local)`);
