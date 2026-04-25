@@ -9,3 +9,4 @@ export * from './project-sources.schema';
 export * from './eval-runs.schema';
 export * from './derived-fields.schema';
 export * from './consistency-checks.schema';
+export * from './parser-cache.schema';

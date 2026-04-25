@@ -185,6 +185,7 @@ async function processLargePdfVision(opts: {
   let overallConfidence: number;
   let flags: ValidationFlag[];
   let usedExtractionMethod = 'vision-chunked';
+  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string } = {};
 
   if (skill.extractionMethod === 'codegen') {
     const codegenSpan = trace.span({
@@ -229,6 +230,11 @@ async function processLargePdfVision(opts: {
       discoveredFields = codegenResult.discoveredFields;
       overallConfidence = computeOverallConfidence(extraction);
       flags = [];
+      codegenMeta = {
+        generatedCode: codegenResult.metadata.generatedCode,
+        formatFingerprint: codegenResult.metadata.formatFingerprint,
+        usedCachedParserId: codegenResult.metadata.usedCachedParserId,
+      };
 
       for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
         if (fieldData.value !== null && fieldData.confidence < 0.7) {
@@ -246,6 +252,8 @@ async function processLargePdfVision(opts: {
         },
         metadata: {
           generatedCode: codegenResult.metadata.generatedCode,
+          formatFingerprint: codegenResult.metadata.formatFingerprint,
+          usedCachedParserId: codegenResult.metadata.usedCachedParserId,
           codegenInputTokens: codegenResult.metadata.codegenInputTokens,
           codegenOutputTokens: codegenResult.metadata.codegenOutputTokens,
           sandboxElapsedMs: codegenResult.metadata.sandboxElapsedMs,
@@ -374,11 +382,12 @@ async function processLargePdfVision(opts: {
         fields,
         collections,
         tailText,
+        ...codegenMeta,
       });
       timing.validation = Date.now() - valT;
       console.log(
         `[process:large-pdf] Validation complete for skill=${extraction.skillId}: ` +
-        `score=${valResult.reconciliationScore}% elapsed=${timing.validation}ms`
+        `identity=${valResult.identityScore}% quality=${valResult.qualityScore}% elapsed=${timing.validation}ms`
       );
     } catch (err) {
       console.warn(`[process:large-pdf] Post-extraction validation failed (non-fatal):`, err);
@@ -402,9 +411,9 @@ async function processLargePdfVision(opts: {
         records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
         skillId: extraction.skillId,
         workerRecords: workerRecords as Array<Record<string, { value: string | number | null; confidence: number }>> | undefined,
-      }, {}, { tailText: jcrTailText });
+      }, {}, { tailText: jcrTailText, ...codegenMeta });
       timing.jcr_model = Date.now() - jcrT;
-      console.log(`[process:large-pdf] JCR model complete: rows=${jcrResult.rowCount} recon=${jcrResult.reconciliationScore}% workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
+      console.log(`[process:large-pdf] JCR model complete: rows=${jcrResult.rowCount} identity=${jcrResult.identityScore}% quality=${jcrResult.qualityScore}% workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
     } catch (err) {
       console.warn(`[process:large-pdf] JCR model failed (non-fatal):`, err);
     }
@@ -661,6 +670,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   let flags: ValidationFlag[];
   let discoveredFields: Record<string, unknown> = {};
   let usedExtractionMethod = 'llm';
+  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string } = {};
 
   try {
     console.log(`[process] Starting AI extraction: project=${projectId || 'none'} org=${orgId}`);
@@ -746,6 +756,11 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           discoveredFields = codegenResult.discoveredFields;
           overallConfidence = computeOverallConfidence(extraction);
           flags = [];
+          codegenMeta = {
+            generatedCode: codegenResult.metadata.generatedCode,
+            formatFingerprint: codegenResult.metadata.formatFingerprint,
+            usedCachedParserId: codegenResult.metadata.usedCachedParserId,
+          };
 
           for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
             if (fieldData.value !== null && fieldData.confidence < 0.7) {
@@ -811,6 +826,11 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         discoveredFields = codegenResult.discoveredFields;
         overallConfidence = computeOverallConfidence(extraction);
         flags = [];
+        codegenMeta = {
+          generatedCode: codegenResult.metadata.generatedCode,
+          formatFingerprint: codegenResult.metadata.formatFingerprint,
+          usedCachedParserId: codegenResult.metadata.usedCachedParserId,
+        };
 
         for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
           if (fieldData.value !== null && fieldData.confidence < 0.7) {
@@ -822,6 +842,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           output: { fields: extraction.fields, discoveredFields, records: extraction.records?.slice(0, 5) },
           metadata: {
             generatedCode: codegenResult.metadata.generatedCode,
+            formatFingerprint: codegenResult.metadata.formatFingerprint,
             codegenInputTokens: codegenResult.metadata.codegenInputTokens,
             codegenOutputTokens: codegenResult.metadata.codegenOutputTokens,
             sandboxElapsedMs: codegenResult.metadata.sandboxElapsedMs,
@@ -939,11 +960,12 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         fields,
         collections,
         tailText,
+        ...codegenMeta,
       });
       timing.validation = Date.now() - valT;
       console.log(
         `[process] Validation complete for skill=${extraction.skillId}: ` +
-        `score=${valResult.reconciliationScore}% elapsed=${timing.validation}ms`
+        `identity=${valResult.identityScore}% quality=${valResult.qualityScore}% elapsed=${timing.validation}ms`
       );
     } catch (err) {
       console.warn(`[process] Post-extraction validation failed (non-fatal):`, err);
@@ -970,9 +992,9 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         records: extraction.records as Array<Record<string, { value: string | number | null; confidence: number }>>,
         skillId: extraction.skillId,
         workerRecords: workerRecords as Array<Record<string, { value: string | number | null; confidence: number }>> | undefined,
-      }, {}, { tailText: jcrTailText });
+      }, {}, { tailText: jcrTailText, ...codegenMeta });
       timing.jcr_model = Date.now() - jcrT;
-      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} recon=${jcrResult.reconciliationScore}% workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
+      console.log(`[process] JCR model complete: rows=${jcrResult.rowCount} identity=${jcrResult.identityScore}% quality=${jcrResult.qualityScore}% workers=${workerRecords?.length ?? 0} elapsed=${timing.jcr_model}ms`);
     } catch (err) {
       console.warn(`[process] JCR model failed (non-fatal):`, err);
     }

@@ -419,8 +419,8 @@ export async function runJcrModel(
   orgId: string,
   extractedData: { fields: FieldsMap; records: RecordRow[]; skillId?: string; workerRecords?: RecordRow[] },
   meta: ProjectMeta = {},
-  options?: { tailText?: string },
-): Promise<{ runId: string; rowCount: number; reconciliationScore: number; checkResults: CheckResult[] }> {
+  options?: { tailText?: string; generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string },
+): Promise<{ runId: string; rowCount: number; reconciliationScore: number; identityScore: number; qualityScore: number; checkResults: CheckResult[] }> {
   const sb = getSupabase();
   const runId = crypto.randomUUID();
   const skillId = 'job_cost_report';
@@ -480,9 +480,12 @@ export async function runJcrModel(
     collections,
     meta: { ...meta, code_ranges: codeRanges } as Record<string, unknown>,
     tailText: options?.tailText,
+    generatedCode: options?.generatedCode,
+    formatFingerprint: options?.formatFingerprint,
+    usedCachedParserId: options?.usedCachedParserId,
   });
 
-  const { withheldFields, anomalyFields, checkResults, reconciliationScore } = validation;
+  const { withheldFields, anomalyFields, checkResults, reconciliationScore, identityScore, qualityScore } = validation;
 
   // Apply any corrections from re-extraction back into our fields
   if (validation.correctedFields) {
@@ -544,6 +547,6 @@ export async function runJcrModel(
     }
   }
 
-  console.log(`[jcr-model] Done: run=${runId} rows=${allRows.length} recon_score=${reconciliationScore}%`);
-  return { runId, rowCount: allRows.length, reconciliationScore, checkResults };
+  console.log(`[jcr-model] Done: run=${runId} rows=${allRows.length} identity=${identityScore}% quality=${qualityScore}%`);
+  return { runId, rowCount: allRows.length, reconciliationScore, identityScore, qualityScore, checkResults };
 }

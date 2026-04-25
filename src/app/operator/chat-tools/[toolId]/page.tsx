@@ -26,6 +26,7 @@ function OperatorNav() {
     { label: 'Evals', href: '/operator/evals' },
     { label: 'Derived Fields', href: '/operator/derived-fields' },
     { label: 'Checks', href: '/operator/checks' },
+    { label: 'Parsers', href: '/operator/parsers' },
   ];
   return (
     <nav className="border-b border-[#e8e8e8] bg-[#fafafa]">

@@ -20,6 +20,7 @@ export interface ConsistencyCheckSpec {
   description: string | null;
   tier: number;
   classification: 'extraction_error' | 'document_anomaly';
+  check_role: 'identity' | 'structural' | 'anomaly';
   scope: string;
   expression: string;
   tolerance_abs: number;
@@ -32,6 +33,7 @@ export interface CheckResult {
   display_name: string;
   tier: number;
   classification: 'extraction_error' | 'document_anomaly';
+  check_role: 'identity' | 'structural' | 'anomaly';
   scope: string;
   status: 'pass' | 'fail';
   expected: number | string | null;
@@ -114,6 +116,7 @@ export async function evaluateConsistencyChecks(
           display_name: spec.display_name,
           tier: spec.tier,
           classification: spec.classification,
+          check_role: spec.check_role,
           scope: spec.scope,
           status: result.pass ? 'pass' : 'fail',
           expected: result.expected ?? null,
@@ -145,6 +148,7 @@ export async function evaluateConsistencyChecks(
               display_name: spec.display_name,
               tier: spec.tier,
               classification: spec.classification,
+              check_role: spec.check_role,
               scope: spec.scope,
               status: 'fail',
               expected: result.expected ?? null,
@@ -168,6 +172,7 @@ export async function evaluateConsistencyChecks(
             display_name: spec.display_name,
             tier: spec.tier,
             classification: spec.classification,
+            check_role: spec.check_role,
             scope: spec.scope,
             status: 'pass',
             expected: null,
@@ -186,6 +191,7 @@ export async function evaluateConsistencyChecks(
         display_name: spec.display_name,
         tier: spec.tier,
         classification: spec.classification,
+        check_role: spec.check_role,
         scope: spec.scope,
         status: 'fail',
         expected: null,
@@ -221,4 +227,41 @@ export function computeReconciliationScore(results: CheckResult[]): number {
   if (total === 0) return 100;
   const passed = total - failedNames.size;
   return Math.round((passed / total) * 100);
+}
+
+/**
+ * Identity score: only counts checks with check_role = 'identity'.
+ * 100% means all accounting equations hold — the parser is provably correct.
+ * This is the gate for parser cache promotion.
+ */
+export function computeIdentityScore(results: CheckResult[]): number {
+  const identity = results.filter(r => r.check_role === 'identity');
+  const names = new Set(identity.map(r => r.check_name));
+  const failedNames = new Set(
+    identity.filter(r => r.status === 'fail').map(r => r.check_name)
+  );
+  if (names.size === 0) return 100;
+  return Math.round(((names.size - failedNames.size) / names.size) * 100);
+}
+
+/**
+ * Quality score: counts identity + structural checks, excludes anomaly.
+ * Measures overall extraction completeness and correctness.
+ */
+export function computeQualityScore(results: CheckResult[]): number {
+  const scored = results.filter(r => r.check_role !== 'anomaly');
+  const names = new Set(scored.map(r => r.check_name));
+  const failedNames = new Set(
+    scored.filter(r => r.status === 'fail').map(r => r.check_name)
+  );
+  if (names.size === 0) return 100;
+  return Math.round(((names.size - failedNames.size) / names.size) * 100);
+}
+
+/**
+ * Returns only anomaly failures for operator display.
+ * These are legitimate document characteristics, not extraction errors.
+ */
+export function getAnomalyFlags(results: CheckResult[]): CheckResult[] {
+  return results.filter(r => r.check_role === 'anomaly' && r.status === 'fail');
 }

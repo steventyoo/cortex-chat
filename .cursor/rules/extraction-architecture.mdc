@@ -1,0 +1,79 @@
+---
+description: Core architectural decisions for the document extraction pipeline — parser caching, reconciliation gating, and check scoring. Reference when modifying codegen-extractor, post-extraction-validator, consistency-evaluator, jcr-model, or adding new document skills.
+globs:
+  - src/lib/codegen-extractor.ts
+  - src/lib/post-extraction-validator.ts
+  - src/lib/consistency-evaluator.ts
+  - src/lib/jcr-model.ts
+  - src/lib/format-fingerprint.ts
+  - src/lib/stores/parser-cache.store.ts
+  - src/lib/process-document.ts
+---
+
+# Extraction Pipeline Architecture
+
+## 1. Never Deduplicate — Always Reconcile
+
+**Decision**: We never drop records based on duplicate detection heuristics. Instead, we sum extracted values per grouping key (e.g., cost code) and compare against document-level totals.
+
+**Why**: A single paycheck can produce multiple line items with identical (name, date, amount, hours) but different cost codes. Deduplication by content hash drops legitimate data. Reconciliation against the document's own totals proves completeness without assumptions.
+
+## 2. Reconciliation-Gated Parser Cache
+
+**Decision**: Validated Python parsers are cached in `parser_cache` keyed by `(skill_id, format_fingerprint)`. A parser is promoted to the cache only when its identity score is exactly 100%.
+
+**Why**: Expensive Claude Opus calls to generate parsers are the biggest cost and latency driver. Documents from the same software (e.g., Sage 300 CRE) share identical structure, so a single validated parser can serve all of them. The 100% identity gate ensures we never cache a parser that produces incorrect accounting totals.
+
+**Flow**:
+1. `fingerprintDocument()` identifies the format from `unpdf` text via regex patterns
+2. `getActiveParser()` checks the cache for an existing parser
+3. If found: execute in sandbox, validate with consistency checks
+4. If cache miss or failure: generate new parser with Opus, validate, promote if identity=100%
+
+## 3. Three-Tier Check Scoring
+
+Consistency checks are tagged with `check_role` in the database:
+
+| Role | Purpose | Scoring | Example |
+|------|---------|---------|---------|
+| `identity` | Core accounting equations that must always hold | Parser promotion gate (100% required) | `source_sum_equals_expenses`, `revenue_equals_code999` |
+| `structural` | Extraction quality indicators | Quality score (operator visibility), retry triggers | `no_negative_hours`, `burden_codes_no_hours` |
+| `anomaly` | Document characteristics | Never scored — informational flags for operators | `nominal_rate_bounds`, `ot_ratio_bounds` |
+
+**Three scores computed by `consistency-evaluator.ts`**:
+- `computeIdentityScore()` — only identity checks. Gates parser promotion.
+- `computeQualityScore()` — identity + structural. Shown to operators.
+- `getAnomalyFlags()` — anomaly failures. Informational only.
+
+## 4. Format Fingerprinting
+
+**Decision**: Two-layer approach — no hardcoded provider names, works for any software automatically.
+
+**Layer 1 — Structural hash (free, ~10ms, every document)**:
+Uses `pdfjs` (via `unpdf`) to read page 1's text item positions. Hashes the `(x, y, fontSize)` coordinates of the first 20 text items (report title + column headers) on a 5pt grid. Same software always produces identical column layouts, so two documents from the same system get the same hash (e.g., `fp_b6a81b0aefa7`). This is the parser cache lookup key.
+
+**Layer 2 — LLM label (~$0.0004, cache miss only)**:
+On cache miss, sends the first 3000 chars to Claude Haiku to identify the software (returns a snake_case label like `"sage_300_cre"`). Stored as a human-readable label for operators. Never called again for the same layout — the structural hash handles repeat lookups.
+
+**Why not regex patterns?** Tried regex matching on header text first. Fragile — patterns like "JTD Cost" only appear in summary sections far from page 1, job names and company names leak through normalization, and every new provider requires a code change.
+
+**Why not PDF metadata?** Checked — the `Producer`/`Creator` fields show the PDF printer (e.g., "Bluebeam Stapler"), not the accounting software. Construction companies typically print reports through Bluebeam/CutePDF, which strips original metadata. The software name also doesn't appear anywhere in the document text.
+
+**Why not full-page structural hash?** Page 1 has variable numbers of data rows (transactions), so hashing ALL text positions produces different hashes for different documents. Limiting to the first 20 items (header area only) produces a stable hash because the report title and column headers are always identical.
+
+**Non-PDF fallback**: Hashes the line-length and character-composition pattern of the first 50 lines.
+
+## 5. Self-Healing Pipeline Flow
+
+```
+Extract → Validate → Auto-Fix → Re-validate → Classify
+                                        │
+                         ┌───────────────┴───────────────┐
+                  identity=100%                    identity<100%
+                         │                                │
+                  Promote parser               Tag extraction errors
+                  to cache                     as withheld fields
+```
+
+- **Extraction errors** (`classification='extraction_error'`): Our parsing failures. Trigger targeted re-extraction. If unresolved, affected fields are withheld from export.
+- **Document anomalies** (`classification='document_anomaly'`): Genuine document characteristics (e.g., negative payroll reversals). Flagged for operator review but never treated as extraction failures.

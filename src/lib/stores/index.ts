@@ -7,3 +7,4 @@ export * from './project-sources.store';
 export * from './eval-runs.store';
 export * from './derived-fields.store';
 export * from './consistency-checks.store';
+export * from './parser-cache.store';
