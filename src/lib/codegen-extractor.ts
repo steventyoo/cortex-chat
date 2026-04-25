@@ -14,6 +14,8 @@ import { ExtractionSandbox, type ExtractionFile } from './sandbox';
 import { ExtractionResult, type ExtractedField } from './pipeline';
 import type { FieldDefinition, DocumentSkill } from './skills';
 import type { LangfuseParent } from './langfuse';
+import { fingerprintDocument } from './format-fingerprint';
+import { getActiveParser, recordCacheFailure } from './stores/parser-cache.store';
 
 const MAX_RETRIES = 2;
 
@@ -26,6 +28,9 @@ export interface CodegenExtractionResult {
     warnings?: string[];
     retries: number;
     generatedCode?: string;
+    formatFingerprint?: string;
+    formatLabel?: string;
+    usedCachedParserId?: string;
     codegenInputTokens?: number;
     codegenOutputTokens?: number;
     sandboxElapsedMs?: number;
@@ -891,15 +896,9 @@ export async function extractWithCodegen(
   const t0 = Date.now();
   const client = new Anthropic();
 
-  const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt, options?.scopedFields);
-
-  const HEAD_PREVIEW = 20_000;
-  const TAIL_PREVIEW = 10_000;
-  const docPreview = sourceText.length <= HEAD_PREVIEW + TAIL_PREVIEW
-    ? sourceText
-    : sourceText.slice(0, HEAD_PREVIEW) +
-      '\n\n[... middle pages omitted ...]\n\n' +
-      sourceText.slice(-TAIL_PREVIEW);
+  const fpResult = await fingerprintDocument(sourceText, skill.skillId, fileExt === 'pdf' ? new Uint8Array(rawBuffer) : undefined);
+  const formatFingerprint = fpResult.hash;
+  console.log(`[codegen] Format fingerprint: ${formatFingerprint} skill=${skill.skillId}`);
 
   const inputFile: ExtractionFile = {
     path: `/tmp/input${fileExt ? '.' + fileExt : ''}`,
@@ -913,6 +912,67 @@ export async function extractWithCodegen(
       content: Buffer.from(sourceText, 'utf-8'),
     });
   }
+
+  // ── Try cached parser first ──
+  const cached = await getActiveParser(skill.skillId, formatFingerprint);
+  if (cached) {
+    console.log(`[codegen] Trying cached parser: id=${cached.id} validated_count=${cached.validated_count}`);
+    const tCache = Date.now();
+    try {
+      const cacheResult = await ExtractionSandbox.execute(cached.parser_code, inputFiles);
+      const cacheExecTime = Date.now() - tCache;
+      console.log(`[codegen] Cached parser executed in ${cacheExecTime}ms: exitCode=${cacheResult.exitCode}`);
+
+      if (cacheResult.exitCode === 0) {
+        try {
+          const raw = parseCodegenOutput(cacheResult.stdout);
+          const records = raw.records || [];
+          const fieldCount = Object.keys(raw.fields || {}).length;
+
+          if (fieldCount > 0 || records.length > 0) {
+            console.log(`[codegen] Cached parser succeeded: ${fieldCount} fields, ${records.length} records`);
+            const normalized = normalizeToExtractionResult(raw, skill, classifierConfidence);
+            normalized.metadata.retries = 0;
+            normalized.metadata.generatedCode = cached.parser_code;
+            normalized.metadata.formatFingerprint = formatFingerprint;
+            normalized.metadata.usedCachedParserId = cached.id;
+            normalized.metadata.parserMethod = 'cached';
+            normalized.metadata.sandboxElapsedMs = cacheExecTime;
+            return normalized;
+          }
+          console.warn(`[codegen] Cached parser returned empty output — falling through to generation`);
+        } catch {
+          console.warn(`[codegen] Cached parser output parse failed — falling through to generation`);
+        }
+      } else {
+        console.warn(`[codegen] Cached parser failed (exit=${cacheResult.exitCode}) — falling through to generation`);
+      }
+      await recordCacheFailure(cached.id);
+    } catch (err) {
+      console.warn(`[codegen] Cached parser execution error:`, err);
+      await recordCacheFailure(cached.id);
+    }
+  }
+
+  // ── Generate new parser via Opus ──
+  // On cache miss, also identify the format with a cheap LLM call for operator visibility
+  let formatLabel: string | undefined;
+  if (!cached) {
+    try {
+      const labelResult = await fingerprintDocument(sourceText, skill.skillId, undefined, { identifyWithLlm: true, sourceText });
+      formatLabel = labelResult.label;
+    } catch { /* non-fatal */ }
+  }
+
+  const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt, options?.scopedFields);
+
+  const HEAD_PREVIEW = 20_000;
+  const TAIL_PREVIEW = 10_000;
+  const docPreview = sourceText.length <= HEAD_PREVIEW + TAIL_PREVIEW
+    ? sourceText
+    : sourceText.slice(0, HEAD_PREVIEW) +
+      '\n\n[... middle pages omitted ...]\n\n' +
+      sourceText.slice(-TAIL_PREVIEW);
 
   let lastError: string | undefined;
   let lastCode: string | undefined;
@@ -1004,6 +1064,8 @@ export async function extractWithCodegen(
       const normalized = normalizeToExtractionResult(raw, skill, classifierConfidence);
       normalized.metadata.retries = retries;
       normalized.metadata.generatedCode = code;
+      normalized.metadata.formatFingerprint = formatFingerprint;
+      normalized.metadata.formatLabel = formatLabel;
       normalized.metadata.codegenInputTokens = codegenInTokens;
       normalized.metadata.codegenOutputTokens = codegenOutTokens;
       normalized.metadata.sandboxElapsedMs = execTime;

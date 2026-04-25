@@ -18,10 +18,14 @@ import { buildContext, type EvalContext } from './derived-evaluator';
 import {
   evaluateConsistencyChecks,
   computeReconciliationScore,
+  computeIdentityScore,
+  computeQualityScore,
+  getAnomalyFlags,
   type CheckResult,
 } from './consistency-evaluator';
 import { targetedFieldExtraction } from './codegen-extractor';
 import { getSupabase } from './supabase';
+import { promoteParser, incrementValidated } from './stores/parser-cache.store';
 
 type FieldVal = { value: string | number | null; confidence: number };
 type FieldsMap = Record<string, FieldVal>;
@@ -34,11 +38,17 @@ export interface ValidationInput {
   collections: Record<string, RecordRow[]>;
   meta?: Record<string, unknown>;
   tailText?: string;
+  generatedCode?: string;
+  formatFingerprint?: string;
+  usedCachedParserId?: string;
 }
 
 export interface ValidationOutput {
   checkResults: CheckResult[];
   reconciliationScore: number;
+  identityScore: number;
+  qualityScore: number;
+  anomalyFlags: CheckResult[];
   withheldFields: Set<string>;
   anomalyFields: Set<string>;
   correctedFields: FieldsMap;
@@ -55,6 +65,8 @@ export async function runPostExtractionValidation(
   let fields = { ...input.fields };
   let checkResults: CheckResult[] = [];
   let reconciliationScore = 100;
+  let identityScore = 100;
+  let qualityScore = 100;
   let reextractAttempts = 0;
   const resolvedChecks: string[] = [];
 
@@ -65,9 +77,11 @@ export async function runPostExtractionValidation(
     try {
       checkResults = await evaluateConsistencyChecks(skillId, evalCtx);
       reconciliationScore = computeReconciliationScore(checkResults);
+      identityScore = computeIdentityScore(checkResults);
+      qualityScore = computeQualityScore(checkResults);
       console.log(
         `[validator] Checks for skill=${skillId} (attempt ${attempt + 1}): ` +
-        `score=${reconciliationScore}% ` +
+        `identity=${identityScore}% quality=${qualityScore}% overall=${reconciliationScore}% ` +
         `(${checkResults.filter(r => r.status === 'pass').length} passed, ` +
         `${checkResults.filter(r => r.status === 'fail').length} failed)`
       );
@@ -198,14 +212,49 @@ export async function runPostExtractionValidation(
       ...(pipelineStatus ? { status: pipelineStatus } : {}),
     }).eq('id', pipelineLogId);
 
-    console.log(`[validator] Stored ${validationFlags.length} check results on pipeline_log, score=${reconciliationScore}%`);
+    console.log(`[validator] Stored ${validationFlags.length} check results on pipeline_log, identity=${identityScore}% quality=${qualityScore}%`);
   } catch (err) {
     console.error(`[validator] Failed to store check results:`, err);
+  }
+
+  // ── Parser cache promotion ──
+  // Promote when all identity checks pass (accounting equations hold).
+  const anomalyFlagsList = getAnomalyFlags(checkResults);
+
+  if (identityScore === 100 && input.generatedCode && input.formatFingerprint && !input.usedCachedParserId) {
+    try {
+      const checksPassed = checkResults.filter(r => r.status === 'pass').length;
+      await promoteParser({
+        skill_id: skillId,
+        format_fingerprint: input.formatFingerprint,
+        parser_code: input.generatedCode,
+        promoted_from: pipelineLogId,
+        identity_score: identityScore,
+        quality_score: qualityScore,
+        checks_passed: checksPassed,
+        checks_total: checkResults.length,
+      });
+      console.log(`[validator] Parser promoted to cache: skill=${skillId} format=${input.formatFingerprint}`);
+    } catch (err) {
+      console.error(`[validator] Parser promotion failed (non-fatal):`, err);
+    }
+  }
+
+  if (identityScore === 100 && input.usedCachedParserId) {
+    try {
+      await incrementValidated(input.usedCachedParserId);
+      console.log(`[validator] Cached parser validated: id=${input.usedCachedParserId}`);
+    } catch (err) {
+      console.error(`[validator] Cache increment failed (non-fatal):`, err);
+    }
   }
 
   return {
     checkResults,
     reconciliationScore,
+    identityScore,
+    qualityScore,
+    anomalyFlags: anomalyFlagsList,
     withheldFields,
     anomalyFields,
     correctedFields: fields,

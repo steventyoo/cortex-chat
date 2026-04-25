@@ -45,6 +45,7 @@ function OperatorNav() {
     { label: 'Evals', href: '/operator/evals' },
     { label: 'Derived Fields', href: '/operator/derived-fields' },
     { label: 'Checks', href: '/operator/checks' },
+    { label: 'Parsers', href: '/operator/parsers' },
   ];
 
   return (

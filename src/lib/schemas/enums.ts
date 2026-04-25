@@ -59,3 +59,6 @@ export type DerivedFieldStatus = z.infer<typeof DerivedFieldStatusEnum>;
 
 export const CheckClassificationEnum = z.enum(['extraction_error', 'document_anomaly']);
 export type CheckClassification = z.infer<typeof CheckClassificationEnum>;
+
+export const CheckRoleEnum = z.enum(['identity', 'structural', 'anomaly']);
+export type CheckRole = z.infer<typeof CheckRoleEnum>;
