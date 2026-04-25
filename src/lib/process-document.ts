@@ -196,8 +196,25 @@ async function processLargePdfVision(opts: {
       console.log(`[process:large-pdf] Starting codegen extraction: skill=${skill.skillId} pages=${pageCount}`);
       const contextCardFields = await getContextCardFieldsForSkill(skill.skillId, orgId);
 
-      const tailPages = isJcr ? 5 : 0;
-      const sourceText = await extractTextFromLargePdf(rawBuffer, LARGE_PDF_SAMPLE_PAGES, tailPages || undefined);
+      // Use unpdf (local, fast) for the codegen document preview instead of Claude OCR.
+      // unpdf extracts all pages in ~1s vs ~120s for Claude OCR on a subset.
+      let sourceText: string;
+      try {
+        const unpdfResult = await pdfExtractText(new Uint8Array(rawBuffer), { mergePages: true });
+        const unpdfText = (unpdfResult.text as string).trim();
+        if (unpdfText.length > 500) {
+          sourceText = unpdfText;
+          console.log(`[process:large-pdf] unpdf preview: ${sourceText.length} chars (all ${pageCount} pages, local)`);
+        } else {
+          console.log(`[process:large-pdf] unpdf sparse (${unpdfText.length} chars) — falling back to Claude OCR`);
+          const tailPages = isJcr ? 5 : 0;
+          sourceText = await extractTextFromLargePdf(rawBuffer, LARGE_PDF_SAMPLE_PAGES, tailPages || undefined);
+        }
+      } catch {
+        console.log(`[process:large-pdf] unpdf failed — falling back to Claude OCR`);
+        const tailPages = isJcr ? 5 : 0;
+        sourceText = await extractTextFromLargePdf(rawBuffer, LARGE_PDF_SAMPLE_PAGES, tailPages || undefined);
+      }
 
       const codegenResult: CodegenExtractionResult = await extractWithCodegen(
         rawBuffer, sourceText, skill, catalogFields, contextCardFields,
