@@ -95,6 +95,7 @@ export async function runPostExtractionValidation(
 
     const retriableErrors = checkResults.filter(r =>
       r.status === 'fail' &&
+      r.check_role !== 'anomaly' &&
       r.classification === 'extraction_error' &&
       r.scope === 'doc' &&
       r.tier <= 2 &&
@@ -159,9 +160,9 @@ export async function runPostExtractionValidation(
     }
   }
 
-  // Classify final failures
-  const extractionErrors = checkResults.filter(r => r.status === 'fail' && r.classification === 'extraction_error');
-  const docAnomalies = checkResults.filter(r => r.status === 'fail' && r.classification === 'document_anomaly');
+  // Classify final failures using check_role (three-tier) rather than the legacy classification column
+  const extractionErrors = checkResults.filter(r => r.status === 'fail' && r.check_role !== 'anomaly');
+  const docAnomalies = checkResults.filter(r => r.status === 'fail' && r.check_role === 'anomaly');
 
   const withheldFields = new Set<string>();
   for (const err of extractionErrors) {
@@ -197,7 +198,7 @@ export async function runPostExtractionValidation(
       classification: r.classification,
       resolution: r.status === 'pass'
         ? (resolvedChecks.some(rc => r.affected_fields.some(f => rc.startsWith(f))) ? 'resolved' : 'passed')
-        : (r.classification === 'document_anomaly' ? 'anomaly' : 'withheld'),
+        : (r.check_role === 'anomaly' ? 'anomaly' : 'withheld'),
       tier: r.tier,
       expected: r.expected,
       actual: r.actual,
