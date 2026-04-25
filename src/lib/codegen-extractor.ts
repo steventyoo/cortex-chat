@@ -416,7 +416,7 @@ async function generateParserCode(
   if (previousError) {
     messages.push({
       role: 'user',
-      content: `${metaPrompt}\n\nHere is a preview of the document content (first 20000 chars):\n\`\`\`\n${documentPreview}\n\`\`\``,
+      content: `${metaPrompt}\n\nHere is a preview of the document content (head and tail sections):\n\`\`\`\n${documentPreview}\n\`\`\``,
     });
     messages.push({
       role: 'assistant',
@@ -431,7 +431,7 @@ async function generateParserCode(
   } else {
     messages.push({
       role: 'user',
-      content: `${metaPrompt}\n\nHere is a preview of the document content (first 20000 chars):\n\`\`\`\n${documentPreview}\n\`\`\`\n\nWrite the complete Python extraction script now. Output ONLY Python code, no explanation.`,
+      content: `${metaPrompt}\n\nHere is a preview of the document content (head and tail sections):\n\`\`\`\n${documentPreview}\n\`\`\`\n\nWrite the complete Python extraction script now. Output ONLY Python code, no explanation.`,
     });
   }
 
@@ -886,7 +886,14 @@ export async function extractWithCodegen(
   const client = new Anthropic();
 
   const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt, options?.scopedFields);
-  const docPreview = sourceText.slice(0, 20_000);
+
+  const HEAD_PREVIEW = 20_000;
+  const TAIL_PREVIEW = 10_000;
+  const docPreview = sourceText.length <= HEAD_PREVIEW + TAIL_PREVIEW
+    ? sourceText
+    : sourceText.slice(0, HEAD_PREVIEW) +
+      '\n\n[... middle pages omitted ...]\n\n' +
+      sourceText.slice(-TAIL_PREVIEW);
 
   const inputFile: ExtractionFile = {
     path: `/tmp/input${fileExt ? '.' + fileExt : ''}`,
