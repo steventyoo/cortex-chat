@@ -439,7 +439,7 @@ async function generateParserCode(
     });
     messages.push({
       role: 'user',
-      content: `This parser works and extracts most fields correctly, but it has extraction gaps — some schema fields are consistently null:\n${gapDescription || 'Some fields are missing.'}\n\nPlease improve the parser to also extract these missing fields. Keep everything that already works — do NOT remove or break existing extraction logic. Focus on fixing the specific gaps listed above.\n\nOutput ONLY the complete improved Python code.`,
+      content: `This parser works and extracts most fields correctly, but it has extraction gaps — some schema fields are consistently null or zero when they should have real values:\n${gapDescription || 'Some fields are missing. Check the schema above for required fields that may not be parsed.'}\n\nIMPORTANT CONSTRAINTS:\n- Fix ONLY the specific field gaps listed above. Do NOT change any other extraction logic.\n- Do NOT change how payroll transactions are parsed unless a gap specifically mentions them.\n- Do NOT change which data sources the script reads from (if it uses source_text.txt, keep using it; if it uses pdfplumber, keep using it).\n- The number of extracted records/transactions should stay roughly the same — do NOT introduce duplicate extraction.\n- The fix is usually a missing regex pattern or an unparsed summary line. Look for the specific lines where the missing values appear.\n\nOutput ONLY the complete improved Python code.`,
     });
   } else if (previousError) {
     messages.push({
