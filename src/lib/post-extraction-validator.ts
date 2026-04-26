@@ -115,14 +115,20 @@ async function checkFieldCoverage(
 
     for (const def of defs) {
       let nullCount = 0;
+      const isNumeric = def.type === 'number';
       for (const rec of records) {
         const val = rec[def.name];
         if (val === undefined || val === null || val.value === null || val.value === undefined) {
+          nullCount++;
+        } else if (isNumeric && val.value === 0) {
+          // For numeric fields, 0 is suspicious when it appears in most records --
+          // parsers often default to 0 when they can't extract a value.
           nullCount++;
         }
       }
       const nullPct = nullCount / records.length;
       if (nullPct > SPARSE_THRESHOLD) {
+        const label = isNumeric ? 'null/zero' : 'null';
         gaps.push({ scope, field: def.name, null_pct: Math.round(nullPct * 100) / 100, type: 'sparse_collection_field' });
         results.push({
           check_name: `schema_coverage_${scope}_${def.name}`,
@@ -132,10 +138,10 @@ async function checkFieldCoverage(
           check_role: 'structural',
           scope,
           status: 'fail',
-          expected: `<${Math.round(SPARSE_THRESHOLD * 100)}% null`,
-          actual: `${Math.round(nullPct * 100)}% null (${nullCount}/${records.length})`,
+          expected: `<${Math.round(SPARSE_THRESHOLD * 100)}% ${label}`,
+          actual: `${Math.round(nullPct * 100)}% ${label} (${nullCount}/${records.length})`,
           delta: null,
-          message: `Field "${def.name}" is null in ${Math.round(nullPct * 100)}% of ${scope} records (${nullCount}/${records.length}) — likely a parser gap`,
+          message: `Field "${def.name}" is ${label} in ${Math.round(nullPct * 100)}% of ${scope} records (${nullCount}/${records.length}) — likely a parser gap`,
           affected_fields: [def.name],
           hint_template: null,
         });
