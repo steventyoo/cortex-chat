@@ -143,6 +143,50 @@ export async function recordCacheFailure(parserId: string) {
 }
 
 /**
+ * Get the most recent deactivated parser for a (skill_id, format_fingerprint).
+ * Used to supply reference code when regenerating an improved parser.
+ */
+export async function getDeactivatedParser(skillId: string, formatFingerprint: string) {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('parser_cache')
+    .select('*')
+    .eq('skill_id', skillId)
+    .eq('format_fingerprint', formatFingerprint)
+    .eq('is_active', false)
+    .order('last_validated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[parser-cache] Deactivated lookup failed:', error.message);
+    return null;
+  }
+  return data;
+}
+
+/**
+ * Store quality gap information on a parser cache entry's meta field.
+ */
+export async function updateParserQualityGaps(parserId: string, qualityGaps: QualityGap[]) {
+  const sb = getSupabase();
+  const { error } = await sb
+    .from('parser_cache')
+    .update({
+      meta: { quality_gaps: qualityGaps },
+    })
+    .eq('id', parserId);
+  if (error) console.error('[parser-cache] Quality gaps update failed:', error.message);
+}
+
+export interface QualityGap {
+  scope: string;
+  field: string;
+  null_pct: number;
+  type: 'missing_doc_field' | 'sparse_collection_field';
+}
+
+/**
  * List all cached parsers, optionally filtered by skill_id.
  */
 export async function listCachedParsers(skillId?: string) {
