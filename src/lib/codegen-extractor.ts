@@ -15,7 +15,8 @@ import { ExtractionResult, type ExtractedField } from './pipeline';
 import type { FieldDefinition, DocumentSkill } from './skills';
 import type { LangfuseParent } from './langfuse';
 import { fingerprintDocument } from './format-fingerprint';
-import { getActiveParser, recordCacheFailure } from './stores/parser-cache.store';
+import { getActiveParser, getDeactivatedParser, recordCacheFailure, type QualityGap } from './stores/parser-cache.store';
+import { buildGapDescription } from './post-extraction-validator';
 
 const MAX_RETRIES = 2;
 
@@ -421,10 +422,26 @@ async function generateParserCode(
   previousError?: string,
   langfuseParent?: LangfuseParent,
   previousCode?: string,
+  referenceParserCode?: string,
+  gapDescription?: string,
 ): Promise<CodegenGenerationResult> {
   const messages: Anthropic.MessageParam[] = [];
 
-  if (previousError) {
+  if (referenceParserCode && !previousError) {
+    // "Improve this parser" mode: give Opus the working parser + what's missing
+    messages.push({
+      role: 'user',
+      content: `${metaPrompt}\n\nHere is a preview of the document content (head and tail sections):\n\`\`\`\n${documentPreview}\n\`\`\``,
+    });
+    messages.push({
+      role: 'assistant',
+      content: `I'll write a Python script to extract the data.\n\n\`\`\`python\n${referenceParserCode}\n\`\`\``,
+    });
+    messages.push({
+      role: 'user',
+      content: `This parser works and extracts most fields correctly, but it has extraction gaps — some schema fields are consistently null:\n${gapDescription || 'Some fields are missing.'}\n\nPlease improve the parser to also extract these missing fields. Keep everything that already works — do NOT remove or break existing extraction logic. Focus on fixing the specific gaps listed above.\n\nOutput ONLY the complete improved Python code.`,
+    });
+  } else if (previousError) {
     messages.push({
       role: 'user',
       content: `${metaPrompt}\n\nHere is a preview of the document content (head and tail sections):\n\`\`\`\n${documentPreview}\n\`\`\``,
@@ -446,8 +463,9 @@ async function generateParserCode(
     });
   }
 
+  const isImprove = !!referenceParserCode && !previousError;
   const generation = langfuseParent?.generation({
-    name: previousError ? 'codegen-retry' : 'codegen-generate',
+    name: previousError ? 'codegen-retry' : isImprove ? 'codegen-improve' : 'codegen-generate',
     model: 'claude-opus-4-6',
     input: {
       promptSummary: metaPrompt.slice(0, 500),
@@ -964,6 +982,22 @@ export async function extractWithCodegen(
     } catch { /* non-fatal */ }
   }
 
+  // Check for a deactivated parser to use as reference for "improve" mode
+  let referenceParserCode: string | undefined;
+  let gapDescription: string | undefined;
+  const deactivated = await getDeactivatedParser(skill.skillId, formatFingerprint);
+  if (deactivated) {
+    referenceParserCode = deactivated.parser_code;
+    const storedGaps = (deactivated.meta as Record<string, unknown>)?.quality_gaps as QualityGap[] | undefined;
+    if (storedGaps && storedGaps.length > 0) {
+      gapDescription = buildGapDescription(storedGaps);
+    }
+    console.log(
+      `[codegen] Found deactivated parser as reference: id=${deactivated.id} ` +
+      `gaps=${storedGaps?.length ?? 0} — using "improve parser" mode`
+    );
+  }
+
   const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt, options?.scopedFields);
 
   const HEAD_PREVIEW = 20_000;
@@ -984,7 +1018,13 @@ export async function extractWithCodegen(
 
     let genResult: CodegenGenerationResult;
     try {
-      genResult = await generateParserCode(client, metaPrompt, docPreview, lastError, options?.langfuseParent, lastCode);
+      genResult = await generateParserCode(
+        client, metaPrompt, docPreview, lastError, options?.langfuseParent, lastCode,
+        referenceParserCode, gapDescription,
+      );
+      // Clear reference after first use so retries use the normal error-fix loop
+      referenceParserCode = undefined;
+      gapDescription = undefined;
     } catch (err) {
       console.error(`[codegen] Code generation failed:`, err);
       throw err;
