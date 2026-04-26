@@ -25,7 +25,8 @@ import {
 } from './consistency-evaluator';
 import { targetedFieldExtraction } from './codegen-extractor';
 import { getSupabase } from './supabase';
-import { promoteParser, incrementValidated } from './stores/parser-cache.store';
+import { promoteParser, incrementValidated, updateParserQualityGaps, type QualityGap } from './stores/parser-cache.store';
+import { getSkillFieldDefinitionsScoped, type FieldDefinition } from './skills';
 
 type FieldVal = { value: string | number | null; confidence: number };
 type FieldsMap = Record<string, FieldVal>;
@@ -58,6 +59,123 @@ export interface ValidationOutput {
 
 const MAX_REEXTRACT_RETRIES = 1;
 
+const SPARSE_THRESHOLD = 0.5;
+const MIN_RECORDS_FOR_SPARSE = 5;
+
+/**
+ * Compare extracted data against the schema to detect missing fields.
+ * Returns synthetic structural CheckResults for each gap found.
+ */
+async function checkFieldCoverage(
+  skillId: string,
+  fields: FieldsMap,
+  collections: Record<string, RecordRow[]>,
+): Promise<{ results: CheckResult[]; gaps: QualityGap[] }> {
+  let scopedDefs: Map<string, FieldDefinition[]>;
+  try {
+    scopedDefs = await getSkillFieldDefinitionsScoped(skillId);
+  } catch {
+    return { results: [], gaps: [] };
+  }
+  if (scopedDefs.size === 0) return { results: [], gaps: [] };
+
+  const results: CheckResult[] = [];
+  const gaps: QualityGap[] = [];
+
+  const docFields = scopedDefs.get('doc');
+  if (docFields) {
+    for (const def of docFields) {
+      if (!def.required) continue;
+      const val = fields[def.name];
+      if (val === undefined || val === null || val.value === null || val.value === undefined) {
+        gaps.push({ scope: 'doc', field: def.name, null_pct: 1, type: 'missing_doc_field' });
+        results.push({
+          check_name: `schema_coverage_doc_${def.name}`,
+          display_name: `Missing required field: ${def.name}`,
+          tier: 2,
+          classification: 'extraction_error',
+          check_role: 'structural',
+          scope: 'doc',
+          status: 'fail',
+          expected: 'non-null',
+          actual: null,
+          delta: null,
+          message: `Required doc field "${def.name}" is null or missing`,
+          affected_fields: [def.name],
+          hint_template: null,
+        });
+      }
+    }
+  }
+
+  for (const [scope, defs] of scopedDefs.entries()) {
+    if (scope === 'doc') continue;
+    const records = collections[scope];
+    if (!records || records.length < MIN_RECORDS_FOR_SPARSE) continue;
+
+    for (const def of defs) {
+      let nullCount = 0;
+      for (const rec of records) {
+        const val = rec[def.name];
+        if (val === undefined || val === null || val.value === null || val.value === undefined) {
+          nullCount++;
+        }
+      }
+      const nullPct = nullCount / records.length;
+      if (nullPct > SPARSE_THRESHOLD) {
+        gaps.push({ scope, field: def.name, null_pct: Math.round(nullPct * 100) / 100, type: 'sparse_collection_field' });
+        results.push({
+          check_name: `schema_coverage_${scope}_${def.name}`,
+          display_name: `Sparse field in ${scope}: ${def.name}`,
+          tier: 2,
+          classification: 'extraction_error',
+          check_role: 'structural',
+          scope,
+          status: 'fail',
+          expected: `<${Math.round(SPARSE_THRESHOLD * 100)}% null`,
+          actual: `${Math.round(nullPct * 100)}% null (${nullCount}/${records.length})`,
+          delta: null,
+          message: `Field "${def.name}" is null in ${Math.round(nullPct * 100)}% of ${scope} records (${nullCount}/${records.length}) — likely a parser gap`,
+          affected_fields: [def.name],
+          hint_template: null,
+        });
+      }
+    }
+  }
+
+  if (gaps.length > 0) {
+    console.log(
+      `[validator] Schema coverage: ${gaps.length} gap(s) found — ` +
+      gaps.map(g => `${g.scope}.${g.field} (${Math.round(g.null_pct * 100)}% null)`).join(', ')
+    );
+  }
+
+  return { results, gaps };
+}
+
+/**
+ * Build a human-readable gap description for the "improve parser" prompt.
+ */
+export function buildGapDescription(gaps: QualityGap[]): string {
+  const byScope = new Map<string, QualityGap[]>();
+  for (const g of gaps) {
+    const list = byScope.get(g.scope) || [];
+    list.push(g);
+    byScope.set(g.scope, list);
+  }
+
+  const lines: string[] = [];
+  for (const [scope, scopeGaps] of byScope) {
+    const fieldList = scopeGaps.map(g => `"${g.field}" (${Math.round(g.null_pct * 100)}% null)`).join(', ');
+    if (scope === 'doc') {
+      lines.push(`- Doc scope: required fields ${fieldList} are missing`);
+    } else {
+      lines.push(`- Collection "${scope}": fields ${fieldList} are null in most records — the parser is not extracting them`);
+    }
+  }
+  return lines.join('\n');
+}
+
 export async function runPostExtractionValidation(
   input: ValidationInput,
 ): Promise<ValidationOutput> {
@@ -69,6 +187,16 @@ export async function runPostExtractionValidation(
   let qualityScore = 100;
   let reextractAttempts = 0;
   const resolvedChecks: string[] = [];
+
+  // ── Schema coverage check (before consistency checks) ──
+  const { results: coverageResults, gaps: qualityGaps } = await checkFieldCoverage(skillId, fields, collections);
+
+  // Store quality gaps on parser cache entry for future "improve parser" runs
+  if (qualityGaps.length > 0 && input.usedCachedParserId) {
+    try {
+      await updateParserQualityGaps(input.usedCachedParserId, qualityGaps);
+    } catch { /* non-fatal */ }
+  }
 
   // Run check → fix → recheck loop
   for (let attempt = 0; attempt <= MAX_REEXTRACT_RETRIES; attempt++) {
@@ -161,6 +289,15 @@ export async function runPostExtractionValidation(
   }
 
   // Classify final failures using check_role (three-tier) rather than the legacy classification column
+  // Merge schema coverage results with consistency check results
+  checkResults = [...coverageResults, ...checkResults];
+  // Recompute scores including coverage checks
+  if (coverageResults.length > 0) {
+    reconciliationScore = computeReconciliationScore(checkResults);
+    identityScore = computeIdentityScore(checkResults);
+    qualityScore = computeQualityScore(checkResults);
+  }
+
   const extractionErrors = checkResults.filter(r => r.status === 'fail' && r.check_role !== 'anomaly');
   const docAnomalies = checkResults.filter(r => r.status === 'fail' && r.check_role === 'anomaly');
 
@@ -234,6 +371,7 @@ export async function runPostExtractionValidation(
         quality_score: qualityScore,
         checks_passed: checksPassed,
         checks_total: checkResults.length,
+        meta: qualityGaps.length > 0 ? { quality_gaps: qualityGaps } : {},
       });
       console.log(`[validator] Parser promoted to cache: skill=${skillId} format=${input.formatFingerprint}`);
     } catch (err) {
