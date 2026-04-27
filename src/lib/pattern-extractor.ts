@@ -18,10 +18,15 @@ import type { LangfuseParent } from './langfuse';
 
 // ── Zod Schemas ──────────────────────────────────────────────
 
+const TableMappingSchema = z.object({
+  raw_table: z.string(),
+  schema_table: z.string(),
+  field_mapping: z.record(z.string(), z.string()),
+});
+
 export const MappingConfigSchema = z.object({
-  fields: z.record(z.string(), z.string()),
-  records_key: z.string(),
-  secondary_tables: z.record(z.string(), z.string()),
+  doc_field_mapping: z.record(z.string(), z.string()),
+  tables: z.array(TableMappingSchema),
 });
 export type MappingConfig = z.infer<typeof MappingConfigSchema>;
 
@@ -41,9 +46,12 @@ export const PatternParserMetaSchema = z.object({
 export type PatternParserMeta = z.infer<typeof PatternParserMetaSchema>;
 
 const SchemaMappingResponseSchema = z.object({
-  field_mapping: z.record(z.string(), z.string()),
-  records_key: z.string().default(''),
-  table_mapping: z.record(z.string(), z.string()).default({}),
+  doc_field_mapping: z.record(z.string(), z.string()).default({}),
+  tables: z.array(z.object({
+    raw_table: z.string(),
+    schema_table: z.string(),
+    field_mapping: z.record(z.string(), z.string()),
+  })).default([]),
   confirmed_absent: z.array(z.string()).default([]),
 });
 
@@ -151,15 +159,16 @@ Write the complete Python script now. Output ONLY Python code, no explanation.`;
 
 // ── Schema Mapping ───────────────────────────────────────────
 
-const SCHEMA_MAPPING_SYSTEM = `You are a data mapping specialist. Your job is to map raw extracted field names from a document parser to a target schema.
+const SCHEMA_MAPPING_SYSTEM = `You are a data mapping specialist. Your job is to map raw extracted field/column names to a target schema. Each table needs its OWN field mapping because different tables can have different columns that map to different schema fields.
 
 RULES:
-- For each raw field, find the best matching schema field. Use extraction_hint and description for context.
+- Map doc-level fields separately from table-level fields.
+- For each table, provide a per-table field_mapping from raw column names to schema field names.
 - If a raw field has NO reasonable match in the schema, skip it.
-- If a schema field has NO match in the raw output, add it to confirmed_absent.
-- Output ONLY valid JSON — no explanation.
-- Be precise: "original_budget" matches "Original Budget", "jtd_cost" matches "JTD Cost", etc.
-- Map table names too: e.g. raw "cost_code_sections" → schema "records"`;
+- If a schema field has NO match anywhere in the raw output, add it to confirmed_absent.
+- Be precise with matching: "Original Budget" → "original_budget", "JTD Cost" → "jtd_cost", etc.
+- Case-insensitive matching is fine: "Cost Code" → "cost_code".
+- Output ONLY valid JSON — no explanation.`;
 
 export async function mapToSchema(
   rawOutput: Record<string, unknown>,
@@ -170,27 +179,51 @@ export async function mapToSchema(
 
   const rawKeys = describeRawOutput(rawOutput);
 
-  const schemaDesc = schemaFields.map(f => {
-    let line = `- "${f.schemaName}" (${f.scope}, ${f.type}): ${f.description}`;
-    if (f.extractionHint) line += ` | Hint: ${f.extractionHint}`;
-    return line;
-  }).join('\n');
+  // Group schema fields by scope for clarity in the prompt
+  const byScope = new Map<string, SchemaFieldInfo[]>();
+  for (const f of schemaFields) {
+    const list = byScope.get(f.scope) || [];
+    list.push(f);
+    byScope.set(f.scope, list);
+  }
+
+  let schemaDesc = '';
+  for (const [scope, fields] of byScope) {
+    schemaDesc += `\n### Scope: "${scope}"${scope === 'doc' ? ' (document-level fields)' : ` (table records)`}\n`;
+    schemaDesc += fields.map(f => {
+      let line = `- "${f.schemaName}" (${f.type}): ${f.description}`;
+      if (f.extractionHint) line += ` | Hint: ${f.extractionHint}`;
+      return line;
+    }).join('\n');
+    schemaDesc += '\n';
+  }
 
   const userMessage = `Map these raw extracted fields to the target schema.
 
 ## Raw output structure
 ${rawKeys}
 
-## Target schema fields
+## Target schema fields (grouped by scope)
 ${schemaDesc}
 
 Respond with ONLY this JSON:
 {
-  "field_mapping": { "raw_field_name": "schema_field_name", ... },
-  "records_key": "raw_key_holding_main_records",
-  "table_mapping": { "raw_table_name": "schema_table_name", ... },
+  "doc_field_mapping": { "raw_doc_field": "schema_field_name", ... },
+  "tables": [
+    {
+      "raw_table": "raw_table_name_from_output",
+      "schema_table": "schema_scope_name",
+      "field_mapping": { "Raw Column Name": "schema_field_name", ... }
+    }
+  ],
   "confirmed_absent": ["schema_field_with_no_raw_match", ...]
-}`;
+}
+
+IMPORTANT:
+- "doc_field_mapping" maps raw doc_fields keys to "doc" scope schema fields.
+- Each entry in "tables" maps a raw table to a schema scope AND provides per-column field_mapping.
+- The first table entry is the "main records" table. Additional entries are secondary tables.
+- field_mapping keys MUST be the EXACT column names from the raw table rows.`;
 
   const generation = langfuseParent?.generation({
     name: 'schema-mapping',
@@ -229,23 +262,27 @@ Respond with ONLY this JSON:
 
   const parsed = SchemaMappingResponseSchema.parse(rawJson);
 
+  const mappingConfig: MappingConfig = {
+    doc_field_mapping: parsed.doc_field_mapping,
+    tables: parsed.tables,
+  };
+
   generation?.end({
     output: parsed,
     usage: { input: response.usage?.input_tokens ?? 0, output: response.usage?.output_tokens ?? 0 },
     metadata: { elapsedMs: elapsed },
   });
 
+  const totalFieldMappings = Object.keys(parsed.doc_field_mapping).length
+    + parsed.tables.reduce((s, t) => s + Object.keys(t.field_mapping).length, 0);
+
   console.log(
-    `[pattern] Mapping complete in ${elapsed}ms: ${Object.keys(parsed.field_mapping).length} field mappings, ` +
-    `${parsed.confirmed_absent.length} confirmed absent`,
+    `[pattern] Mapping complete in ${elapsed}ms: ${totalFieldMappings} field mappings across ` +
+    `${parsed.tables.length} table(s), ${parsed.confirmed_absent.length} confirmed absent`,
   );
 
   return {
-    mappingConfig: {
-      fields: parsed.field_mapping,
-      records_key: parsed.records_key,
-      secondary_tables: parsed.table_mapping,
-    },
+    mappingConfig,
     confirmedAbsent: parsed.confirmed_absent,
   };
 }
@@ -265,7 +302,6 @@ export function autoValidate(
   const testCases: TestCase[] = [];
   const failures: string[] = [];
 
-  // Validate top-level shape via Zod
   const parseResult = PatternScriptOutputSchema.safeParse(rawOutput);
   if (!parseResult.success) {
     failures.push(
@@ -275,7 +311,6 @@ export function autoValidate(
   }
   const { doc_fields: docFields, tables } = parseResult.data;
 
-  // Collect test cases from doc-level fields
   for (const [key, val] of Object.entries(docFields)) {
     if (val === null || val === undefined) continue;
     const strVal = String(val).trim();
@@ -283,7 +318,6 @@ export function autoValidate(
     testCases.push({ identifier: 'doc', field: key, expected: typeof val === 'number' ? val : strVal });
   }
 
-  // Validate tables: each should be a non-empty array with mostly non-null first rows
   for (const [tableName, rows] of Object.entries(tables)) {
     if (rows.length === 0) {
       failures.push(`Table "${tableName}" has 0 rows — script likely failed to parse`);
@@ -299,7 +333,6 @@ export function autoValidate(
     }
   }
 
-  // Must have at least some output
   if (Object.keys(docFields).length === 0 && Object.keys(tables).length === 0) {
     failures.push('Output has no doc_fields and no tables — script extracted nothing');
   }
@@ -310,8 +343,11 @@ export function autoValidate(
 // ── Apply Mapping ────────────────────────────────────────────
 
 /**
- * Transform raw pattern script output using the mapping config
+ * Transform raw pattern script output using the scoped mapping config
  * into the pipeline's expected shape: { fields, records, secondary_tables }.
+ *
+ * Each table has its own field_mapping so columns like "Cost Code" in one table
+ * and "Cost Code" in another can map to different schema fields independently.
  */
 export function applyMapping(
   rawOutput: Record<string, unknown>,
@@ -325,37 +361,47 @@ export function applyMapping(
   const records: Array<Record<string, unknown>> = [];
   const secondary_tables: Record<string, Array<Record<string, unknown>>> = {};
 
-  // Validate & coerce raw output shape
   const parsed = PatternScriptOutputSchema.safeParse(rawOutput);
   const docFields = parsed.success ? parsed.data.doc_fields : (rawOutput.doc_fields as Record<string, unknown> | undefined) ?? {};
   const tables = parsed.success ? parsed.data.tables : (rawOutput.tables as Record<string, Array<Record<string, unknown>>> | undefined) ?? {};
 
-  // Map doc-level fields
-  for (const [rawName, schemaName] of Object.entries(mapping.fields)) {
+  // Map doc-level fields using doc_field_mapping
+  for (const [rawName, schemaName] of Object.entries(mapping.doc_field_mapping)) {
     if (rawName in docFields) {
       fields[schemaName] = { value: docFields[rawName], confidence: 1.0, source: 'pattern-extract' };
     }
   }
 
-  // Map main records table
-  if (mapping.records_key && tables[mapping.records_key]) {
-    const rawRows = tables[mapping.records_key];
-    for (const rawRow of rawRows) {
-      records.push(mapRow(rawRow, mapping.fields));
+  // Map each table using its per-table field_mapping
+  for (let i = 0; i < mapping.tables.length; i++) {
+    const tableMap = mapping.tables[i];
+    const rawRows = tables[tableMap.raw_table];
+    if (!rawRows || !Array.isArray(rawRows)) continue;
+
+    const mappedRows = rawRows.map(row => mapRow(row, tableMap.field_mapping));
+
+    if (i === 0) {
+      // First table entry = main records
+      records.push(...mappedRows);
+    } else {
+      // Subsequent entries = secondary tables
+      secondary_tables[tableMap.schema_table] = mappedRows;
     }
   }
 
-  // Map secondary tables
-  for (const [rawTable, schemaTable] of Object.entries(mapping.secondary_tables)) {
-    if (!tables[rawTable]) continue;
-    secondary_tables[schemaTable] = tables[rawTable].map(row => mapRow(row, mapping.fields));
-  }
+  const totalMapped = Object.keys(fields).length
+    + (records.length > 0 ? Object.keys(records[0] || {}).length : 0);
+  console.log(
+    `[pattern] applyMapping: ${Object.keys(fields).length} doc fields, ` +
+    `${records.length} main records, ` +
+    `${Object.entries(secondary_tables).map(([k, v]) => `${k}=${v.length}`).join(', ') || '0'} secondary rows`,
+  );
 
   return { fields, records, secondary_tables };
 }
 
 /**
- * Map a single row's fields using the field mapping.
+ * Map a single row's fields using a per-table field mapping.
  * Mapped fields take their schema name; unmapped fields pass through with raw name.
  */
 function mapRow(
@@ -372,7 +418,6 @@ function mapRow(
     }
   }
 
-  // Pass through unmapped fields
   for (const [key, val] of Object.entries(rawRow)) {
     if (!usedRawKeys.has(key) && !(key in mapped)) {
       mapped[key] = val;
@@ -416,7 +461,6 @@ export async function runPatternExtraction(
 
     if (!script) throw new Error('[pattern] No script generated');
 
-    // Execute in sandbox on full source text
     const sandboxFiles: ExtractionFile[] = [
       ...inputFiles,
       { path: '/tmp/source_text.txt', content: Buffer.from(sourceText, 'utf-8') },
@@ -437,7 +481,6 @@ export async function runPatternExtraction(
       throw new Error(`[pattern] Script failed after ${PATTERN_MAX_RETRIES + 1} attempts: ${result.stderr.slice(0, 500)}`);
     }
 
-    // Parse and validate output
     let rawJson: unknown;
     try {
       rawJson = JSON.parse(result.stdout);
@@ -463,7 +506,6 @@ export async function runPatternExtraction(
 
     const rawOutput = rawJson as Record<string, unknown>;
 
-    // Auto-validate structure and quality
     const validation = autoValidate(sampleText, rawOutput, script);
     if (!validation.passed) {
       console.warn(`[pattern] Auto-validation failed: ${validation.failures.join('; ')}`);
@@ -473,19 +515,19 @@ export async function runPatternExtraction(
       }
     }
 
-    // Map to schema
     const { mappingConfig, confirmedAbsent } = await mapToSchema(
       rawOutput,
       schemaFields,
       options?.langfuseParent,
     );
 
-    // Validate the mapping config through Zod
     MappingConfigSchema.parse(mappingConfig);
 
+    const totalFieldMappings2 = Object.keys(mappingConfig.doc_field_mapping).length
+      + mappingConfig.tables.reduce((s, t) => s + Object.keys(t.field_mapping).length, 0);
     console.log(
       `[pattern] Pattern extraction complete: ` +
-      `${Object.keys(mappingConfig.fields).length} mapped fields, ` +
+      `${totalFieldMappings2} mapped fields across ${mappingConfig.tables.length} table(s), ` +
       `${confirmedAbsent.length} confirmed absent`,
     );
 
@@ -537,12 +579,13 @@ function describeRawOutput(raw: Record<string, unknown>): string {
       lines.push(`  ### "${tableName}" (${rows.length} rows)`);
       if (rows.length > 0) {
         const firstRow = rows[0] as Record<string, unknown>;
-        lines.push(`  Columns: ${Object.keys(firstRow).map(k => `"${k}"`).join(', ')}`);
-        const sample = Object.entries(firstRow).slice(0, 5).map(([k, v]) => {
+        const colNames = Object.keys(firstRow);
+        lines.push(`  Columns (${colNames.length}): ${colNames.map(k => `"${k}"`).join(', ')}`);
+        const sample = Object.entries(firstRow).slice(0, 6).map(([k, v]) => {
           const preview = v === null ? 'null' : typeof v === 'string' ? `"${String(v).slice(0, 40)}"` : String(v);
           return `${k}=${preview}`;
         }).join(', ');
-        lines.push(`  Sample row: ${sample}`);
+        lines.push(`  Sample row: { ${sample} }`);
       }
     }
   }
