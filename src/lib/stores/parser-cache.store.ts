@@ -191,6 +191,8 @@ export interface QualityGap {
   field: string;
   null_pct: number;
   type: 'missing_doc_field' | 'sparse_collection_field';
+  description?: string;
+  field_type?: string;
   evidence?: GapEvidence[];
 }
 

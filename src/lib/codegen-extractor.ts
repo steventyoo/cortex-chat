@@ -901,7 +901,7 @@ function buildValidationRetryMessage(code: string, checks: JcrValidationCheck[])
 
 /**
  * For stored gaps that lack evidence, derive document excerpts directly
- * from sourceText by searching for the field name.
+ * from sourceText using the schema description and field name as search terms.
  * This is a lightweight, document-type-agnostic fallback for gaps stored
  * before evidence collection was added.
  */
@@ -912,19 +912,36 @@ function enrichGapsFromSourceText(gaps: QualityGap[], sourceText: string): Quali
   for (const gap of gaps) {
     if (gap.evidence && gap.evidence.length > 0) continue;
 
-    // Turn snake_case field name into search-friendly variants:
-    // "revised_budget" → ["revised_budget", "revised budget", "Revised Budget"]
-    const fieldName = gap.field;
-    const spaced = fieldName.replace(/_/g, ' ');
+    // Build search variants from schema description + field name.
+    // Schema description (e.g. "Revised budget for this cost code") is the
+    // best source of natural-language keywords that match document headings.
+    const variants: string[] = [];
+
+    if (gap.description) {
+      // Extract key noun phrases from description to use as search terms
+      // e.g. "Revised budget amount for this cost code" → "Revised budget"
+      const keywords = gap.description
+        .replace(/\b(for|the|this|that|of|in|a|an|to|from|per|each)\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(/[,.;]/)
+        .map(s => s.trim())
+        .filter(s => s.length > 3);
+      variants.push(...keywords);
+    }
+
+    // Also search for the field name in its natural forms
+    const spaced = gap.field.replace(/_/g, ' ');
     const titleCase = spaced.replace(/\b\w/g, c => c.toUpperCase());
-    const variants = [fieldName, spaced, titleCase];
+    variants.push(titleCase, spaced);
 
     const evidence: QualityGap['evidence'] = [];
 
     for (const variant of variants) {
       if (evidence.length >= MAX_EVIDENCE_PER_GAP) break;
 
-      const searchPattern = new RegExp(variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchPattern = new RegExp(escaped, 'gi');
       let match;
 
       while ((match = searchPattern.exec(sourceText)) !== null && evidence.length < MAX_EVIDENCE_PER_GAP) {
@@ -933,17 +950,20 @@ function enrichGapsFromSourceText(gaps: QualityGap[], sourceText: string): Quali
         const excerptEnd = Math.min(sourceText.length, matchIdx + EXCERPT_RADIUS);
         const excerpt = sourceText.slice(excerptStart, excerptEnd).trim();
 
-        // Avoid near-duplicate excerpts from overlapping regions
         const isDuplicate = evidence.some(ev =>
           Math.abs(sourceText.indexOf(ev.document_excerpt.slice(0, 50)) - excerptStart) < 300
         );
         if (isDuplicate) continue;
 
+        const hint = gap.description
+          ? `Extract "${gap.field}" (${gap.description}) from this section.`
+          : `The field "${gap.field}" appears in this section. Extract the corresponding value.`;
+
         evidence.push({
           record_identifier: `${gap.scope} (near "${variant}")`,
           document_excerpt: excerpt,
           extracted_value: 0,
-          expected_hint: `The field "${fieldName}" appears in this section of the document. Extract the corresponding numeric or text value.`,
+          expected_hint: hint,
         });
       }
 

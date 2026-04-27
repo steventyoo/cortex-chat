@@ -89,7 +89,7 @@ async function checkFieldCoverage(
       if (!def.required) continue;
       const val = fields[def.name];
       if (val === undefined || val === null || val.value === null || val.value === undefined) {
-        gaps.push({ scope: 'doc', field: def.name, null_pct: 1, type: 'missing_doc_field' });
+        gaps.push({ scope: 'doc', field: def.name, null_pct: 1, type: 'missing_doc_field', description: def.description, field_type: def.type });
         results.push({
           check_name: `schema_coverage_doc_${def.name}`,
           display_name: `Missing required field: ${def.name}`,
@@ -130,7 +130,7 @@ async function checkFieldCoverage(
       const nullPct = nullCount / records.length;
       if (nullPct > SPARSE_THRESHOLD) {
         const label = isNumeric ? 'null/zero' : 'null';
-        gaps.push({ scope, field: def.name, null_pct: Math.round(nullPct * 100) / 100, type: 'sparse_collection_field' });
+        gaps.push({ scope, field: def.name, null_pct: Math.round(nullPct * 100) / 100, type: 'sparse_collection_field', description: def.description, field_type: def.type });
         results.push({
           check_name: `schema_coverage_${scope}_${def.name}`,
           display_name: `Sparse field in ${scope}: ${def.name}`,
@@ -175,7 +175,10 @@ export function buildGapDescription(gaps: QualityGap[]): string {
 
   const lines: string[] = [];
   for (const [scope, scopeGaps] of byScope) {
-    const fieldList = scopeGaps.map(g => `"${g.field}" (${Math.round(g.null_pct * 100)}% null)`).join(', ');
+    const fieldList = scopeGaps.map(g => {
+      const desc = g.description ? ` — ${g.description}` : '';
+      return `"${g.field}" (${g.field_type || 'unknown'}, ${Math.round(g.null_pct * 100)}% null${desc})`;
+    }).join(', ');
     if (scope === 'doc') {
       lines.push(`- Doc scope: required fields ${fieldList} are missing`);
     } else {
@@ -256,7 +259,7 @@ export function attachGapEvidence(
         record_identifier: identifier,
         document_excerpt: excerpt,
         extracted_value: fieldVal?.value ?? null,
-        expected_hint: buildFieldHint(gap.scope, gap.field, identifier),
+        expected_hint: buildFieldHint(gap.scope, gap.field, identifier, gap.description),
       });
     }
 
@@ -333,29 +336,11 @@ function findDocumentExcerpt(sourceText: string, identifier: string, radius: num
 
 /**
  * Build a human-readable hint for what value should be extracted.
+ * Uses the schema description when available, falling back to a generic message.
  */
-function buildFieldHint(scope: string, field: string, identifier: string): string {
-  if (scope === 'cost_code') {
-    if (field === 'revised_budget') {
-      return `Look for "Revised Budget" in the Cost Code Totals row for cost code ${identifier}. It's the second column in: "Original Budget | Revised Budget | Open Commits | JTD Cost | Over/Under Budget"`;
-    }
-    if (field === 'regular_hours') {
-      return `Look for "Regular Hours" at the END of the Cost Code Totals row for labor code ${identifier}. Hours columns come AFTER Over/Under Budget: "... | Over/Under Budget | Regular Hours | Overtime Hours"`;
-    }
-    if (field === 'overtime_hours') {
-      return `Look for "Overtime Hours" — the LAST column in the Cost Code Totals row for labor code ${identifier}. It follows Regular Hours.`;
-    }
-    if (field === 'change_orders') {
-      return `Look for "Change Orders" or related change order amount for cost code ${identifier} in the totals section.`;
-    }
-  }
-  if (scope === 'payroll_transactions') {
-    if (field === 'overtime_hours') {
-      return `Look for "Overtime: X hours" lines following PR transaction headers. Format: "MM/DD/YY Overtime: N hours AMOUNT"`;
-    }
-    if (field === 'overtime_amount') {
-      return `The amount after "Overtime: N hours" on overtime lines — the LAST number: "MM/DD/YY Overtime: 2.00 hours    85.50" → overtime_amount=85.50`;
-    }
+function buildFieldHint(_scope: string, field: string, identifier: string, schemaDescription?: string): string {
+  if (schemaDescription) {
+    return `Extract "${field}" (${schemaDescription}) from this section for record "${identifier}".`;
   }
   return `This field should have a real value extracted from the document section for "${identifier}".`;
 }
