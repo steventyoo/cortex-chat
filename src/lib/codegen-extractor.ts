@@ -15,8 +15,8 @@ import { ExtractionResult, type ExtractedField } from './pipeline';
 import type { FieldDefinition, DocumentSkill } from './skills';
 import type { LangfuseParent } from './langfuse';
 import { fingerprintDocument } from './format-fingerprint';
-import { getActiveParser, getDeactivatedParser, recordCacheFailure, type QualityGap } from './stores/parser-cache.store';
-import { buildGapDescription } from './post-extraction-validator';
+import { getActiveParser, getDeactivatedParser, recordCacheFailure, updateParserQualityGaps, type QualityGap } from './stores/parser-cache.store';
+import { buildGapDescription, attachGapEvidence } from './post-extraction-validator';
 
 const MAX_RETRIES = 2;
 
@@ -899,84 +899,6 @@ function buildValidationRetryMessage(code: string, checks: JcrValidationCheck[])
   return msg;
 }
 
-/**
- * For stored gaps that lack evidence, derive document excerpts directly
- * from sourceText using the schema description and field name as search terms.
- * This is a lightweight, document-type-agnostic fallback for gaps stored
- * before evidence collection was added.
- */
-function enrichGapsFromSourceText(gaps: QualityGap[], sourceText: string): QualityGap[] {
-  const EXCERPT_RADIUS = 600;
-  const MAX_EVIDENCE_PER_GAP = 2;
-
-  for (const gap of gaps) {
-    if (gap.evidence && gap.evidence.length > 0) continue;
-
-    // Build search variants from schema description + field name.
-    // Schema description (e.g. "Revised budget for this cost code") is the
-    // best source of natural-language keywords that match document headings.
-    const variants: string[] = [];
-
-    if (gap.description) {
-      // Extract key noun phrases from description to use as search terms
-      // e.g. "Revised budget amount for this cost code" → "Revised budget"
-      const keywords = gap.description
-        .replace(/\b(for|the|this|that|of|in|a|an|to|from|per|each)\b/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .split(/[,.;]/)
-        .map(s => s.trim())
-        .filter(s => s.length > 3);
-      variants.push(...keywords);
-    }
-
-    // Also search for the field name in its natural forms
-    const spaced = gap.field.replace(/_/g, ' ');
-    const titleCase = spaced.replace(/\b\w/g, c => c.toUpperCase());
-    variants.push(titleCase, spaced);
-
-    const evidence: QualityGap['evidence'] = [];
-
-    for (const variant of variants) {
-      if (evidence.length >= MAX_EVIDENCE_PER_GAP) break;
-
-      const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const searchPattern = new RegExp(escaped, 'gi');
-      let match;
-
-      while ((match = searchPattern.exec(sourceText)) !== null && evidence.length < MAX_EVIDENCE_PER_GAP) {
-        const matchIdx = match.index;
-        const excerptStart = Math.max(0, matchIdx - 200);
-        const excerptEnd = Math.min(sourceText.length, matchIdx + EXCERPT_RADIUS);
-        const excerpt = sourceText.slice(excerptStart, excerptEnd).trim();
-
-        const isDuplicate = evidence.some(ev =>
-          Math.abs(sourceText.indexOf(ev.document_excerpt.slice(0, 50)) - excerptStart) < 300
-        );
-        if (isDuplicate) continue;
-
-        const hint = gap.description
-          ? `Extract "${gap.field}" (${gap.description}) from this section.`
-          : `The field "${gap.field}" appears in this section. Extract the corresponding value.`;
-
-        evidence.push({
-          record_identifier: `${gap.scope} (near "${variant}")`,
-          document_excerpt: excerpt,
-          extracted_value: 0,
-          expected_hint: hint,
-        });
-      }
-
-      if (evidence.length >= MAX_EVIDENCE_PER_GAP) break;
-    }
-
-    if (evidence.length > 0) {
-      gap.evidence = evidence;
-    }
-  }
-  return gaps;
-}
-
 // ── Main entry point ─────────────────────────────────────────
 
 export async function extractWithCodegen(
@@ -1068,11 +990,67 @@ export async function extractWithCodegen(
     referenceParserCode = deactivated.parser_code;
     let storedGaps = (deactivated.meta as Record<string, unknown>)?.quality_gaps as QualityGap[] | undefined;
     if (storedGaps && storedGaps.length > 0) {
-      // If stored gaps lack evidence, try to re-derive from sourceText
       const hasEvidence = storedGaps.some(g => g.evidence && g.evidence.length > 0);
-      if (!hasEvidence && sourceText.length > 0) {
-        storedGaps = enrichGapsFromSourceText(storedGaps, sourceText);
+
+      // If stored gaps lack evidence, run the old parser to get its extraction output
+      // and use that to build concrete evidence for the improve prompt.
+      if (!hasEvidence) {
+        console.log(`[codegen] Running deactivated parser to generate evidence for ${storedGaps.length} gap(s)`);
+        try {
+          const tEvidence = Date.now();
+          const evidenceResult = await ExtractionSandbox.execute(deactivated.parser_code, inputFiles);
+          const evidenceMs = Date.now() - tEvidence;
+
+          if (evidenceResult.exitCode === 0) {
+            const evidenceRaw = parseCodegenOutput(evidenceResult.stdout);
+            // Build collections from the old parser's output
+            const evidenceCollections: Record<string, Array<Record<string, { value: string | number | null; confidence: number }>>> = {};
+            if (evidenceRaw.records?.length) {
+              const primaryScope = storedGaps.find(g => g.scope !== 'doc')?.scope || 'records';
+              evidenceCollections[primaryScope] = evidenceRaw.records.map(rec => {
+                const norm: Record<string, { value: string | number | null; confidence: number }> = {};
+                for (const [k, v] of Object.entries(rec)) {
+                  if (v && typeof v === 'object' && 'value' in v) {
+                    norm[k] = v as { value: string | number | null; confidence: number };
+                  } else {
+                    norm[k] = { value: v as string | number | null, confidence: 0.9 };
+                  }
+                }
+                return norm;
+              });
+            }
+            if (evidenceRaw.secondary_tables) {
+              for (const [table, rows] of Object.entries(evidenceRaw.secondary_tables)) {
+                if (Array.isArray(rows)) {
+                  evidenceCollections[table] = rows.map(rec => {
+                    const norm: Record<string, { value: string | number | null; confidence: number }> = {};
+                    for (const [k, v] of Object.entries(rec)) {
+                      norm[k] = { value: v as string | number | null, confidence: 0.9 };
+                    }
+                    return norm;
+                  });
+                }
+              }
+            }
+
+            storedGaps = attachGapEvidence(storedGaps, sourceText, evidenceCollections);
+            const evidenceCount = storedGaps.filter(g => g.evidence && g.evidence.length > 0).length;
+            console.log(`[codegen] Evidence generated from old parser in ${evidenceMs}ms: ${evidenceCount}/${storedGaps.length} gaps with evidence`);
+
+            // Persist the enriched gaps back to the deactivated parser entry
+            if (evidenceCount > 0) {
+              try {
+                await updateParserQualityGaps(deactivated.id, storedGaps);
+              } catch { /* non-fatal */ }
+            }
+          } else {
+            console.warn(`[codegen] Deactivated parser failed (exit=${evidenceResult.exitCode}) — using gaps without evidence`);
+          }
+        } catch (err) {
+          console.warn(`[codegen] Evidence generation failed:`, err);
+        }
       }
+
       gapDescription = buildGapDescription(storedGaps);
       const evidenceCount = storedGaps.filter(g => g.evidence && g.evidence.length > 0).length;
       console.log(
