@@ -363,6 +363,10 @@ export async function runPostExtractionValidation(
   // Attach concrete document evidence to each gap for better "improve parser" prompts
   if (qualityGaps.length > 0 && sourceText) {
     qualityGaps = attachGapEvidence(qualityGaps, sourceText, collections);
+    const withEvidence = qualityGaps.filter(g => g.evidence && g.evidence.length > 0).length;
+    if (withEvidence > 0) {
+      console.log(`[validator] Evidence attached to ${withEvidence}/${qualityGaps.length} gap(s)`);
+    }
   }
 
   // Store quality gaps on parser cache entry for future "improve parser" runs
