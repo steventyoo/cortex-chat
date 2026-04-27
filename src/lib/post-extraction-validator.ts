@@ -28,6 +28,7 @@ import { ExtractionSandbox, type ExtractionFile } from './sandbox';
 import { getSupabase } from './supabase';
 import { promoteParser, incrementValidated, updateParserQualityGaps, updateParserCode, type QualityGap, type GapEvidence } from './stores/parser-cache.store';
 import { getSkillFieldDefinitionsScoped, type FieldDefinition } from './skills';
+import type { PatternParserMeta } from './pattern-extractor';
 
 type FieldVal = { value: string | number | null; confidence: number };
 type FieldsMap = Record<string, FieldVal>;
@@ -44,6 +45,7 @@ export interface ValidationInput {
   generatedCode?: string;
   formatFingerprint?: string;
   usedCachedParserId?: string;
+  patternMeta?: PatternParserMeta;
 }
 
 export interface ValidationOutput {
@@ -613,6 +615,10 @@ export async function runPostExtractionValidation(
   if (identityScore === 100 && input.generatedCode && input.formatFingerprint && !input.usedCachedParserId) {
     try {
       const checksPassed = checkResults.filter(r => r.status === 'pass').length;
+      const promotionMeta: Record<string, unknown> = qualityGaps.length > 0 ? { quality_gaps: qualityGaps } : {};
+      if (input.patternMeta) {
+        Object.assign(promotionMeta, input.patternMeta);
+      }
       await promoteParser({
         skill_id: skillId,
         format_fingerprint: input.formatFingerprint,
@@ -622,9 +628,9 @@ export async function runPostExtractionValidation(
         quality_score: qualityScore,
         checks_passed: checksPassed,
         checks_total: checkResults.length,
-        meta: qualityGaps.length > 0 ? { quality_gaps: qualityGaps } : {},
+        meta: promotionMeta,
       });
-      console.log(`[validator] Parser promoted to cache: skill=${skillId} format=${input.formatFingerprint}`);
+      console.log(`[validator] Parser promoted to cache: skill=${skillId} format=${input.formatFingerprint} type=${input.patternMeta ? 'pattern' : 'legacy'}`);
     } catch (err) {
       console.error(`[validator] Parser promotion failed (non-fatal):`, err);
     }
