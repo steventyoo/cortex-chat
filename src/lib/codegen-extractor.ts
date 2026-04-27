@@ -439,7 +439,7 @@ async function generateParserCode(
     });
     messages.push({
       role: 'user',
-      content: `This parser works and extracts most fields correctly, but it has extraction gaps — some schema fields are consistently null or zero when they should have real values:\n${gapDescription || 'Some fields are missing. Check the schema above for required fields that may not be parsed.'}\n\nIMPORTANT CONSTRAINTS:\n- Fix ONLY the specific field gaps listed above. Do NOT change any other extraction logic.\n- Do NOT change how payroll transactions are parsed unless a gap specifically mentions them.\n- Do NOT change which data sources the script reads from (if it uses source_text.txt, keep using it; if it uses pdfplumber, keep using it).\n- The number of extracted records/transactions should stay roughly the same — do NOT introduce duplicate extraction.\n- The fix is usually a missing regex pattern or an unparsed summary line. Look for the specific lines where the missing values appear.\n\nOutput ONLY the complete improved Python code.`,
+      content: `This parser works and extracts most fields correctly, but it has extraction gaps — some schema fields are consistently null or zero when they should have real values:\n${gapDescription || 'Some fields are missing. Check the schema above for required fields that may not be parsed.'}\n\nIMPORTANT CONSTRAINTS:\n- Fix ONLY the specific field gaps listed above. Do NOT change any other extraction logic.\n- Do NOT change how other record types or collections are parsed unless a gap specifically mentions them.\n- Do NOT change which data sources the script reads from (if it uses source_text.txt, keep using it; if it uses pdfplumber, keep using it).\n- The number of extracted records/transactions should stay roughly the same — do NOT introduce duplicate extraction.\n- If "Concrete failing test cases" are provided above, they show the EXACT document text where the missing values appear. Use these excerpts to write or fix the regex/parsing logic that reads those lines.\n- The fix is usually a missing regex pattern or an unparsed summary line. Study the document excerpts carefully — the values ARE in the text, you just need to parse them.\n\nOutput ONLY the complete improved Python code.`,
     });
   } else if (previousError) {
     messages.push({
@@ -899,6 +899,84 @@ function buildValidationRetryMessage(code: string, checks: JcrValidationCheck[])
   return msg;
 }
 
+/**
+ * For stored gaps that lack evidence, derive document excerpts directly
+ * from sourceText using the schema description and field name as search terms.
+ * This is a lightweight, document-type-agnostic fallback for gaps stored
+ * before evidence collection was added.
+ */
+function enrichGapsFromSourceText(gaps: QualityGap[], sourceText: string): QualityGap[] {
+  const EXCERPT_RADIUS = 600;
+  const MAX_EVIDENCE_PER_GAP = 2;
+
+  for (const gap of gaps) {
+    if (gap.evidence && gap.evidence.length > 0) continue;
+
+    // Build search variants from schema description + field name.
+    // Schema description (e.g. "Revised budget for this cost code") is the
+    // best source of natural-language keywords that match document headings.
+    const variants: string[] = [];
+
+    if (gap.description) {
+      // Extract key noun phrases from description to use as search terms
+      // e.g. "Revised budget amount for this cost code" → "Revised budget"
+      const keywords = gap.description
+        .replace(/\b(for|the|this|that|of|in|a|an|to|from|per|each)\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(/[,.;]/)
+        .map(s => s.trim())
+        .filter(s => s.length > 3);
+      variants.push(...keywords);
+    }
+
+    // Also search for the field name in its natural forms
+    const spaced = gap.field.replace(/_/g, ' ');
+    const titleCase = spaced.replace(/\b\w/g, c => c.toUpperCase());
+    variants.push(titleCase, spaced);
+
+    const evidence: QualityGap['evidence'] = [];
+
+    for (const variant of variants) {
+      if (evidence.length >= MAX_EVIDENCE_PER_GAP) break;
+
+      const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchPattern = new RegExp(escaped, 'gi');
+      let match;
+
+      while ((match = searchPattern.exec(sourceText)) !== null && evidence.length < MAX_EVIDENCE_PER_GAP) {
+        const matchIdx = match.index;
+        const excerptStart = Math.max(0, matchIdx - 200);
+        const excerptEnd = Math.min(sourceText.length, matchIdx + EXCERPT_RADIUS);
+        const excerpt = sourceText.slice(excerptStart, excerptEnd).trim();
+
+        const isDuplicate = evidence.some(ev =>
+          Math.abs(sourceText.indexOf(ev.document_excerpt.slice(0, 50)) - excerptStart) < 300
+        );
+        if (isDuplicate) continue;
+
+        const hint = gap.description
+          ? `Extract "${gap.field}" (${gap.description}) from this section.`
+          : `The field "${gap.field}" appears in this section. Extract the corresponding value.`;
+
+        evidence.push({
+          record_identifier: `${gap.scope} (near "${variant}")`,
+          document_excerpt: excerpt,
+          extracted_value: 0,
+          expected_hint: hint,
+        });
+      }
+
+      if (evidence.length >= MAX_EVIDENCE_PER_GAP) break;
+    }
+
+    if (evidence.length > 0) {
+      gap.evidence = evidence;
+    }
+  }
+  return gaps;
+}
+
 // ── Main entry point ─────────────────────────────────────────
 
 export async function extractWithCodegen(
@@ -988,9 +1066,19 @@ export async function extractWithCodegen(
   const deactivated = await getDeactivatedParser(skill.skillId, formatFingerprint);
   if (deactivated) {
     referenceParserCode = deactivated.parser_code;
-    const storedGaps = (deactivated.meta as Record<string, unknown>)?.quality_gaps as QualityGap[] | undefined;
+    let storedGaps = (deactivated.meta as Record<string, unknown>)?.quality_gaps as QualityGap[] | undefined;
     if (storedGaps && storedGaps.length > 0) {
+      // If stored gaps lack evidence, try to re-derive from sourceText
+      const hasEvidence = storedGaps.some(g => g.evidence && g.evidence.length > 0);
+      if (!hasEvidence && sourceText.length > 0) {
+        storedGaps = enrichGapsFromSourceText(storedGaps, sourceText);
+      }
       gapDescription = buildGapDescription(storedGaps);
+      const evidenceCount = storedGaps.filter(g => g.evidence && g.evidence.length > 0).length;
+      console.log(
+        `[codegen] Improve prompt: ${storedGaps.length} gap(s), ${evidenceCount} with evidence, ` +
+        `description=${gapDescription.length} chars`
+      );
     }
     console.log(
       `[codegen] Found deactivated parser as reference: id=${deactivated.id} ` +
