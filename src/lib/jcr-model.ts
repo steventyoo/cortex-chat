@@ -8,6 +8,7 @@ import { getSupabase } from './supabase';
 import { evaluateDerivedFields, emitExtractedRows, buildContext } from './derived-evaluator';
 import type { CheckResult } from './consistency-evaluator';
 import { runPostExtractionValidation } from './post-extraction-validator';
+import type { PatternParserMeta } from './pattern-extractor';
 import type { ExportRow } from '@/types/export';
 
 export type { ExportRow };
@@ -443,7 +444,7 @@ export async function runJcrModel(
   orgId: string,
   extractedData: { fields: FieldsMap; records: RecordRow[]; skillId?: string; workerRecords?: RecordRow[] },
   meta: ProjectMeta = {},
-  options?: { tailText?: string; sourceText?: string; generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string },
+  options?: { tailText?: string; sourceText?: string; generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; patternMeta?: PatternParserMeta },
 ): Promise<{ runId: string; rowCount: number; reconciliationScore: number; identityScore: number; qualityScore: number; checkResults: CheckResult[] }> {
   const sb = getSupabase();
   const runId = crypto.randomUUID();
@@ -508,6 +509,7 @@ export async function runJcrModel(
     generatedCode: options?.generatedCode,
     formatFingerprint: options?.formatFingerprint,
     usedCachedParserId: options?.usedCachedParserId,
+    patternMeta: options?.patternMeta,
   });
 
   const { withheldFields, anomalyFields, checkResults, reconciliationScore, identityScore, qualityScore } = validation;
