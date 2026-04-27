@@ -16,6 +16,13 @@ import type { FieldDefinition, DocumentSkill } from './skills';
 import type { LangfuseParent } from './langfuse';
 import { fingerprintDocument } from './format-fingerprint';
 import { getActiveParser, recordCacheFailure, type QualityGap } from './stores/parser-cache.store';
+import {
+  runPatternExtraction,
+  applyMapping,
+  PatternParserMetaSchema,
+  type PatternParserMeta,
+  type SchemaFieldInfo,
+} from './pattern-extractor';
 
 const MAX_RETRIES = 2;
 
@@ -34,6 +41,7 @@ export interface CodegenExtractionResult {
     codegenInputTokens?: number;
     codegenOutputTokens?: number;
     sandboxElapsedMs?: number;
+    patternMeta?: PatternParserMeta;
   };
 }
 
@@ -997,6 +1005,103 @@ function buildValidationRetryMessage(code: string, checks: JcrValidationCheck[])
   return msg;
 }
 
+// ── Pattern-result normalization ─────────────────────────────
+
+function buildSchemaFieldInfo(
+  catalogFields: FieldDefinition[],
+  scopedFields?: Map<string, FieldDefinition[]>,
+): SchemaFieldInfo[] {
+  const result: SchemaFieldInfo[] = [];
+
+  for (const f of catalogFields) {
+    result.push({
+      schemaName: f.name,
+      scope: 'doc',
+      type: f.type,
+      description: f.description,
+      extractionHint: f.disambiguationRules,
+      required: f.required,
+    });
+  }
+
+  if (scopedFields) {
+    for (const [scope, fields] of scopedFields.entries()) {
+      if (scope === 'doc') continue;
+      for (const f of fields) {
+        result.push({
+          schemaName: f.name,
+          scope,
+          type: f.type,
+          description: f.description,
+          extractionHint: f.disambiguationRules,
+          required: f.required,
+        });
+      }
+    }
+  }
+
+  return result;
+}
+
+function normalizePatternResult(
+  fields: Record<string, { value: unknown; confidence: number; source?: string }>,
+  records: Array<Record<string, unknown>>,
+  secondaryTables: Record<string, Array<Record<string, unknown>>>,
+  skill: DocumentSkill,
+  classifierConfidence: number,
+): CodegenExtractionResult {
+  const normalizedFields: Record<string, ExtractedField> = {};
+  for (const [key, val] of Object.entries(fields)) {
+    normalizedFields[key] = {
+      value: val.value === undefined ? null : (val.value as string | number | null),
+      confidence: val.confidence,
+    };
+  }
+
+  const normalizedRecords = records.map(rec => {
+    const norm: Record<string, ExtractedField> = {};
+    for (const [key, val] of Object.entries(rec)) {
+      norm[key] = { value: val as string | number | null, confidence: 1.0 };
+    }
+    return norm;
+  });
+
+  const extraction: ExtractionResult = {
+    documentType: skill.skillId,
+    documentTypeConfidence: classifierConfidence,
+    fields: normalizedFields,
+    records: normalizedRecords.length > 0 ? normalizedRecords : undefined,
+    skillId: skill.skillId,
+    skillVersion: skill.version,
+    classifierConfidence,
+  };
+
+  if (Object.keys(secondaryTables).length > 0) {
+    extraction.targetTables = [];
+    for (const [tableName, rows] of Object.entries(secondaryTables)) {
+      extraction.targetTables.push({
+        table: tableName,
+        records: rows.map(row => {
+          const norm: Record<string, ExtractedField> = {};
+          for (const [key, val] of Object.entries(row)) {
+            norm[key] = { value: val as string | number | null, confidence: 1.0 };
+          }
+          return norm;
+        }),
+      });
+    }
+  }
+
+  return {
+    extraction,
+    discoveredFields: {},
+    metadata: {
+      parserMethod: 'pattern',
+      retries: 0,
+    },
+  };
+}
+
 // ── Main entry point ─────────────────────────────────────────
 
 export async function extractWithCodegen(
@@ -1033,30 +1138,60 @@ export async function extractWithCodegen(
   const cached = await getActiveParser(skill.skillId, formatFingerprint);
   if (cached) {
     console.log(`[codegen] Trying cached parser: id=${cached.id} validated_count=${cached.validated_count}`);
+    const isPatternParser = cached.meta && (cached.meta as Record<string, unknown>).parser_type === 'pattern';
     const tCache = Date.now();
     try {
       const cacheResult = await ExtractionSandbox.execute(cached.parser_code, inputFiles);
       const cacheExecTime = Date.now() - tCache;
-      console.log(`[codegen] Cached parser executed in ${cacheExecTime}ms: exitCode=${cacheResult.exitCode}`);
+      console.log(`[codegen] Cached parser executed in ${cacheExecTime}ms: exitCode=${cacheResult.exitCode} type=${isPatternParser ? 'pattern' : 'legacy'}`);
 
       if (cacheResult.exitCode === 0) {
         try {
-          const raw = parseCodegenOutput(cacheResult.stdout);
-          const records = raw.records || [];
-          const fieldCount = Object.keys(raw.fields || {}).length;
+          if (isPatternParser) {
+            // Pattern parser: validate stored meta and apply mapping to transform raw output
+            const metaParseResult = PatternParserMetaSchema.safeParse(cached.meta);
+            if (!metaParseResult.success) {
+              console.warn(`[codegen] Cached pattern parser has invalid meta — falling through`);
+            } else {
+              const meta = metaParseResult.data;
+              const rawOutput = JSON.parse(cacheResult.stdout) as Record<string, unknown>;
+              const { fields, records, secondary_tables } = applyMapping(rawOutput, meta.mapping_config);
 
-          if (fieldCount > 0 || records.length > 0) {
-            console.log(`[codegen] Cached parser succeeded: ${fieldCount} fields, ${records.length} records`);
-            const normalized = normalizeToExtractionResult(raw, skill, classifierConfidence);
-            normalized.metadata.retries = 0;
-            normalized.metadata.generatedCode = cached.parser_code;
-            normalized.metadata.formatFingerprint = formatFingerprint;
-            normalized.metadata.usedCachedParserId = cached.id;
-            normalized.metadata.parserMethod = 'cached';
-            normalized.metadata.sandboxElapsedMs = cacheExecTime;
-            return normalized;
+              const fieldCount = Object.keys(fields).length;
+              const recordCount = records.length;
+              if (fieldCount > 0 || recordCount > 0) {
+                console.log(`[codegen] Cached pattern parser succeeded: ${fieldCount} fields, ${recordCount} records`);
+                const normalized = normalizePatternResult(fields, records, secondary_tables, skill, classifierConfidence);
+                normalized.metadata.retries = 0;
+                normalized.metadata.generatedCode = cached.parser_code;
+                normalized.metadata.formatFingerprint = formatFingerprint;
+                normalized.metadata.usedCachedParserId = cached.id;
+                normalized.metadata.parserMethod = 'cached-pattern';
+                normalized.metadata.sandboxElapsedMs = cacheExecTime;
+                normalized.metadata.patternMeta = meta;
+                return normalized;
+              }
+              console.warn(`[codegen] Cached pattern parser returned empty output — falling through`);
+            }
+          } else {
+            // Legacy parser: parse the standard codegen output format
+            const raw = parseCodegenOutput(cacheResult.stdout);
+            const records = raw.records || [];
+            const fieldCount = Object.keys(raw.fields || {}).length;
+
+            if (fieldCount > 0 || records.length > 0) {
+              console.log(`[codegen] Cached parser succeeded: ${fieldCount} fields, ${records.length} records`);
+              const normalized = normalizeToExtractionResult(raw, skill, classifierConfidence);
+              normalized.metadata.retries = 0;
+              normalized.metadata.generatedCode = cached.parser_code;
+              normalized.metadata.formatFingerprint = formatFingerprint;
+              normalized.metadata.usedCachedParserId = cached.id;
+              normalized.metadata.parserMethod = 'cached';
+              normalized.metadata.sandboxElapsedMs = cacheExecTime;
+              return normalized;
+            }
+            console.warn(`[codegen] Cached parser returned empty output — falling through to generation`);
           }
-          console.warn(`[codegen] Cached parser returned empty output — falling through to generation`);
         } catch {
           console.warn(`[codegen] Cached parser output parse failed — falling through to generation`);
         }
@@ -1070,8 +1205,7 @@ export async function extractWithCodegen(
     }
   }
 
-  // ── Generate new parser via Opus ──
-  // On cache miss, also identify the format with a cheap LLM call for operator visibility
+  // On cache miss, identify the format with a cheap LLM call for operator visibility
   let formatLabel: string | undefined;
   if (!cached) {
     try {
@@ -1080,6 +1214,73 @@ export async function extractWithCodegen(
     } catch { /* non-fatal */ }
   }
 
+  // ── Try pattern-first extraction (new two-step flow) ──
+  // On cache miss (or cache failure), try the lightweight pattern+mapping approach
+  // before falling back to the heavyweight legacy full-parser generation.
+  if (fileExt === 'pdf' && sourceText.length > 500) {
+    try {
+      const schemaFields = buildSchemaFieldInfo(catalogFields, options?.scopedFields);
+      console.log(`[codegen] Attempting pattern-first extraction: ${schemaFields.length} schema fields`);
+
+      const patternSpan = options?.langfuseParent?.span({
+        name: 'pattern-first-extraction',
+        input: { skillId: skill.skillId, schemaFieldCount: schemaFields.length, sourceTextLength: sourceText.length },
+      });
+
+      const patternResult = await runPatternExtraction(
+        sourceText,
+        schemaFields,
+        inputFiles,
+        { langfuseParent: patternSpan ?? options?.langfuseParent },
+      );
+
+      const { fields, records, secondary_tables } = applyMapping(
+        patternResult.rawOutput,
+        patternResult.mappingConfig,
+      );
+
+      const fieldCount = Object.keys(fields).length;
+      const recordCount = records.length;
+      const secondaryCount = Object.values(secondary_tables).reduce((s, r) => s + r.length, 0);
+
+      if (fieldCount > 0 || recordCount > 0) {
+        console.log(
+          `[codegen] Pattern extraction succeeded: ${fieldCount} fields, ${recordCount} records, ` +
+          `${secondaryCount} secondary rows, ${patternResult.confirmedAbsent.length} confirmed absent`,
+        );
+
+        const normalized = normalizePatternResult(
+          fields, records, secondary_tables, skill, classifierConfidence,
+        );
+        normalized.metadata.retries = 0;
+        normalized.metadata.generatedCode = patternResult.patternScript;
+        normalized.metadata.formatFingerprint = formatFingerprint;
+        normalized.metadata.formatLabel = formatLabel;
+        normalized.metadata.parserMethod = 'pattern';
+        normalized.metadata.codegenInputTokens = patternResult.tokens.input;
+        normalized.metadata.codegenOutputTokens = patternResult.tokens.output;
+        normalized.metadata.patternMeta = {
+          parser_type: 'pattern',
+          mapping_config: patternResult.mappingConfig,
+          confirmed_absent: patternResult.confirmedAbsent,
+          sample_test_cases: patternResult.testCases,
+        };
+
+        patternSpan?.end({
+          output: { fieldCount, recordCount, secondaryCount, confirmedAbsent: patternResult.confirmedAbsent },
+          metadata: { totalElapsedMs: Date.now() - t0 },
+        });
+
+        return normalized;
+      }
+      console.warn(`[codegen] Pattern extraction returned empty results — falling through to legacy generation`);
+      patternSpan?.end({ output: { fieldCount: 0, recordCount: 0 }, level: 'WARNING' as const });
+    } catch (err) {
+      console.warn(`[codegen] Pattern extraction failed (non-fatal), falling through to legacy:`, err);
+    }
+  }
+
+  // ── Generate new parser via Opus (legacy full-parser generation) ──
   const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt, options?.scopedFields);
 
   const HEAD_PREVIEW = 20_000;

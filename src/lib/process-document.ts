@@ -3,6 +3,7 @@ import { extractWithSkill, getSkillFieldDefinitions, getSkillFieldDefinitionsSco
 import { extractWithCodegen, type CodegenExtractionResult } from '@/lib/codegen-extractor';
 import { extractWithVision, type VisionExtractionResult } from '@/lib/vision-extractor';
 import { getContextCardFieldsForSkill } from '@/lib/stores/context-cards.store';
+import type { PatternParserMeta } from '@/lib/pattern-extractor';
 import { parseFileBuffer, extractTextWithClaude, extractTextFromLargePdf, CLAUDE_MAX_BASE64_BYTES, getPdfPageCount } from '@/lib/file-parser';
 import { ValidationFlag, ExtractionResult, resolveCategoryKey, generateCanonicalName, computeOverallConfidence } from '@/lib/pipeline';
 import { ProcessPayload } from '@/lib/qstash';
@@ -185,7 +186,7 @@ async function processLargePdfVision(opts: {
   let overallConfidence: number;
   let flags: ValidationFlag[];
   let usedExtractionMethod = 'vision-chunked';
-  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string } = {};
+  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string; patternMeta?: PatternParserMeta } = {};
 
   if (skill.extractionMethod === 'codegen') {
     const codegenSpan = trace.span({
@@ -235,6 +236,7 @@ async function processLargePdfVision(opts: {
         formatFingerprint: codegenResult.metadata.formatFingerprint,
         usedCachedParserId: codegenResult.metadata.usedCachedParserId,
         sourceText,
+        patternMeta: codegenResult.metadata.patternMeta,
       };
 
       for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
@@ -671,7 +673,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   let flags: ValidationFlag[];
   let discoveredFields: Record<string, unknown> = {};
   let usedExtractionMethod = 'llm';
-  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string } = {};
+  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string; patternMeta?: PatternParserMeta } = {};
 
   try {
     console.log(`[process] Starting AI extraction: project=${projectId || 'none'} org=${orgId}`);
@@ -762,6 +764,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
             formatFingerprint: codegenResult.metadata.formatFingerprint,
             usedCachedParserId: codegenResult.metadata.usedCachedParserId,
             sourceText,
+            patternMeta: codegenResult.metadata.patternMeta,
           };
 
           for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
@@ -833,6 +836,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           formatFingerprint: codegenResult.metadata.formatFingerprint,
           usedCachedParserId: codegenResult.metadata.usedCachedParserId,
           sourceText,
+          patternMeta: codegenResult.metadata.patternMeta,
         };
 
         for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
