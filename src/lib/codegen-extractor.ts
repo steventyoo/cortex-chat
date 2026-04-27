@@ -15,8 +15,7 @@ import { ExtractionResult, type ExtractedField } from './pipeline';
 import type { FieldDefinition, DocumentSkill } from './skills';
 import type { LangfuseParent } from './langfuse';
 import { fingerprintDocument } from './format-fingerprint';
-import { getActiveParser, getDeactivatedParser, recordCacheFailure, updateParserQualityGaps, type QualityGap } from './stores/parser-cache.store';
-import { buildGapDescription, attachGapEvidence } from './post-extraction-validator';
+import { getActiveParser, recordCacheFailure, type QualityGap } from './stores/parser-cache.store';
 
 const MAX_RETRIES = 2;
 
@@ -422,26 +421,10 @@ async function generateParserCode(
   previousError?: string,
   langfuseParent?: LangfuseParent,
   previousCode?: string,
-  referenceParserCode?: string,
-  gapDescription?: string,
 ): Promise<CodegenGenerationResult> {
   const messages: Anthropic.MessageParam[] = [];
 
-  if (referenceParserCode && !previousError) {
-    // "Improve this parser" mode: give Opus the working parser + what's missing
-    messages.push({
-      role: 'user',
-      content: `${metaPrompt}\n\nHere is a preview of the document content (head and tail sections):\n\`\`\`\n${documentPreview}\n\`\`\``,
-    });
-    messages.push({
-      role: 'assistant',
-      content: `I'll write a Python script to extract the data.\n\n\`\`\`python\n${referenceParserCode}\n\`\`\``,
-    });
-    messages.push({
-      role: 'user',
-      content: `This parser works and extracts most fields correctly, but it has extraction gaps — some schema fields are consistently null or zero when they should have real values:\n${gapDescription || 'Some fields are missing. Check the schema above for required fields that may not be parsed.'}\n\nIMPORTANT CONSTRAINTS:\n- Fix ONLY the specific field gaps listed above. Do NOT change any other extraction logic.\n- Do NOT change how other record types or collections are parsed unless a gap specifically mentions them.\n- Do NOT change which data sources the script reads from (if it uses source_text.txt, keep using it; if it uses pdfplumber, keep using it).\n- The number of extracted records/transactions should stay roughly the same — do NOT introduce duplicate extraction.\n- If "Concrete failing test cases" are provided above, they show the EXACT document text where the missing values appear. Use these excerpts to write or fix the regex/parsing logic that reads those lines.\n- The fix is usually a missing regex pattern or an unparsed summary line. Study the document excerpts carefully — the values ARE in the text, you just need to parse them.\n\nOutput ONLY the complete improved Python code.`,
-    });
-  } else if (previousError) {
+  if (previousError) {
     messages.push({
       role: 'user',
       content: `${metaPrompt}\n\nHere is a preview of the document content (head and tail sections):\n\`\`\`\n${documentPreview}\n\`\`\``,
@@ -463,9 +446,8 @@ async function generateParserCode(
     });
   }
 
-  const isImprove = !!referenceParserCode && !previousError;
   const generation = langfuseParent?.generation({
-    name: previousError ? 'codegen-retry' : isImprove ? 'codegen-improve' : 'codegen-generate',
+    name: previousError ? 'codegen-retry' : 'codegen-generate',
     model: 'claude-opus-4-6',
     input: {
       promptSummary: metaPrompt.slice(0, 500),
@@ -525,6 +507,122 @@ function extractPythonCode(text: string): string {
   }
 
   return text.trim();
+}
+
+// ── Gap-fill code generation ─────────────────────────────────
+// Instead of rewriting the whole parser, generate a small Python function
+// that patches only the missing fields and append it to the cached parser.
+
+export interface GapFillResult {
+  combinedCode: string;
+  gapFillCode: string;
+  fieldsTargeted: string[];
+}
+
+/**
+ * Generate a small Python `fill_gaps()` function that reads /tmp/output.json,
+ * patches the missing fields using the document source text, and overwrites
+ * the output file. Uses Opus for best code quality (one-time cost per parser).
+ */
+export async function generateGapFillCode(
+  gaps: QualityGap[],
+  gapDescription: string,
+  langfuseParent?: LangfuseParent,
+): Promise<string> {
+  const client = new Anthropic();
+
+  const fieldsTargeted = gaps.map(g => `${g.scope}.${g.field}`).join(', ');
+
+  const systemPrompt = `You are a Python expert. Your task is to write a SMALL, focused function that patches missing fields in a JSON extraction output.
+
+RULES:
+- Write ONLY a Python function called \`fill_gaps(data)\` that takes a dict and returns the patched dict.
+- The data dict has structure: {"fields": {...}, "records": [...], "secondary_tables": {...}}
+- "records" is an array of dicts where each field is {"value": <val>, "confidence": <float>}
+- "secondary_tables" is a dict of table_name -> array of flat dicts (plain values, no confidence wrapper)
+- Read the source document from \`/tmp/source_text.txt\` to find the missing values.
+- ONLY patch fields that are null or zero. NEVER overwrite fields that already have real values.
+- Keep the function under 80 lines. No classes, no imports beyond re/json/os.
+- Do NOT re-extract any data that is already present and correct.
+- Output ONLY the Python function definition inside a code fence. No explanation.`;
+
+  const userMessage = `The following extraction gaps were detected. Each gap includes document excerpts showing where the missing values appear in the source text.
+
+${gapDescription}
+
+Write a \`fill_gaps(data)\` function that:
+1. Reads /tmp/source_text.txt
+2. For each gap listed above, finds the value in the source text using regex/string parsing
+3. Patches the corresponding record in data["records"] or data["secondary_tables"]
+4. Returns the patched data dict
+
+Remember: records use {"value": <val>, "confidence": <float>} wrappers. Secondary tables use plain values.`;
+
+  const generation = langfuseParent?.generation({
+    name: 'codegen-gap-fill',
+    model: 'claude-opus-4-6',
+    input: { fieldsTargeted, gapCount: gaps.length, descriptionLength: gapDescription.length },
+    modelParameters: { maxTokens: 8192 },
+  });
+
+  console.log(`[codegen] Generating gap-fill function: ${gaps.length} gap(s) targeting [${fieldsTargeted}]`);
+  const tStart = Date.now();
+
+  const response = await client.messages.create({
+    model: 'claude-opus-4-6',
+    max_tokens: 8192,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }],
+  });
+
+  const elapsed = Date.now() - tStart;
+  const textBlock = response.content.find(b => b.type === 'text');
+  if (!textBlock || textBlock.type !== 'text') {
+    throw new Error('[codegen] No text in gap-fill response');
+  }
+
+  const code = extractPythonCode(textBlock.text);
+
+  generation?.end({
+    output: code,
+    usage: { input: response.usage?.input_tokens ?? 0, output: response.usage?.output_tokens ?? 0 },
+    metadata: { elapsedMs: elapsed, codeLength: code.length },
+  });
+
+  console.log(
+    `[codegen] Gap-fill function generated in ${elapsed}ms (${code.length} chars) ` +
+    `tokens=${response.usage?.input_tokens}in/${response.usage?.output_tokens}out`,
+  );
+
+  return code;
+}
+
+const GAP_FILL_MARKER = '\n# [AUTO-GENERATED GAP FILL]\n';
+
+/**
+ * Append a gap-fill function to existing parser code.
+ * The appended code reads /tmp/output.json (written by the main parser),
+ * patches it via fill_gaps(), and overwrites the file.
+ */
+export function appendGapFillToParser(existingCode: string, gapFillFunctionCode: string): string {
+  const boilerplate = `
+import json as _json_gf
+
+with open('/tmp/output.json', 'r') as _f:
+    _data = _json_gf.load(_f)
+_data = fill_gaps(_data)
+with open('/tmp/output.json', 'w') as _f:
+    _json_gf.dump(_data, _f, default=str)
+`;
+
+  return existingCode + GAP_FILL_MARKER + gapFillFunctionCode + '\n' + boilerplate;
+}
+
+/**
+ * Check if a parser already has a gap-fill function appended.
+ */
+export function parserHasGapFill(code: string): boolean {
+  return code.includes(GAP_FILL_MARKER);
 }
 
 // ── Output parsing ───────────────────────────────────────────
@@ -982,88 +1080,6 @@ export async function extractWithCodegen(
     } catch { /* non-fatal */ }
   }
 
-  // Check for a deactivated parser to use as reference for "improve" mode
-  let referenceParserCode: string | undefined;
-  let gapDescription: string | undefined;
-  const deactivated = await getDeactivatedParser(skill.skillId, formatFingerprint);
-  if (deactivated) {
-    referenceParserCode = deactivated.parser_code;
-    let storedGaps = (deactivated.meta as Record<string, unknown>)?.quality_gaps as QualityGap[] | undefined;
-    if (storedGaps && storedGaps.length > 0) {
-      const hasEvidence = storedGaps.some(g => g.evidence && g.evidence.length > 0);
-
-      // If stored gaps lack evidence, run the old parser to get its extraction output
-      // and use that to build concrete evidence for the improve prompt.
-      if (!hasEvidence) {
-        console.log(`[codegen] Running deactivated parser to generate evidence for ${storedGaps.length} gap(s)`);
-        try {
-          const tEvidence = Date.now();
-          const evidenceResult = await ExtractionSandbox.execute(deactivated.parser_code, inputFiles);
-          const evidenceMs = Date.now() - tEvidence;
-
-          if (evidenceResult.exitCode === 0) {
-            const evidenceRaw = parseCodegenOutput(evidenceResult.stdout);
-            // Build collections from the old parser's output
-            const evidenceCollections: Record<string, Array<Record<string, { value: string | number | null; confidence: number }>>> = {};
-            if (evidenceRaw.records?.length) {
-              const primaryScope = storedGaps.find(g => g.scope !== 'doc')?.scope || 'records';
-              evidenceCollections[primaryScope] = evidenceRaw.records.map(rec => {
-                const norm: Record<string, { value: string | number | null; confidence: number }> = {};
-                for (const [k, v] of Object.entries(rec)) {
-                  if (v && typeof v === 'object' && 'value' in v) {
-                    norm[k] = v as { value: string | number | null; confidence: number };
-                  } else {
-                    norm[k] = { value: v as string | number | null, confidence: 0.9 };
-                  }
-                }
-                return norm;
-              });
-            }
-            if (evidenceRaw.secondary_tables) {
-              for (const [table, rows] of Object.entries(evidenceRaw.secondary_tables)) {
-                if (Array.isArray(rows)) {
-                  evidenceCollections[table] = rows.map(rec => {
-                    const norm: Record<string, { value: string | number | null; confidence: number }> = {};
-                    for (const [k, v] of Object.entries(rec)) {
-                      norm[k] = { value: v as string | number | null, confidence: 0.9 };
-                    }
-                    return norm;
-                  });
-                }
-              }
-            }
-
-            storedGaps = attachGapEvidence(storedGaps, sourceText, evidenceCollections);
-            const evidenceCount = storedGaps.filter(g => g.evidence && g.evidence.length > 0).length;
-            console.log(`[codegen] Evidence generated from old parser in ${evidenceMs}ms: ${evidenceCount}/${storedGaps.length} gaps with evidence`);
-
-            // Persist the enriched gaps back to the deactivated parser entry
-            if (evidenceCount > 0) {
-              try {
-                await updateParserQualityGaps(deactivated.id, storedGaps);
-              } catch { /* non-fatal */ }
-            }
-          } else {
-            console.warn(`[codegen] Deactivated parser failed (exit=${evidenceResult.exitCode}) — using gaps without evidence`);
-          }
-        } catch (err) {
-          console.warn(`[codegen] Evidence generation failed:`, err);
-        }
-      }
-
-      gapDescription = buildGapDescription(storedGaps);
-      const evidenceCount = storedGaps.filter(g => g.evidence && g.evidence.length > 0).length;
-      console.log(
-        `[codegen] Improve prompt: ${storedGaps.length} gap(s), ${evidenceCount} with evidence, ` +
-        `description=${gapDescription.length} chars`
-      );
-    }
-    console.log(
-      `[codegen] Found deactivated parser as reference: id=${deactivated.id} ` +
-      `gaps=${storedGaps?.length ?? 0} — using "improve parser" mode`
-    );
-  }
-
   const metaPrompt = buildMetaPrompt(skill, catalogFields, contextCardFields, fileExt, options?.scopedFields);
 
   const HEAD_PREVIEW = 20_000;
@@ -1086,11 +1102,7 @@ export async function extractWithCodegen(
     try {
       genResult = await generateParserCode(
         client, metaPrompt, docPreview, lastError, options?.langfuseParent, lastCode,
-        referenceParserCode, gapDescription,
       );
-      // Clear reference after first use so retries use the normal error-fix loop
-      referenceParserCode = undefined;
-      gapDescription = undefined;
     } catch (err) {
       console.error(`[codegen] Code generation failed:`, err);
       throw err;

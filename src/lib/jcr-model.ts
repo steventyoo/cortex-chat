@@ -107,6 +107,14 @@ function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
     if (budget > 0) {
       fixed.pct_budget_consumed = { value: Math.round((actual / budget) * 10000) / 100, confidence: 0.9 };
     }
+
+    // Derived: change_orders = revised_budget - original_budget
+    const revisedBudget = (fixed.revised_budget?.value as number) || 0;
+    const originalBudget = (fixed.original_budget?.value as number) || 0;
+    if (revisedBudget !== 0 || originalBudget !== 0) {
+      fixed.change_orders = { value: Math.round((revisedBudget - originalBudget) * 100) / 100, confidence: 0.9 };
+    }
+
     return fixed;
   });
 }
