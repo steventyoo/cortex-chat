@@ -179,11 +179,19 @@ export async function updateParserQualityGaps(parserId: string, qualityGaps: Qua
   if (error) console.error('[parser-cache] Quality gaps update failed:', error.message);
 }
 
+export interface GapEvidence {
+  record_identifier: string;
+  document_excerpt: string;
+  extracted_value: string | number | null;
+  expected_hint: string;
+}
+
 export interface QualityGap {
   scope: string;
   field: string;
   null_pct: number;
   type: 'missing_doc_field' | 'sparse_collection_field';
+  evidence?: GapEvidence[];
 }
 
 /**

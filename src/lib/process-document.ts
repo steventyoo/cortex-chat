@@ -185,7 +185,7 @@ async function processLargePdfVision(opts: {
   let overallConfidence: number;
   let flags: ValidationFlag[];
   let usedExtractionMethod = 'vision-chunked';
-  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string } = {};
+  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string } = {};
 
   if (skill.extractionMethod === 'codegen') {
     const codegenSpan = trace.span({
@@ -234,6 +234,7 @@ async function processLargePdfVision(opts: {
         generatedCode: codegenResult.metadata.generatedCode,
         formatFingerprint: codegenResult.metadata.formatFingerprint,
         usedCachedParserId: codegenResult.metadata.usedCachedParserId,
+        sourceText,
       };
 
       for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
@@ -670,7 +671,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   let flags: ValidationFlag[];
   let discoveredFields: Record<string, unknown> = {};
   let usedExtractionMethod = 'llm';
-  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string } = {};
+  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string } = {};
 
   try {
     console.log(`[process] Starting AI extraction: project=${projectId || 'none'} org=${orgId}`);
@@ -760,6 +761,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
             generatedCode: codegenResult.metadata.generatedCode,
             formatFingerprint: codegenResult.metadata.formatFingerprint,
             usedCachedParserId: codegenResult.metadata.usedCachedParserId,
+            sourceText,
           };
 
           for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
@@ -830,6 +832,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           generatedCode: codegenResult.metadata.generatedCode,
           formatFingerprint: codegenResult.metadata.formatFingerprint,
           usedCachedParserId: codegenResult.metadata.usedCachedParserId,
+          sourceText,
         };
 
         for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
