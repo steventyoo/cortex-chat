@@ -222,3 +222,33 @@ export async function toggleParserActive(parserId: string, isActive: boolean) {
     .eq('id', parserId);
   if (error) console.error('[parser-cache] Toggle failed:', error.message);
 }
+
+/**
+ * Replace a cached parser's code (e.g. after appending a gap-fill function).
+ * Recomputes parser_hash and resets failure_count.
+ */
+export async function updateParserCode(
+  parserId: string,
+  newCode: string,
+  opts?: { quality_score?: number; meta?: Record<string, unknown> },
+) {
+  const sb = getSupabase();
+  const newHash = hashCode(newCode);
+  const { error } = await sb
+    .from('parser_cache')
+    .update({
+      parser_code: newCode,
+      parser_hash: newHash,
+      failure_count: 0,
+      last_validated_at: new Date().toISOString(),
+      ...(opts?.quality_score != null ? { quality_score: opts.quality_score } : {}),
+      ...(opts?.meta ? { meta: opts.meta } : {}),
+    })
+    .eq('id', parserId);
+  if (error) {
+    console.error('[parser-cache] Code update failed:', error.message);
+    return false;
+  }
+  console.log(`[parser-cache] Parser code updated: id=${parserId} hash=${newHash.slice(0, 12)} len=${newCode.length}`);
+  return true;
+}

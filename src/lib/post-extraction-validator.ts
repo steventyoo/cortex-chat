@@ -23,9 +23,10 @@ import {
   getAnomalyFlags,
   type CheckResult,
 } from './consistency-evaluator';
-import { targetedFieldExtraction } from './codegen-extractor';
+import { targetedFieldExtraction, generateGapFillCode, appendGapFillToParser, parserHasGapFill } from './codegen-extractor';
+import { ExtractionSandbox, type ExtractionFile } from './sandbox';
 import { getSupabase } from './supabase';
-import { promoteParser, incrementValidated, updateParserQualityGaps, type QualityGap, type GapEvidence } from './stores/parser-cache.store';
+import { promoteParser, incrementValidated, updateParserQualityGaps, updateParserCode, type QualityGap, type GapEvidence } from './stores/parser-cache.store';
 import { getSkillFieldDefinitionsScoped, type FieldDefinition } from './skills';
 
 type FieldVal = { value: string | number | null; confidence: number };
@@ -374,6 +375,78 @@ export async function runPostExtractionValidation(
     try {
       await updateParserQualityGaps(input.usedCachedParserId, qualityGaps);
     } catch { /* non-fatal */ }
+  }
+
+  // ── Gap-fill: generate a targeted Python function and append to cached parser ──
+  // Only runs once per parser — subsequent runs use the combined code directly.
+  if (
+    qualityGaps.length > 0
+    && input.usedCachedParserId
+    && input.generatedCode
+    && input.sourceText
+    && !parserHasGapFill(input.generatedCode)
+  ) {
+    const collectionGaps = qualityGaps.filter(g => g.scope !== 'doc' && g.evidence && g.evidence.length > 0);
+    if (collectionGaps.length > 0) {
+      console.log(`[validator] Triggering gap-fill generation for ${collectionGaps.length} collection gap(s)`);
+      try {
+        const gapDesc = buildGapDescription(collectionGaps);
+        const gapFillCode = await generateGapFillCode(collectionGaps, gapDesc);
+        const combinedCode = appendGapFillToParser(input.generatedCode, gapFillCode);
+
+        // Verify the gap-fill by running ONLY the fill_gaps function in isolation.
+        // We write the current extraction output as /tmp/output.json and source text,
+        // then run the gap-fill code which reads, patches, and overwrites output.json.
+        const currentOutput = {
+          fields: Object.fromEntries(
+            Object.entries(fields).map(([k, v]) => [k, { value: v.value, confidence: v.confidence }]),
+          ),
+          records: collections[Object.keys(collections).find(k => k !== 'worker') || 'records'] ?? [],
+          secondary_tables: Object.fromEntries(
+            Object.entries(collections).filter(([k]) => k !== 'worker' && k !== Object.keys(collections)[0]).map(([k, v]) => [k, v]),
+          ),
+        };
+        const outputJsonStr = JSON.stringify(currentOutput);
+        const verifyScript = gapFillCode +
+          `\nimport json as _json_gf\nwith open('/tmp/output.json','r') as _f:\n    _data=_json_gf.load(_f)\n_data=fill_gaps(_data)\nwith open('/tmp/output.json','w') as _f:\n    _json_gf.dump(_data,_f,default=str)\n`;
+
+        const inputFiles: ExtractionFile[] = [
+          { path: '/tmp/source_text.txt', content: Buffer.from(input.sourceText, 'utf-8') },
+          { path: '/tmp/output.json', content: Buffer.from(outputJsonStr, 'utf-8') },
+        ];
+
+        console.log(`[validator] Verifying gap-fill function in sandbox (${gapFillCode.length} chars)`);
+        const tVerify = Date.now();
+        const verifyResult = await ExtractionSandbox.execute(verifyScript, inputFiles);
+        const verifyMs = Date.now() - tVerify;
+
+        if (verifyResult.exitCode === 0) {
+          let newOutput;
+          try {
+            newOutput = JSON.parse(verifyResult.stdout);
+          } catch { /* fall through */ }
+
+          if (newOutput) {
+            console.log(`[validator] Gap-fill verified in ${verifyMs}ms — updating cached parser`);
+            const updated = await updateParserCode(input.usedCachedParserId, combinedCode, {
+              meta: { quality_gaps: qualityGaps, gap_fill_applied: true },
+            });
+            if (updated) {
+              console.log(`[validator] Gap-fill appended and cached: parser=${input.usedCachedParserId}`);
+            }
+          } else {
+            console.warn(`[validator] Gap-fill output invalid JSON — not applied`);
+          }
+        } else {
+          console.warn(
+            `[validator] Gap-fill verification failed (exit=${verifyResult.exitCode}, ${verifyMs}ms): ` +
+            `${verifyResult.stderr.slice(0, 300)}`,
+          );
+        }
+      } catch (err) {
+        console.error(`[validator] Gap-fill generation failed (non-fatal):`, err);
+      }
+    }
   }
 
   // Run check → fix → recheck loop
