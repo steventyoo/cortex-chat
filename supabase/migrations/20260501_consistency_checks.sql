@@ -95,10 +95,10 @@ INSERT INTO consistency_checks (skill_id, check_name, display_name, description,
  NULL),
 
 ('job_cost_report', 'overunder_identity',
- 'Per-Code Over/Under = Budget - JTD',
- 'Each cost code over_under_budget must equal revised_budget - jtd_cost',
+ 'Per-Code Over/Under = JTD - Budget',
+ 'Each cost code over_under_budget must equal jtd_cost - revised_budget (positive = over budget)',
  1, 'extraction_error', 'cost_code',
- '(() => { const bud = ctx.current.revised_budget || ctx.current.original_budget || 0; const jtd = ctx.current.jtd_cost || 0; const ou = ctx.current.over_under_budget; if (ou == null) return { pass: true, message: "No over/under value" }; const expected = bud - jtd; const delta = Math.abs(ou - expected); return { pass: delta <= 0.01, expected, actual: ou, delta, message: delta <= 0.01 ? "OK" : "code " + ctx.current.cost_code + ": ou=" + ou.toFixed(2) + " vs (bud-jtd)=" + expected.toFixed(2) }; })()',
+ '(() => { const bud = ctx.current.revised_budget || ctx.current.original_budget || 0; const jtd = ctx.current.jtd_cost || 0; const ou = ctx.current.over_under_budget; if (ou == null) return { pass: true, message: "No over/under value" }; const expected = jtd - bud; const delta = Math.abs(ou - expected); return { pass: delta <= 0.01, expected, actual: ou, delta, message: delta <= 0.01 ? "OK" : "code " + ctx.current.cost_code + ": ou=" + ou.toFixed(2) + " vs (jtd-bud)=" + expected.toFixed(2) }; })()',
  0.01, '{over_under_budget}',
  NULL),
 
