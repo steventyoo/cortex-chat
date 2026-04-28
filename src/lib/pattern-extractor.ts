@@ -97,29 +97,28 @@ RULES:
 - CRITICAL: Do NOT truncate or limit output. Extract ALL rows across ALL pages.`;
 
 export async function generatePatternScript(
-  sampleText: string,
+  sourceText: string,
   langfuseParent?: LangfuseParent,
 ): Promise<{ script: string; inputTokens: number; outputTokens: number }> {
   const client = new Anthropic();
 
-  const trimmed = sampleText.slice(0, 5000);
-  const userMessage = `Here is a sample from the document (~5K chars from the beginning). Identify ALL recurring structured patterns and write a Python regex script to extract them from the full document.
+  const userMessage = `Here is the FULL document text. Identify ALL recurring structured patterns and write a Python regex script to extract them from this document.
 
-<document_sample>
-${trimmed}
-</document_sample>
+<document_text>
+${sourceText}
+</document_text>
 
 Write the complete Python script now. Output ONLY Python code, no explanation.`;
 
   const generation = langfuseParent?.generation({
     name: 'pattern-script-generate',
     model: 'claude-opus-4-6',
-    input: { sampleLength: trimmed.length },
+    input: { sourceTextLength: sourceText.length },
     modelParameters: { maxTokens: 8192 },
   });
 
   const t0 = Date.now();
-  console.log(`[pattern] Generating pattern script from ${trimmed.length} char sample`);
+  console.log(`[pattern] Generating pattern script from ${sourceText.length} char document`);
 
   const response = await client.messages.create({
     model: 'claude-opus-4-6',
@@ -295,7 +294,6 @@ IMPORTANT:
  * or full of nulls. Returns failures (for retry) and test cases (for caching).
  */
 export function autoValidate(
-  _sampleText: string,
   rawOutput: Record<string, unknown>,
   _patternScript: string,
 ): { passed: boolean; failures: string[]; testCases: TestCase[] } {
@@ -437,8 +435,6 @@ export async function runPatternExtraction(
   inputFiles: ExtractionFile[],
   options?: { langfuseParent?: LangfuseParent },
 ): Promise<PatternExtractionResult> {
-  const sampleText = sourceText.slice(0, 5000);
-
   let lastError: string | undefined;
   let script: string | undefined;
   let totalInputTokens = 0;
@@ -451,7 +447,7 @@ export async function runPatternExtraction(
 
     if (attempt === 0 || lastError) {
       const gen = await generatePatternScript(
-        sampleText + retryContext,
+        sourceText + retryContext,
         options?.langfuseParent,
       );
       script = gen.script;
@@ -506,7 +502,7 @@ export async function runPatternExtraction(
 
     const rawOutput = rawJson as Record<string, unknown>;
 
-    const validation = autoValidate(sampleText, rawOutput, script);
+    const validation = autoValidate(rawOutput, script);
     if (!validation.passed) {
       console.warn(`[pattern] Auto-validation failed: ${validation.failures.join('; ')}`);
       if (attempt < PATTERN_MAX_RETRIES) {
