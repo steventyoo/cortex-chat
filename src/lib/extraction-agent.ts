@@ -392,14 +392,19 @@ Your script must write /tmp/output.json with this structure:
 - Numeric values should be numbers, not strings. Remove commas and handle sign conventions.
 
 ## Your Workflow
-1. Use search_text to find key patterns (headers, totals, section markers).
+1. Use search_text to find key patterns (headers, totals, section markers). Limit exploration to ~5 rounds.
 2. Use read_page and read_lines to inspect specific sections you found.
-3. Write a Python extraction script using regex on the text file. Call run_code to test it.
+3. Write a COMPLETE Python extraction script that writes JSON to /tmp/output.json. Do this EARLY — even if incomplete.
 4. Call validate_output to check field coverage and spot nulls.
 5. Call check_consistency to verify the extracted values satisfy mathematical relationships.
 6. If there are issues, fix your script and re-run. Iterate until quality is acceptable.
 
-## Important
+## CRITICAL RULES
+- You have LIMITED TIME. Your #1 priority is to produce /tmp/output.json with valid JSON.
+- DO NOT spend all your time debugging with print(). Write the full output.json FIRST, then iterate.
+- Every run_code call MUST write /tmp/output.json (even if partial). Never just print debug output.
+- Your script must: read /tmp/source_text.txt, parse it, write a JSON dict to /tmp/output.json AND print it to stdout.
+- After EVERY run_code that succeeds, call validate_output to check progress.
 - Build your script incrementally. Start simple, then add complexity.
 - The script must be deterministic — no randomness or external API calls.
 - Pay attention to number formats: commas in thousands (1,234.56), negative signs, parenthesized negatives.
@@ -738,6 +743,8 @@ export async function runExtractionAgent(
 
   // ── Agentic loop ─────────────────────────────────────────
 
+  let timeNudgeSent = false;
+
   try {
     for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
       const elapsed = Date.now() - startedAt;
@@ -745,6 +752,18 @@ export async function runExtractionAgent(
         logActivity(round, 'status', `Approaching timeout at round ${round}, elapsed=${elapsed}ms — stopping loop`);
         console.log(`[extraction-agent] Approaching timeout at round ${round}, elapsed=${elapsed}ms`);
         break;
+      }
+
+      // Time-aware nudge: when past 60% of budget and no output yet, push the agent to produce results
+      if (!timeNudgeSent && elapsed > maxDurationMs * 0.6 && !lastOutputRaw) {
+        timeNudgeSent = true;
+        const remaining = Math.round((maxDurationMs - elapsed) / 1000);
+        const nudge = `URGENT: You have ~${remaining} seconds remaining. You MUST write /tmp/output.json NOW with your best extraction so far. ` +
+          `Write a complete script that outputs valid JSON with fields, records, and secondary_tables. ` +
+          `You can iterate after, but produce output FIRST. Every subsequent run_code MUST write /tmp/output.json.`;
+        state.messages.push({ role: 'user', content: nudge });
+        logActivity(round, 'status', `Time nudge sent: ${remaining}s remaining, no output yet`);
+        console.log(`[extraction-agent] Time nudge sent at round ${round}: ${remaining}s remaining`);
       }
 
       const response = await client.messages.create({
@@ -806,9 +825,9 @@ export async function runExtractionAgent(
 
       state.messages.push({ role: 'user', content: toolResults });
 
-      // Checkpoint to Supabase after every round so state survives crashes
-      const hadConsistencyCheck = toolBlocks.some(b => b.name === 'check_consistency');
-      if (hadConsistencyCheck) {
+      // Checkpoint to Supabase after every round with a run_code or check_consistency
+      const hadSignificantTool = toolBlocks.some(b => b.name === 'check_consistency' || b.name === 'run_code');
+      if (hadSignificantTool) {
         await checkpoint(round);
       }
     }
