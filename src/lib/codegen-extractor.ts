@@ -1123,7 +1123,7 @@ export async function extractWithCodegen(
   contextCardFields: string[],
   classifierConfidence: number,
   fileExt: string,
-  options?: { langfuseParent?: LangfuseParent; scopedFields?: Map<string, FieldDefinition[]>; pages?: string[] },
+  options?: { langfuseParent?: LangfuseParent; scopedFields?: Map<string, FieldDefinition[]>; pages?: string[]; pipelineLogId?: string },
 ): Promise<CodegenExtractionResult> {
   const t0 = Date.now();
   const client = new Anthropic();
@@ -1276,6 +1276,9 @@ export async function extractWithCodegen(
           pages,
           inputFiles,
           langfuseParent: agentSpan ?? options?.langfuseParent,
+          startedAt: t0,
+          maxDurationMs: 420_000,
+          pipelineLogId: options?.pipelineLogId,
         });
 
         const fieldCount = Object.keys(agentResult.fields).length;
