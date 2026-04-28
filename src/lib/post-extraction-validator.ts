@@ -46,6 +46,12 @@ export interface ValidationInput {
   formatFingerprint?: string;
   usedCachedParserId?: string;
   patternMeta?: PatternParserMeta;
+  agentMeta?: {
+    parser_type: 'agent';
+    confirmed_absent: string[];
+    agent_tool_calls: number;
+    composite_score: number;
+  };
 }
 
 export interface ValidationOutput {
@@ -616,7 +622,9 @@ export async function runPostExtractionValidation(
     try {
       const checksPassed = checkResults.filter(r => r.status === 'pass').length;
       const promotionMeta: Record<string, unknown> = qualityGaps.length > 0 ? { quality_gaps: qualityGaps } : {};
-      if (input.patternMeta) {
+      if (input.agentMeta) {
+        Object.assign(promotionMeta, input.agentMeta);
+      } else if (input.patternMeta) {
         Object.assign(promotionMeta, input.patternMeta);
       }
       await promoteParser({
@@ -630,7 +638,8 @@ export async function runPostExtractionValidation(
         checks_total: checkResults.length,
         meta: promotionMeta,
       });
-      console.log(`[validator] Parser promoted to cache: skill=${skillId} format=${input.formatFingerprint} type=${input.patternMeta ? 'pattern' : 'legacy'}`);
+      const parserType = input.agentMeta ? 'agent' : input.patternMeta ? 'pattern' : 'legacy';
+      console.log(`[validator] Parser promoted to cache: skill=${skillId} format=${input.formatFingerprint} type=${parserType}`);
     } catch (err) {
       console.error(`[validator] Parser promotion failed (non-fatal):`, err);
     }
