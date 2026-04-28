@@ -468,7 +468,7 @@ export async function runExtractionAgent(
     pages,
     inputFiles,
     startedAt = Date.now(),
-    maxDurationMs = 540_000,
+    maxDurationMs = 420_000,
   } = options;
 
   const EXTRACTION_PACKAGES = [
@@ -720,7 +720,8 @@ export async function runExtractionAgent(
   try {
     for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
       const elapsed = Date.now() - startedAt;
-      if (elapsed > maxDurationMs - 90_000) {
+      if (elapsed > maxDurationMs - 60_000) {
+        logActivity(round, 'status', `Approaching timeout at round ${round}, elapsed=${elapsed}ms — stopping loop`);
         console.log(`[extraction-agent] Approaching timeout at round ${round}, elapsed=${elapsed}ms`);
         break;
       }

@@ -1276,6 +1276,8 @@ export async function extractWithCodegen(
           pages,
           inputFiles,
           langfuseParent: agentSpan ?? options?.langfuseParent,
+          startedAt: t0,
+          maxDurationMs: 420_000,
         });
 
         const fieldCount = Object.keys(agentResult.fields).length;
