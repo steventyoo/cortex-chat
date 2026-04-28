@@ -20,6 +20,7 @@ import {
 } from './consistency-evaluator';
 import type { EvalContext } from './derived-evaluator';
 import type { LangfuseParent } from './langfuse';
+import { getSupabase } from './supabase';
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -457,6 +458,7 @@ export interface RunExtractionAgentOptions {
   startedAt?: number;
   maxDurationMs?: number;
   resumeState?: AgentState;
+  pipelineLogId?: string;
 }
 
 export async function runExtractionAgent(
@@ -469,7 +471,10 @@ export async function runExtractionAgent(
     inputFiles,
     startedAt = Date.now(),
     maxDurationMs = 420_000,
+    pipelineLogId,
   } = options;
+
+  const sb_db = pipelineLogId ? getSupabase() : null;
 
   const EXTRACTION_PACKAGES = [
     'openpyxl', 'pdfplumber', 'pandas', 'numpy', 'xlrd',
@@ -548,6 +553,22 @@ export async function runExtractionAgent(
     state.activityLog.push(entry);
     const prefix = toolName ? `[${toolName}] ` : '';
     console.log(`[extraction-agent] R${round} ${type}: ${prefix}${content.slice(0, 300)}`);
+  }
+
+  async function checkpoint(round: number) {
+    if (!sb_db || !pipelineLogId) return;
+    try {
+      await sb_db.from('pipeline_log').update({
+        agent_activity_log: state.activityLog,
+        agent_best_script: state.bestSnapshot?.script ?? lastScript ?? null,
+        agent_best_output: lastOutputRaw ?? null,
+        agent_composite_score: state.bestSnapshot?.compositeScore ?? null,
+        agent_rounds: round + 1,
+        agent_tool_calls: state.totalToolCalls,
+      }).eq('id', pipelineLogId);
+    } catch (err) {
+      console.warn(`[extraction-agent] Checkpoint write failed (non-fatal):`, err);
+    }
   }
 
   async function handleToolCall(
@@ -784,10 +805,19 @@ export async function runExtractionAgent(
       }
 
       state.messages.push({ role: 'user', content: toolResults });
+
+      // Checkpoint to Supabase after every round so state survives crashes
+      const hadConsistencyCheck = toolBlocks.some(b => b.name === 'check_consistency');
+      if (hadConsistencyCheck) {
+        await checkpoint(round);
+      }
     }
   } finally {
     if (sb) await sb.stop({ blocking: true }).catch(() => {});
   }
+
+  // Final checkpoint with complete state
+  await checkpoint(state.iterationHistory.length - 1);
 
   // ── Build result from last valid output ────────────────────
 

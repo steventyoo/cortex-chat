@@ -15,6 +15,7 @@ const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false });
 const ReconciliationPanel = dynamic(() => import('./ReconciliationPanel'), { ssr: false });
 const ProjectProfilePanel = dynamic(() => import('./ProjectProfilePanel'), { ssr: false });
 const JcrAnalysisPanel = dynamic(() => import('./JcrAnalysisPanel'), { ssr: false });
+const AgentActivityLog = dynamic(() => import('./AgentActivityLog'), { ssr: false });
 
 type ViewMode = 'list' | 'review';
 type ListView = 'recent' | 'categories' | 'drive' | 'coverage' | 'reconciliation' | 'profile' | 'jcr_analysis';
@@ -1643,6 +1644,11 @@ export default function PipelineReview({ projectId: externalProjectId }: { proje
                   </div>
                 )
               ))}
+
+              {/* Agent activity log */}
+              <div className="mt-4">
+                <AgentActivityLog pipelineLogId={selectedItem.id} />
+              </div>
 
               {/* Review actions */}
               <div className="border-t border-[#e8e8e8] pt-4 mt-4">

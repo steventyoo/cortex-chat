@@ -227,7 +227,7 @@ async function processLargePdfVision(opts: {
       const codegenResult: CodegenExtractionResult = await extractWithCodegen(
         rawBuffer, sourceText, skill, catalogFields, contextCardFields,
         classifierConfidence, 'pdf',
-        { langfuseParent: codegenSpan, scopedFields, pages: sourcePages },
+        { langfuseParent: codegenSpan, scopedFields, pages: sourcePages, pipelineLogId: recordId },
       );
       extraction = codegenResult.extraction;
       discoveredFields = codegenResult.discoveredFields;
@@ -769,7 +769,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           const codegenResult: CodegenExtractionResult = await extractWithCodegen(
             docBuffer, sourceText, skill, catalogFields, contextCardFields,
             classification.confidence, fileExt,
-            { langfuseParent: codegenSpan, scopedFields, pages: sourcePages },
+            { langfuseParent: codegenSpan, scopedFields, pages: sourcePages, pipelineLogId: recordId },
           );
           extraction = codegenResult.extraction;
           discoveredFields = codegenResult.discoveredFields;
@@ -842,7 +842,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         const codegenResult: CodegenExtractionResult = await extractWithCodegen(
           docBuffer, sourceText, skill, catalogFields, contextCardFields,
           classification.confidence, fileExt,
-          { langfuseParent: codegenSpan2, scopedFields: scopedFields2, pages: sourcePages },
+          { langfuseParent: codegenSpan2, scopedFields: scopedFields2, pages: sourcePages, pipelineLogId: recordId },
         );
         extraction = codegenResult.extraction;
         discoveredFields = codegenResult.discoveredFields;
