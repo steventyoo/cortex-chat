@@ -145,7 +145,7 @@ async function checkFieldCoverage(
           display_name: `Sparse field in ${scope}: ${def.name}`,
           tier: 2,
           classification: 'extraction_error',
-          check_role: 'structural',
+          check_role: 'anomaly',
           scope,
           status: 'fail',
           expected: `<${Math.round(SPARSE_THRESHOLD * 100)}% ${label}`,

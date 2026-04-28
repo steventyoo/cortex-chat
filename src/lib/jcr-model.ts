@@ -91,14 +91,14 @@ function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
       const actual = (ouRaw.value as number) || 0;
       const budget = (fixed.revised_budget?.value as number) || (fixed.original_budget?.value as number) || 0;
       fixed.over_under_budget = {
-        value: Math.round((actual - budget) * 100) / 100,
+        value: Math.round((budget - actual) * 100) / 100,
         confidence: ouRaw.confidence,
       };
     } else if (!needsSwap && jtdRaw) {
       const actual = (jtdRaw.value as number) || 0;
       const budget = (fixed.revised_budget?.value as number) || (fixed.original_budget?.value as number) || 0;
       fixed.over_under_budget = {
-        value: Math.round((actual - budget) * 100) / 100,
+        value: Math.round((budget - actual) * 100) / 100,
         confidence: jtdRaw.confidence,
       };
     }
@@ -114,6 +114,12 @@ function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
     const originalBudget = (fixed.original_budget?.value as number) || 0;
     if (revisedBudget !== 0 || originalBudget !== 0) {
       fixed.change_orders = { value: Math.round((revisedBudget - originalBudget) * 100) / 100, confidence: 0.9 };
+    }
+
+    // Revenue codes (999) use Sage credit convention (negative). Normalize original_budget to positive.
+    const codeNum = parseInt(String(fixed.cost_code?.value ?? '0'), 10);
+    if (codeNum === 999 && fixed.original_budget) {
+      fixed.original_budget = { value: Math.abs(fixed.original_budget.value as number), confidence: fixed.original_budget.confidence };
     }
 
     return fixed;
@@ -142,7 +148,7 @@ function fixDocLevelFields(fields: FieldsMap, costCodeRecords: RecordRow[], code
   budgetSum = Math.round(budgetSum * 100) / 100;
   jtdSum = Math.round(jtdSum * 100) / 100;
   revenueFromCodes = Math.round(revenueFromCodes * 100) / 100;
-  const overUnder = Math.round((jtdSum - budgetSum) * 100) / 100;
+  const overUnder = Math.round((budgetSum - jtdSum) * 100) / 100;
 
   fixed.total_revised_budget = { value: budgetSum, confidence: 0.95 };
   fixed.total_jtd_cost = { value: jtdSum, confidence: 0.95 };
