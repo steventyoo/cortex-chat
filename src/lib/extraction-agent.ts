@@ -42,6 +42,7 @@ export interface AgentExtractionResult {
   compositeScore: number;
   inputTokens: number;
   outputTokens: number;
+  activityLog: ActivityEntry[];
 }
 
 interface IterationSnapshot {
@@ -61,6 +62,15 @@ interface AgentState {
   totalInputTokens: number;
   totalOutputTokens: number;
   totalToolCalls: number;
+  activityLog: ActivityEntry[];
+}
+
+export interface ActivityEntry {
+  round: number;
+  timestamp: string;
+  type: 'reasoning' | 'tool_call' | 'tool_result' | 'status';
+  content: string;
+  toolName?: string;
 }
 
 // ── Tool Definitions (Anthropic format) ──────────────────────
@@ -524,7 +534,21 @@ export async function runExtractionAgent(
     totalInputTokens: 0,
     totalOutputTokens: 0,
     totalToolCalls: 0,
+    activityLog: [],
   };
+
+  function logActivity(round: number, type: ActivityEntry['type'], content: string, toolName?: string) {
+    const entry: ActivityEntry = {
+      round,
+      timestamp: new Date().toISOString(),
+      type,
+      content: content.slice(0, 2000),
+      ...(toolName ? { toolName } : {}),
+    };
+    state.activityLog.push(entry);
+    const prefix = toolName ? `[${toolName}] ` : '';
+    console.log(`[extraction-agent] R${round} ${type}: ${prefix}${content.slice(0, 300)}`);
+  }
 
   async function handleToolCall(
     name: string,
@@ -570,22 +594,42 @@ export async function runExtractionAgent(
           const stdout = await result.stdout();
           output = `Exit code: ${result.exitCode}\nSTDERR:\n${stderr.slice(0, 5000)}`;
           if (stdout) output += `\nSTDOUT:\n${stdout.slice(0, 2000)}`;
+          console.log(`[extraction-agent] run_code FAILED: exit=${result.exitCode} stderr=${stderr.slice(0, 200)}`);
         } else {
           output = `Exit code: 0`;
+          let captured = false;
           // Try to read /tmp/output.json
           try {
             const buf = await sandbox.readFileToBuffer({ path: '/tmp/output.json' });
             if (buf && buf.length > 0) {
               const jsonStr = buf.toString('utf-8');
               lastOutputRaw = JSON.parse(jsonStr);
+              captured = true;
               output += `\nOutput written to /tmp/output.json (${jsonStr.length} bytes)`;
+              console.log(`[extraction-agent] run_code OK: read /tmp/output.json (${jsonStr.length} bytes)`);
             }
-          } catch {
-            // Fall back to stdout
-            const stdout = await result.stdout();
-            if (stdout) {
-              output += `\nSTDOUT:\n${stdout.slice(0, 5000)}`;
-              try { lastOutputRaw = JSON.parse(stdout); } catch { /* not JSON */ }
+          } catch (fileErr) {
+            console.log(`[extraction-agent] run_code: /tmp/output.json read failed: ${fileErr instanceof Error ? fileErr.message : String(fileErr)}`);
+          }
+          // Fall back to stdout if no output.json
+          if (!captured) {
+            try {
+              const stdout = await result.stdout();
+              if (stdout) {
+                output += `\nSTDOUT:\n${stdout.slice(0, 5000)}`;
+                try {
+                  lastOutputRaw = JSON.parse(stdout);
+                  captured = true;
+                  console.log(`[extraction-agent] run_code OK: parsed stdout as JSON (${stdout.length} chars)`);
+                } catch {
+                  console.log(`[extraction-agent] run_code OK: stdout not JSON (${stdout.length} chars)`);
+                }
+              } else {
+                output += `\n(no stdout)`;
+                console.log(`[extraction-agent] run_code OK: no stdout and no output.json`);
+              }
+            } catch (stdoutErr) {
+              console.log(`[extraction-agent] run_code: stdout read failed: ${stdoutErr instanceof Error ? stdoutErr.message : String(stdoutErr)}`);
             }
           }
         }
@@ -694,7 +738,15 @@ export async function runExtractionAgent(
 
       state.messages.push({ role: 'assistant', content: response.content });
 
+      // Log reasoning text from this round
+      for (const block of response.content) {
+        if (block.type === 'text' && block.text.trim()) {
+          logActivity(round, 'reasoning', block.text);
+        }
+      }
+
       if (response.stop_reason === 'end_turn') {
+        logActivity(round, 'status', `Agent finished (stop_reason=end_turn, tokens: ${response.usage.input_tokens}in/${response.usage.output_tokens}out)`);
         console.log(`[extraction-agent] Agent finished at round ${round}, stop_reason=end_turn`);
         break;
       }
@@ -704,21 +756,28 @@ export async function runExtractionAgent(
       );
 
       if (toolBlocks.length === 0) {
+        logActivity(round, 'status', 'No tool calls in response, stopping');
         console.log(`[extraction-agent] No tool calls at round ${round}, stopping`);
         break;
       }
 
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
       for (const block of toolBlocks) {
+        const inputSummary = block.name === 'run_code'
+          ? `(${(String((block.input as Record<string, unknown>).code ?? '')).length} chars of Python)`
+          : JSON.stringify(block.input).slice(0, 200);
+        logActivity(round, 'tool_call', inputSummary, block.name);
         console.log(`[extraction-agent] Tool call: ${block.name}`);
         try {
           const result = await handleToolCall(block.name, block.input as Record<string, unknown>);
           const truncated = result.length > RESULT_TRUNCATE
             ? result.slice(0, RESULT_TRUNCATE) + '\n...[truncated]'
             : result;
+          logActivity(round, 'tool_result', result.slice(0, 1000), block.name);
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: truncated });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          logActivity(round, 'tool_result', `ERROR: ${msg}`, block.name);
           toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: `Error: ${msg}`, is_error: true });
         }
       }
@@ -731,11 +790,19 @@ export async function runExtractionAgent(
 
   // ── Build result from last valid output ────────────────────
 
+  console.log(`[extraction-agent] Final state: rounds=${state.activityLog.filter(e => e.type === 'reasoning').length} toolCalls=${state.totalToolCalls} lastOutputRaw=${lastOutputRaw ? 'present' : 'null'}`);
+
   const parsed = AgentOutputSchema.safeParse(lastOutputRaw);
+  if (!parsed.success) {
+    console.log(`[extraction-agent] Output parse failed: ${parsed.error.message.slice(0, 300)}`);
+    console.log(`[extraction-agent] lastOutputRaw type=${typeof lastOutputRaw}, keys=${lastOutputRaw && typeof lastOutputRaw === 'object' ? Object.keys(lastOutputRaw as Record<string, unknown>).join(',') : 'n/a'}`);
+  }
+
   const dataFields = (parsed.success ? parsed.data.fields : {}) as Record<string, unknown>;
   const dataRecords = (parsed.success ? parsed.data.records : []) as Array<Record<string, unknown>>;
   const dataSecondary = (parsed.success ? parsed.data.secondary_tables : {}) as Record<string, Array<Record<string, unknown>>>;
 
+  console.log(`[extraction-agent] Result: ${Object.keys(dataFields).length} fields, ${dataRecords.length} records, ${Object.keys(dataSecondary).length} secondary tables`);
   const fields: Record<string, { value: unknown; confidence: number }> = {};
   for (const [k, v] of Object.entries(dataFields)) {
     fields[k] = { value: v, confidence: 1.0 };
@@ -755,5 +822,6 @@ export async function runExtractionAgent(
     compositeScore: state.bestSnapshot?.compositeScore ?? 0,
     inputTokens: state.totalInputTokens,
     outputTokens: state.totalOutputTokens,
+    activityLog: state.activityLog,
   };
 }
