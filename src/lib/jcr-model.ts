@@ -142,7 +142,7 @@ function fixDocLevelFields(fields: FieldsMap, costCodeRecords: RecordRow[], code
   budgetSum = Math.round(budgetSum * 100) / 100;
   jtdSum = Math.round(jtdSum * 100) / 100;
   revenueFromCodes = Math.round(revenueFromCodes * 100) / 100;
-  const overUnder = Math.round((budgetSum - jtdSum) * 100) / 100;
+  const overUnder = Math.round((jtdSum - budgetSum) * 100) / 100;
 
   fixed.total_revised_budget = { value: budgetSum, confidence: 0.95 };
   fixed.total_jtd_cost = { value: jtdSum, confidence: 0.95 };
