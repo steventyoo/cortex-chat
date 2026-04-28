@@ -23,6 +23,11 @@ import {
   type PatternParserMeta,
   type SchemaFieldInfo,
 } from './pattern-extractor';
+import {
+  runExtractionAgent,
+  type SchemaFieldDef,
+  type AgentExtractionResult,
+} from './extraction-agent';
 
 const MAX_RETRIES = 2;
 
@@ -42,6 +47,12 @@ export interface CodegenExtractionResult {
     codegenOutputTokens?: number;
     sandboxElapsedMs?: number;
     patternMeta?: PatternParserMeta;
+    agentMeta?: {
+      parser_type: 'agent';
+      confirmed_absent: string[];
+      agent_tool_calls: number;
+      composite_score: number;
+    };
   };
 }
 
@@ -1112,7 +1123,7 @@ export async function extractWithCodegen(
   contextCardFields: string[],
   classifierConfidence: number,
   fileExt: string,
-  options?: { langfuseParent?: LangfuseParent; scopedFields?: Map<string, FieldDefinition[]> },
+  options?: { langfuseParent?: LangfuseParent; scopedFields?: Map<string, FieldDefinition[]>; pages?: string[] },
 ): Promise<CodegenExtractionResult> {
   const t0 = Date.now();
   const client = new Anthropic();
@@ -1139,15 +1150,37 @@ export async function extractWithCodegen(
   if (cached) {
     console.log(`[codegen] Trying cached parser: id=${cached.id} validated_count=${cached.validated_count}`);
     const isPatternParser = cached.meta && (cached.meta as Record<string, unknown>).parser_type === 'pattern';
+    const isAgentParser = cached.meta && (cached.meta as Record<string, unknown>).parser_type === 'agent';
     const tCache = Date.now();
     try {
       const cacheResult = await ExtractionSandbox.execute(cached.parser_code, inputFiles);
       const cacheExecTime = Date.now() - tCache;
-      console.log(`[codegen] Cached parser executed in ${cacheExecTime}ms: exitCode=${cacheResult.exitCode} type=${isPatternParser ? 'pattern' : 'legacy'}`);
+      console.log(`[codegen] Cached parser executed in ${cacheExecTime}ms: exitCode=${cacheResult.exitCode} type=${isAgentParser ? 'agent' : isPatternParser ? 'pattern' : 'legacy'}`);
 
       if (cacheResult.exitCode === 0) {
         try {
-          if (isPatternParser) {
+          if (isAgentParser) {
+            // Agent parser: output is already in schema format (fields/records/secondary_tables)
+            const parsed = JSON.parse(cacheResult.stdout) as Record<string, unknown>;
+            const fields = (parsed.fields ?? {}) as Record<string, { value: unknown; confidence: number }>;
+            const records = (parsed.records ?? []) as Array<Record<string, unknown>>;
+            const secondaryTables = (parsed.secondary_tables ?? {}) as Record<string, Array<Record<string, unknown>>>;
+
+            const fieldCount = Object.keys(fields).length;
+            const recordCount = records.length;
+            if (fieldCount > 0 || recordCount > 0) {
+              console.log(`[codegen] Cached agent parser succeeded: ${fieldCount} fields, ${recordCount} records`);
+              const normalized = normalizePatternResult(fields, records, secondaryTables, skill, classifierConfidence);
+              normalized.metadata.retries = 0;
+              normalized.metadata.generatedCode = cached.parser_code;
+              normalized.metadata.formatFingerprint = formatFingerprint;
+              normalized.metadata.usedCachedParserId = cached.id;
+              normalized.metadata.parserMethod = 'cached-agent';
+              normalized.metadata.sandboxElapsedMs = cacheExecTime;
+              return normalized;
+            }
+            console.warn(`[codegen] Cached agent parser returned empty output — falling through`);
+          } else if (isPatternParser) {
             // Pattern parser: validate stored meta and apply mapping to transform raw output
             const metaParseResult = PatternParserMetaSchema.safeParse(cached.meta);
             if (!metaParseResult.success) {
@@ -1214,69 +1247,78 @@ export async function extractWithCodegen(
     } catch { /* non-fatal */ }
   }
 
-  // ── Try pattern-first extraction (new two-step flow) ──
-  // On cache miss (or cache failure), try the lightweight pattern+mapping approach
-  // before falling back to the heavyweight legacy full-parser generation.
+  // ── Try agentic extraction ──
+  // On cache miss (or cache failure), run the extraction agent which gives Opus
+  // tools to explore the document, write code, and iterate until quality converges.
   if (fileExt === 'pdf' && sourceText.length > 500) {
-    try {
-      const schemaFields = buildSchemaFieldInfo(catalogFields, options?.scopedFields);
-      console.log(`[codegen] Attempting pattern-first extraction: ${schemaFields.length} schema fields`);
+    const pages = options?.pages;
+    if (pages && pages.length > 0) {
+      try {
+        const schemaFields: SchemaFieldDef[] = buildSchemaFieldInfo(catalogFields, options?.scopedFields)
+          .map(f => ({
+            name: f.schemaName,
+            scope: f.scope,
+            type: f.type,
+            description: f.description,
+            extractionHint: f.extractionHint ?? null,
+            required: f.required,
+          }));
+        console.log(`[codegen] Starting extraction agent: ${schemaFields.length} schema fields, ${pages.length} pages`);
 
-      const patternSpan = options?.langfuseParent?.span({
-        name: 'pattern-first-extraction',
-        input: { skillId: skill.skillId, schemaFieldCount: schemaFields.length, sourceTextLength: sourceText.length },
-      });
-
-      const patternResult = await runPatternExtraction(
-        sourceText,
-        schemaFields,
-        inputFiles,
-        { langfuseParent: patternSpan ?? options?.langfuseParent },
-      );
-
-      const { fields, records, secondary_tables } = applyMapping(
-        patternResult.rawOutput,
-        patternResult.mappingConfig,
-      );
-
-      const fieldCount = Object.keys(fields).length;
-      const recordCount = records.length;
-      const secondaryCount = Object.values(secondary_tables).reduce((s, r) => s + r.length, 0);
-
-      if (fieldCount > 0 || recordCount > 0) {
-        console.log(
-          `[codegen] Pattern extraction succeeded: ${fieldCount} fields, ${recordCount} records, ` +
-          `${secondaryCount} secondary rows, ${patternResult.confirmedAbsent.length} confirmed absent`,
-        );
-
-        const normalized = normalizePatternResult(
-          fields, records, secondary_tables, skill, classifierConfidence,
-        );
-        normalized.metadata.retries = 0;
-        normalized.metadata.generatedCode = patternResult.patternScript;
-        normalized.metadata.formatFingerprint = formatFingerprint;
-        normalized.metadata.formatLabel = formatLabel;
-        normalized.metadata.parserMethod = 'pattern';
-        normalized.metadata.codegenInputTokens = patternResult.tokens.input;
-        normalized.metadata.codegenOutputTokens = patternResult.tokens.output;
-        normalized.metadata.patternMeta = {
-          parser_type: 'pattern',
-          mapping_config: patternResult.mappingConfig,
-          confirmed_absent: patternResult.confirmedAbsent,
-          sample_test_cases: patternResult.testCases,
-        };
-
-        patternSpan?.end({
-          output: { fieldCount, recordCount, secondaryCount, confirmedAbsent: patternResult.confirmedAbsent },
-          metadata: { totalElapsedMs: Date.now() - t0 },
+        const agentSpan = options?.langfuseParent?.span({
+          name: 'extraction-agent',
+          input: { skillId: skill.skillId, schemaFieldCount: schemaFields.length, pageCount: pages.length },
         });
 
-        return normalized;
+        const agentResult = await runExtractionAgent({
+          skillId: skill.skillId,
+          schemaFields,
+          pages,
+          inputFiles,
+          langfuseParent: agentSpan ?? options?.langfuseParent,
+        });
+
+        const fieldCount = Object.keys(agentResult.fields).length;
+        const recordCount = agentResult.records.length;
+        const secondaryCount = Object.values(agentResult.secondaryTables).reduce((s, r) => s + r.length, 0);
+
+        if (fieldCount > 0 || recordCount > 0) {
+          console.log(
+            `[codegen] Agent extraction succeeded: ${fieldCount} fields, ${recordCount} records, ` +
+            `${secondaryCount} secondary rows, ${agentResult.agentToolCalls} tool calls, score=${agentResult.compositeScore}%`,
+          );
+
+          const normalized = normalizePatternResult(
+            agentResult.fields, agentResult.records, agentResult.secondaryTables, skill, classifierConfidence,
+          );
+          normalized.metadata.retries = 0;
+          normalized.metadata.generatedCode = agentResult.script;
+          normalized.metadata.formatFingerprint = formatFingerprint;
+          normalized.metadata.formatLabel = formatLabel;
+          normalized.metadata.parserMethod = 'agent';
+          normalized.metadata.codegenInputTokens = agentResult.inputTokens;
+          normalized.metadata.codegenOutputTokens = agentResult.outputTokens;
+          normalized.metadata.agentMeta = {
+            parser_type: 'agent',
+            confirmed_absent: agentResult.confirmedAbsent,
+            agent_tool_calls: agentResult.agentToolCalls,
+            composite_score: agentResult.compositeScore,
+          };
+
+          agentSpan?.end({
+            output: { fieldCount, recordCount, secondaryCount, toolCalls: agentResult.agentToolCalls },
+            metadata: { totalElapsedMs: Date.now() - t0 },
+          });
+
+          return normalized;
+        }
+        console.warn(`[codegen] Agent extraction returned empty results — falling through to legacy generation`);
+        agentSpan?.end({ output: { fieldCount: 0, recordCount: 0 }, level: 'WARNING' as const });
+      } catch (err) {
+        console.warn(`[codegen] Agent extraction failed (non-fatal), falling through to legacy:`, err);
       }
-      console.warn(`[codegen] Pattern extraction returned empty results — falling through to legacy generation`);
-      patternSpan?.end({ output: { fieldCount: 0, recordCount: 0 }, level: 'WARNING' as const });
-    } catch (err) {
-      console.warn(`[codegen] Pattern extraction failed (non-fatal), falling through to legacy:`, err);
+    } else {
+      console.log(`[codegen] No pages array provided, skipping agent extraction — falling through to legacy`);
     }
   }
 

@@ -444,7 +444,7 @@ export async function runJcrModel(
   orgId: string,
   extractedData: { fields: FieldsMap; records: RecordRow[]; skillId?: string; workerRecords?: RecordRow[] },
   meta: ProjectMeta = {},
-  options?: { tailText?: string; sourceText?: string; generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; patternMeta?: PatternParserMeta },
+  options?: { tailText?: string; sourceText?: string; generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; patternMeta?: PatternParserMeta; agentMeta?: { parser_type: 'agent'; confirmed_absent: string[]; agent_tool_calls: number; composite_score: number } },
 ): Promise<{ runId: string; rowCount: number; reconciliationScore: number; identityScore: number; qualityScore: number; checkResults: CheckResult[] }> {
   const sb = getSupabase();
   const runId = crypto.randomUUID();
@@ -510,6 +510,7 @@ export async function runJcrModel(
     formatFingerprint: options?.formatFingerprint,
     usedCachedParserId: options?.usedCachedParserId,
     patternMeta: options?.patternMeta,
+    agentMeta: options?.agentMeta,
   });
 
   const { withheldFields, anomalyFields, checkResults, reconciliationScore, identityScore, qualityScore } = validation;

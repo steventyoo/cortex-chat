@@ -106,3 +106,37 @@ export async function publishScanContinuation(
   console.log(`[qstash] Scheduled scan continuation for org=${orgId} folder=${driveFolderId} in ${delaySec}s → msgId=${result.messageId}`);
   return result.messageId;
 }
+
+// ── Extraction Agent Continuation ────────────────────────────
+
+export interface ExtractionContinuationPayload {
+  continuation: true;
+  parserCacheId: string;
+  skillId: string;
+  formatFingerprint: string;
+}
+
+export async function publishExtractionContinuation(
+  baseUrl: string,
+  parserCacheId: string,
+  skillId: string,
+  formatFingerprint: string,
+  delaySec: number = 5,
+): Promise<string> {
+  const client = getQStashClient();
+  const url = `${baseUrl.replace(/\/$/, '')}/api/pipeline/continue-extraction`;
+  const body: ExtractionContinuationPayload = {
+    continuation: true,
+    parserCacheId,
+    skillId,
+    formatFingerprint,
+  };
+  const result = await client.publishJSON({
+    url,
+    body,
+    retries: 2,
+    delay: delaySec,
+  });
+  console.log(`[qstash] Scheduled extraction continuation for cache=${parserCacheId} in ${delaySec}s → msgId=${result.messageId}`);
+  return result.messageId;
+}

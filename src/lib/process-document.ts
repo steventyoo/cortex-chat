@@ -186,7 +186,7 @@ async function processLargePdfVision(opts: {
   let overallConfidence: number;
   let flags: ValidationFlag[];
   let usedExtractionMethod = 'vision-chunked';
-  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string; patternMeta?: PatternParserMeta } = {};
+  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string; patternMeta?: PatternParserMeta; agentMeta?: CodegenExtractionResult['metadata']['agentMeta'] } = {};
 
   if (skill.extractionMethod === 'codegen') {
     const codegenSpan = trace.span({
@@ -204,12 +204,14 @@ async function processLargePdfVision(opts: {
       // with page markers. mergePages=true strips all newlines, producing a flat
       // string whose format doesn't match pdfplumber output — causing regex mismatches.
       let sourceText: string;
+      let sourcePages: string[] | undefined;
       try {
         const unpdfResult = await pdfExtractText(new Uint8Array(rawBuffer), { mergePages: false });
         const pages = unpdfResult.text as string[];
         const unpdfText = pages.map((p, i) => `=== Page ${i + 1} ===\n${p}`).join('\n\n');
         if (unpdfText.length > 500) {
           sourceText = unpdfText;
+          sourcePages = pages;
           console.log(`[process:large-pdf] unpdf preview: ${sourceText.length} chars (all ${pageCount} pages, local)`);
         } else {
           console.log(`[process:large-pdf] unpdf sparse (${unpdfText.length} chars) — falling back to Claude OCR`);
@@ -225,7 +227,7 @@ async function processLargePdfVision(opts: {
       const codegenResult: CodegenExtractionResult = await extractWithCodegen(
         rawBuffer, sourceText, skill, catalogFields, contextCardFields,
         classifierConfidence, 'pdf',
-        { langfuseParent: codegenSpan, scopedFields },
+        { langfuseParent: codegenSpan, scopedFields, pages: sourcePages },
       );
       extraction = codegenResult.extraction;
       discoveredFields = codegenResult.discoveredFields;
@@ -237,6 +239,7 @@ async function processLargePdfVision(opts: {
         usedCachedParserId: codegenResult.metadata.usedCachedParserId,
         sourceText,
         patternMeta: codegenResult.metadata.patternMeta,
+        agentMeta: codegenResult.metadata.agentMeta,
       };
 
       for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
@@ -473,6 +476,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
 
   let tStep = Date.now();
   let sourceText: string;
+  let sourcePages: string[] | undefined;
   let finalStoragePath = storagePath;
   let pdfBuffer: Buffer | null = null;
 
@@ -566,11 +570,13 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         } else {
           const pdfBuffer = rawBuffer || Buffer.from(content.base64, 'base64');
           try {
-            const { text: localText } = await pdfExtractText(new Uint8Array(pdfBuffer), { mergePages: true });
-            const trimmed = (localText as string).trim();
+            const unpdfResult = await pdfExtractText(new Uint8Array(pdfBuffer), { mergePages: false });
+            const pdfPages = unpdfResult.text as string[];
+            const trimmed = pdfPages.join('\n').trim();
             if (trimmed.length > 100) {
               sourceText = trimmed;
-              console.log(`[process] PDF text via unpdf: ${sourceText.length} chars`);
+              sourcePages = pdfPages;
+              console.log(`[process] PDF text via unpdf: ${sourceText.length} chars, ${pdfPages.length} pages`);
             } else {
               console.log(`[process] unpdf returned sparse text (${trimmed.length} chars), falling back to Claude OCR`);
               sourceText = await safePdfOcr(content.base64, rawBuffer);
@@ -652,6 +658,16 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
       const result = await parseFileBuffer(fileBuffer, mimeType, fileName, { forceClaudeOcr: forceOcr });
       sourceText = result.text;
       console.log(`[process] File parsed: ${sourceText.length} chars${forceOcr ? ' (Claude OCR forced for JCR)' : ''}`);
+      // Extract per-page text for PDFs to enable the extraction agent
+      if (isPdf(mimeType, fileName) && !forceOcr) {
+        try {
+          const unpdfResult = await pdfExtractText(new Uint8Array(fileBuffer), { mergePages: false });
+          sourcePages = unpdfResult.text as string[];
+          console.log(`[process] Extracted ${sourcePages.length} pages for agent`);
+        } catch {
+          console.log(`[process] Per-page extraction failed (non-fatal), agent will be skipped`);
+        }
+      }
     } catch (err) {
       console.error(`[process] File parsing failed for ${recordId}:`, err);
       await markFailed(sb, recordId, 'text_extraction', err);
@@ -673,7 +689,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
   let flags: ValidationFlag[];
   let discoveredFields: Record<string, unknown> = {};
   let usedExtractionMethod = 'llm';
-  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string; patternMeta?: PatternParserMeta } = {};
+  let codegenMeta: { generatedCode?: string; formatFingerprint?: string; usedCachedParserId?: string; sourceText?: string; patternMeta?: PatternParserMeta; agentMeta?: CodegenExtractionResult['metadata']['agentMeta'] } = {};
 
   try {
     console.log(`[process] Starting AI extraction: project=${projectId || 'none'} org=${orgId}`);
@@ -753,7 +769,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           const codegenResult: CodegenExtractionResult = await extractWithCodegen(
             docBuffer, sourceText, skill, catalogFields, contextCardFields,
             classification.confidence, fileExt,
-            { langfuseParent: codegenSpan, scopedFields },
+            { langfuseParent: codegenSpan, scopedFields, pages: sourcePages },
           );
           extraction = codegenResult.extraction;
           discoveredFields = codegenResult.discoveredFields;
@@ -765,6 +781,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
             usedCachedParserId: codegenResult.metadata.usedCachedParserId,
             sourceText,
             patternMeta: codegenResult.metadata.patternMeta,
+            agentMeta: codegenResult.metadata.agentMeta,
           };
 
           for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
@@ -825,7 +842,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
         const codegenResult: CodegenExtractionResult = await extractWithCodegen(
           docBuffer, sourceText, skill, catalogFields, contextCardFields,
           classification.confidence, fileExt,
-          { langfuseParent: codegenSpan2, scopedFields: scopedFields2 },
+          { langfuseParent: codegenSpan2, scopedFields: scopedFields2, pages: sourcePages },
         );
         extraction = codegenResult.extraction;
         discoveredFields = codegenResult.discoveredFields;
@@ -837,6 +854,7 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           usedCachedParserId: codegenResult.metadata.usedCachedParserId,
           sourceText,
           patternMeta: codegenResult.metadata.patternMeta,
+          agentMeta: codegenResult.metadata.agentMeta,
         };
 
         for (const [fieldName, fieldData] of Object.entries(extraction.fields)) {
