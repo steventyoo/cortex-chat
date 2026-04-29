@@ -543,6 +543,42 @@ export async function runJcrModel(
     }
   }
 
+  // Prefer agent-extracted document "by Source" totals over pipeline-computed sums
+  // when they pass a reconciliation sanity check (PR + AP + GL ≈ total direct cost).
+  const SOURCE_FIELD_MAP: Record<string, string> = {
+    job_totals_by_source_pr: 'pr_amount',
+    job_totals_by_source_ap: 'ap_amount',
+    job_totals_by_source_gl: 'gl_amount',
+  };
+
+  const docPr = parseFloat(String(finalFields.job_totals_by_source_pr?.value ?? 0));
+  const docAp = parseFloat(String(finalFields.job_totals_by_source_ap?.value ?? 0));
+  const docGl = parseFloat(String(finalFields.job_totals_by_source_gl?.value ?? 0));
+  const docSourceSum = docPr + docAp + docGl;
+  const totalDirectCost = (finalFields.total_jtd_cost?.value as number) || 0;
+
+  const hasDocSourceValues = docPr > 0 || docAp > 0 || docGl > 0;
+  const reconciles = totalDirectCost > 0
+    && Math.abs(docSourceSum - totalDirectCost) / totalDirectCost < 0.05;
+
+  if (hasDocSourceValues && reconciles) {
+    for (const [docField, computedField] of Object.entries(SOURCE_FIELD_MAP)) {
+      const docVal = finalFields[docField];
+      if (docVal?.value != null && typeof docVal.value === 'number') {
+        const oldVal = finalFields[computedField]?.value;
+        finalFields[computedField] = { value: docVal.value, confidence: 0.95 };
+        console.log(`[jcr-model] Using document "by Source" for ${computedField}: ${oldVal} → ${docVal.value}`);
+      }
+    }
+  } else if (hasDocSourceValues && !reconciles) {
+    console.warn(
+      `[jcr-model] Document "by Source" values don't reconcile ` +
+      `(sum=${docSourceSum.toFixed(2)} vs direct=${totalDirectCost.toFixed(2)}, ` +
+      `delta=${totalDirectCost > 0 ? ((docSourceSum - totalDirectCost) / totalDirectCost * 100).toFixed(1) : '?'}%) ` +
+      `— keeping computed values`,
+    );
+  }
+
   const extractedRows = emitExtractedRows(skillId, finalFields, collections);
 
   const derivedRows = await evaluateDerivedFields(
