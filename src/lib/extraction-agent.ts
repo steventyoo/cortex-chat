@@ -54,6 +54,7 @@ interface IterationSnapshot {
   checksPassed: number;
   compositeScore: number;
   script: string;
+  outputRaw: unknown;
 }
 
 interface AgentState {
@@ -501,6 +502,7 @@ export async function runExtractionAgent(
   // Persistent sandbox — boots once, reused across all run_code calls
   let sb: (Sandbox & AsyncDisposable) | null = null;
   let lastOutputRaw: unknown = null;
+  let bestValidatedOutput: unknown = null;
   let lastScript = '';
 
   async function ensureSandbox(): Promise<Sandbox & AsyncDisposable> {
@@ -665,7 +667,22 @@ export async function runExtractionAgent(
         if (!lastOutputRaw) {
           return 'No output.json found. Run your extraction script first (it should write to /tmp/output.json and print the JSON to stdout).';
         }
-        return validateOutputJson(lastOutputRaw, schemaFields, state.bestSnapshot);
+        const validationResult = validateOutputJson(lastOutputRaw, schemaFields, state.bestSnapshot);
+        // Checkpoint the output when it has more populated fields than the previous best.
+        // This prevents later debug run_code calls from clobbering a valid extraction.
+        const validParsed = AgentOutputSchema.safeParse(lastOutputRaw);
+        if (validParsed.success) {
+          const validFields = validParsed.data.fields as Record<string, unknown>;
+          const populatedCount = Object.values(validFields).filter(v => v != null && v !== '').length;
+          const prevParsed = AgentOutputSchema.safeParse(bestValidatedOutput);
+          const prevCount = prevParsed.success
+            ? Object.values(prevParsed.data.fields as Record<string, unknown>).filter(v => v != null && v !== '').length
+            : 0;
+          if (populatedCount > prevCount) {
+            bestValidatedOutput = structuredClone(lastOutputRaw);
+          }
+        }
+        return validationResult;
       }
       case 'check_consistency': {
         if (!lastOutputRaw) {
@@ -726,6 +743,7 @@ export async function runExtractionAgent(
           checksPassed: passed,
           compositeScore: quality,
           script: lastScript,
+          outputRaw: lastOutputRaw,
         };
         state.iterationHistory.push(snapshot);
 
@@ -838,14 +856,23 @@ export async function runExtractionAgent(
   // Final checkpoint with complete state
   await checkpoint(state.iterationHistory.length - 1);
 
-  // ── Build result from last valid output ────────────────────
+  // ── Build result from best validated output (fall back to last output) ──
 
-  console.log(`[extraction-agent] Final state: rounds=${state.activityLog.filter(e => e.type === 'reasoning').length} toolCalls=${state.totalToolCalls} lastOutputRaw=${lastOutputRaw ? 'present' : 'null'}`);
+  console.log(`[extraction-agent] Final state: rounds=${state.activityLog.filter(e => e.type === 'reasoning').length} toolCalls=${state.totalToolCalls} lastOutputRaw=${lastOutputRaw ? 'present' : 'null'} bestValidatedOutput=${bestValidatedOutput ? 'present' : 'null'}`);
 
-  const parsed = AgentOutputSchema.safeParse(lastOutputRaw);
+  // Priority: bestSnapshot.outputRaw (from check_consistency) > bestValidatedOutput (from validate_output) > lastOutputRaw
+  // This prevents the agent from clobbering good output with debug code in later run_code calls.
+  const finalOutputRaw = state.bestSnapshot?.outputRaw ?? bestValidatedOutput ?? lastOutputRaw;
+
+  let parsed = AgentOutputSchema.safeParse(finalOutputRaw);
+  if (!parsed.success && finalOutputRaw !== lastOutputRaw) {
+    // Best validated output was invalid; fall back to lastOutputRaw
+    console.log(`[extraction-agent] Best output parse failed, trying lastOutputRaw: ${parsed.error.message.slice(0, 200)}`);
+    parsed = AgentOutputSchema.safeParse(lastOutputRaw);
+  }
   if (!parsed.success) {
     console.log(`[extraction-agent] Output parse failed: ${parsed.error.message.slice(0, 300)}`);
-    console.log(`[extraction-agent] lastOutputRaw type=${typeof lastOutputRaw}, keys=${lastOutputRaw && typeof lastOutputRaw === 'object' ? Object.keys(lastOutputRaw as Record<string, unknown>).join(',') : 'n/a'}`);
+    console.log(`[extraction-agent] finalOutputRaw type=${typeof finalOutputRaw}, keys=${finalOutputRaw && typeof finalOutputRaw === 'object' ? Object.keys(finalOutputRaw as Record<string, unknown>).join(',') : 'n/a'}`);
   }
 
   const dataFields = (parsed.success ? parsed.data.fields : {}) as Record<string, unknown>;
