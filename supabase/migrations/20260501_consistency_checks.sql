@@ -170,9 +170,9 @@ INSERT INTO consistency_checks (skill_id, check_name, display_name, description,
 
 ('job_cost_report', 'worker_dedup',
  'No Duplicate PR Transactions',
- 'No (worker_name, date, amount) duplicates in payroll transactions',
- 2, 'extraction_error', 'doc',
- '(() => { const txns = ctx.collections.payroll_transactions || []; if (txns.length === 0) return { pass: true, message: "No transactions" }; const seen = new Set(); let dupes = 0; for (const t of txns) { const key = (t.name || "") + "|" + (t.document_date || "") + "|" + (t.actual_amount || 0); if (seen.has(key)) dupes++; seen.add(key); } return { pass: dupes === 0, expected: 0, actual: dupes, delta: dupes, message: dupes === 0 ? "No duplicates" : dupes + " duplicate PR transactions detected" }; })()',
+ 'No (worker_name, cost_code, date, amount) duplicates in payroll transactions',
+ 2, 'anomaly', 'doc',
+ '(() => { const txns = ctx.collections.payroll_transactions || []; if (txns.length === 0) return { pass: true, message: "No transactions" }; const seen = new Set(); let dupes = 0; for (const t of txns) { const key = (t.name || "") + "|" + (t.cost_code || "") + "|" + (t.document_date || "") + "|" + (t.actual_amount || 0); if (seen.has(key)) dupes++; seen.add(key); } return { pass: dupes === 0, expected: 0, actual: dupes, delta: dupes, message: dupes === 0 ? "No duplicates" : dupes + " duplicate PR transactions detected" }; })()',
  0, '{}',
  NULL),
 
