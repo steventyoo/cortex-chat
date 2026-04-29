@@ -152,7 +152,7 @@ const COST_CODE_LABELS: RecordLabel[] = [
   ...ccLabels('607', { original_budget: 25600, current_budget: 10000, plus_minus_budget: -9929.29, actual_amount: 70.71 }),
   ...ccLabels('995', { original_budget: 125049.58, current_budget: 125049.58, plus_minus_budget: 1250.88, actual_amount: 126300.46 }),
   ...ccLabels('998', { original_budget: 22067.57, current_budget: 22067.57, plus_minus_budget: 221.81, actual_amount: 22289.38 }),
-  ...ccLabels('999', { original_budget: 1394655, current_budget: -1391455, actual_amount: -1391455 }),
+  ...ccLabels('999', { original_budget: -1394655, current_budget: -1391455, actual_amount: -1391455 }),
 ];
 
 // ── Extraction Labels: Worker Wages (42 workers) ──────────────────
