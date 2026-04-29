@@ -349,6 +349,7 @@ function buildSystemPrompt(
   schemaFields: SchemaFieldDef[],
   pageCount: number,
   lineCount: number,
+  contextHints?: string,
 ): string {
   const byScope = new Map<string, SchemaFieldDef[]>();
   for (const f of schemaFields) {
@@ -410,7 +411,7 @@ Your script must write /tmp/output.json with this structure:
 - The script must be deterministic — no randomness or external API calls.
 - Pay attention to number formats: commas in thousands (1,234.56), negative signs, parenthesized negatives.
 - Some documents have "smashed" numbers where two values run together without a separator.
-- Always verify your record counts match what you see in the document.`;
+- Always verify your record counts match what you see in the document.${contextHints ? `\n\n## Document-Type Specific Guidance\n${contextHints}` : ''}`;
 }
 
 // ── Build EvalContext from parsed output ──────────────────────
@@ -465,6 +466,8 @@ export interface RunExtractionAgentOptions {
   maxDurationMs?: number;
   resumeState?: AgentState;
   pipelineLogId?: string;
+  /** Skill-specific extraction hints appended to the system prompt */
+  contextHints?: string;
 }
 
 export async function runExtractionAgent(
@@ -491,7 +494,7 @@ export async function runExtractionAgent(
   const doc = new DocumentContext(pages);
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  const systemPrompt = buildSystemPrompt(schemaFields, doc.pageCount, doc.lineCount);
+  const systemPrompt = buildSystemPrompt(schemaFields, doc.pageCount, doc.lineCount, options.contextHints);
 
   // Build sandbox input files: source_text.txt + any raw file (PDF bytes, etc.)
   const sandboxFiles: ExtractionFile[] = [

@@ -265,6 +265,33 @@ The document content is available at \`/tmp/input${fileExt ? '.' + fileExt : ''}
 Write the complete Python script now. Use only the standard library plus: pandas, numpy, openpyxl, pdfplumber, xlrd, python-docx, docx2txt, olefile, python-pptx.`;
 }
 
+/**
+ * Build skill-specific context hints for the extraction agent.
+ * These are appended to the agent's system prompt to guide extraction
+ * behavior for specific document types.
+ */
+function buildAgentContextHints(skillId: string): string | undefined {
+  if (skillId === 'job_cost_report') {
+    return `This is a **Sage 300 Construction Job Cost Report (JDR)**. The \`payroll_transactions\` secondary table must contain ALL transaction lines from ALL source types — not just PR (Payroll).
+
+**Transaction types to capture:**
+- **PR** (Payroll): Worker wage lines with hours and amounts. Format: \`PR <ref> <date> <emp_code> <Name>\`
+- **AP** (Accounts Payable): Vendor invoice lines. Format: \`AP <ref> <date> <vendor_code> <Vendor Name>\`
+- **GL** (General Ledger): Journal entry lines. Format: \`GL <ref> <date> <description>\`
+- **AR** (Accounts Receivable): Billing/revenue lines. Format: \`AR <ref> <date> <description>\`
+
+**CRITICAL**: The 2-letter prefix (PR/AP/GL/AR) on each transaction line is the \`source\` field. You MUST set it for every row.
+- PR lines have hours (regular_hours, overtime_hours) and amounts
+- AP/GL/AR lines typically only have actual_amount (no hours)
+- ALL source types go into the same \`payroll_transactions\` table
+
+**Downstream usage**: Source amounts (pr_amount, ap_amount, gl_amount) are computed by summing \`actual_amount\` grouped by \`source\`. If you only capture PR, the AP and GL derived totals will be zero.
+
+**Verification**: The "Job Totals by Source" section at the end shows the expected PR, AP, GL totals. Your extracted transaction sums should approximate these values.`;
+  }
+  return undefined;
+}
+
 /** @deprecated Fallback for skills not yet migrated to scoped skill_fields. */
 function buildSecondaryTableSection(skill: DocumentSkill): string {
   const secondaryTables = skill.multiRecordConfig?.secondaryTables;
@@ -1297,6 +1324,8 @@ export async function extractWithCodegen(
           }));
         console.log(`[codegen] Starting extraction agent: ${schemaFields.length} schema fields, ${pages.length} pages`);
 
+        const contextHints = buildAgentContextHints(skill.skillId);
+
         const agentSpan = options?.langfuseParent?.span({
           name: 'extraction-agent',
           input: { skillId: skill.skillId, schemaFieldCount: schemaFields.length, pageCount: pages.length },
@@ -1311,6 +1340,7 @@ export async function extractWithCodegen(
           startedAt: t0,
           maxDurationMs: 420_000,
           pipelineLogId: options?.pipelineLogId,
+          contextHints,
         });
 
         const fieldCount = Object.keys(agentResult.fields).length;
