@@ -70,7 +70,7 @@ export default function JcrAnalysisPanel({ projectId }: { projectId: string | nu
     if (!projectId) return;
     setRunLoading(true);
     try {
-      const res = await fetch('/api/jcr-model/run', {
+      const res = await fetch('/api/skill-pipeline/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId }),
@@ -135,7 +135,7 @@ export default function JcrAnalysisPanel({ projectId }: { projectId: string | nu
             disabled={runLoading}
             className="px-3 py-1.5 text-[11px] font-medium bg-[#1a1a1a] text-white rounded-md hover:bg-[#333] disabled:opacity-50"
           >
-            {runLoading ? 'Running...' : rows.length > 0 ? 'Re-run Model' : 'Run JCR Model'}
+            {runLoading ? 'Running...' : rows.length > 0 ? 'Re-run Pipeline' : 'Run Pipeline'}
           </button>
         </div>
       </div>
@@ -147,7 +147,7 @@ export default function JcrAnalysisPanel({ projectId }: { projectId: string | nu
       ) : rows.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 gap-3">
           <p className="text-[#999] text-sm">No JCR export data yet.</p>
-          <p className="text-[#bbb] text-xs">Click &quot;Run JCR Model&quot; to generate analysis from the extracted JCR.</p>
+          <p className="text-[#bbb] text-xs">Click &quot;Run Pipeline&quot; to generate analysis from extracted data.</p>
         </div>
       ) : (
         <>

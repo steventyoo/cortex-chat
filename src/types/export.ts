@@ -1,6 +1,6 @@
 /**
  * Canonical ExportRow interface — single source of truth.
- * Used by both server (jcr-model, derived-evaluator, project-profile)
+ * Used by both server (skill-pipeline, derived-evaluator, project-profile)
  * and client (JcrAnalysisPanel, tab components, pivotRows).
  */
 export interface ExportRow {
