@@ -118,7 +118,8 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF. It c
    \`Original Budget | Revised Budget | Open Commits | JTD Cost | Over/Under Budget | Regular Hours | Overtime Hours\`
    - Hours columns are ONLY present for labor codes (011, 100-199) — material/subcontract codes have no hours
    - **CRITICAL**: The column order matters! Over/Under Budget = actual − budget (positive = over budget). Do NOT swap JTD Cost and Over/Under.
-4. **Payroll (PR) Transaction Lines**: Inside each cost code section, PR lines have this format:
+4. **Transaction Lines (PR, AP, GL, AR)**: Inside each cost code section, transactions are tagged by source type:
+   - **PR (Payroll)** lines:
    \`\`\`
    PR  <ref_number>  <date>  <employee_code>  <Worker Name>
    MM/DD/YY  Regular: <hours> hours  <AMOUNT>
@@ -140,6 +141,25 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF. It c
          hours = float(m.group(3))
          amount = float(m.group(4).replace(',', ''))  # NEVER default to 0
      \`\`\`
+   - **AP (Accounts Payable)** lines: vendor invoices for materials/subcontracts
+   \`\`\`
+   AP  <ref_number>  <date>  <vendor_code>  <Vendor Name>
+   <date>  <description>  <AMOUNT>
+   \`\`\`
+   - Capture: source="AP", name=<Vendor Name>, actual_amount=<AMOUNT>, cost_code=<current>, document_date
+   - **GL (General Ledger)** lines: journal entries (equipment, overhead)
+   \`\`\`
+   GL  <ref_number>  <date>  <description>
+   <date>  <description>  <AMOUNT>
+   \`\`\`
+   - Capture: source="GL", name=<description>, actual_amount=<AMOUNT>, cost_code=<current>, document_date
+   - **AR (Accounts Receivable)** lines: billing/revenue entries (usually in code 999)
+   \`\`\`
+   AR  <ref_number>  <date>  <description>
+   <date>  <description>  <AMOUNT>
+   \`\`\`
+   - Capture: source="AR", name=<description>, actual_amount=<AMOUNT>, cost_code=<current>, document_date
+   - **CRITICAL**: The \`source\` field (PR/AP/GL/AR) tag on each line is the authoritative classification. Capture it exactly.
 5. **Burden Codes** (995, 998): Special cost codes for payroll burden and taxes
    - 995 = Payroll Burden (benefits, insurance)
    - 998 = Payroll Taxes (FICA, FUTA, SUTA)
@@ -157,10 +177,18 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF. It c
 1. Iterate every page with pdfplumber
 2. Extract text line by line; detect cost-code section headers (pattern: 3-digit code + " - " + description)
 3. Track the current cost code as you move through pages
-4. For each PR line, extract: name, number, regular_hours, overtime_hours, regular_amount, overtime_amount, actual_amount, cost_code, source, document_date, posted_date, check_number, description
-5. Include ALL PR lines from ALL cost codes — there may be thousands across 100+ pages
-6. Do NOT stop early or truncate — capture every single payroll transaction line
-7. At the end, parse the "Job Totals" section for revenue, expenses, net, retainage, and by-source breakdowns
+4. For each transaction line (PR, AP, GL, AR), extract: name, number, regular_hours, overtime_hours, regular_amount, overtime_amount, actual_amount, cost_code, source, document_date, posted_date, check_number, description
+5. The \`source\` field MUST be set to the 2-letter prefix tag (PR, AP, GL, or AR) from the line header — this is the authoritative source classification
+6. Include ALL transaction lines from ALL cost codes and ALL source types — there may be thousands across 100+ pages
+7. Do NOT stop early or truncate — capture every single transaction line
+8. At the end, parse the "Job Totals" section for revenue, expenses, net, retainage, and by-source breakdowns
+
+## Downstream Pipeline Context
+The extracted \`payroll_transactions\` table will be consumed by these downstream operations:
+- **Derived fields**: \`pr_amount\` = SUM(actual_amount) WHERE source="PR", \`ap_amount\` = SUM(actual_amount) WHERE source="AP", \`gl_amount\` = SUM(actual_amount) WHERE source="GL"
+- **Aggregation**: Transactions are grouped by \`name\` to produce per-worker summaries (hours, amounts)
+- **Consistency checks**: Transaction sums are cross-checked against cost code totals and document "by Source" values
+Therefore: capturing the \`source\` tag and \`actual_amount\` for every transaction (not just PR) is critical for accuracy.
 `;
     }
   } else {
@@ -258,8 +286,11 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF.
 ## Document Structure
 - Cost code sections start with: \`<3-digit code> - <Description>\`
 - Cost Code Totals columns: Original Budget | Revised Budget | Open Commits | JTD Cost | Over/Under Budget | Regular Hours | Overtime Hours
-- PR transaction lines: worker name on one line, hours/amounts on the next line(s)
-- Format: \`PR <ref> <date> <emp_code> <Name>\` then \`MM/DD/YY Regular: N hours AMOUNT\`
+- Transaction lines are tagged by source: PR (Payroll), AP (Accounts Payable), GL (General Ledger), AR (Accounts Receivable)
+- PR format: \`PR <ref> <date> <emp_code> <Name>\` then \`MM/DD/YY Regular: N hours AMOUNT\`
+- AP format: \`AP <ref> <date> <vendor_code> <Vendor Name>\` then \`<date> <description> AMOUNT\`
+- GL format: \`GL <ref> <date> <description>\` then \`<date> <description> AMOUNT\`
+- AR format: \`AR <ref> <date> <description>\` then \`<date> <description> AMOUNT\`
 - regular_amount = BASE WAGE (not burdened). Do NOT include burden codes 995/998.
 - Burden codes: 995 = Payroll Burden, 998 = Payroll Taxes (have totals but no PR lines)
 - Revenue code 999 is NEGATIVE in Sage — use abs() for revenue fields
@@ -269,9 +300,10 @@ Parsing strategy:
 1. Iterate every page with pdfplumber
 2. Detect cost-code headers (pattern: 3-digit code + " - " + description)
 3. Track current cost code across pages
-4. Extract ALL PR lines: name, hours, amounts, cost_code, source
-5. Do NOT stop early or truncate — capture every payroll transaction
-6. Parse Job Totals section at the end for summary fields
+4. Extract ALL transaction lines (PR, AP, GL, AR): name, hours, amounts, cost_code, source
+5. The \`source\` field MUST match the 2-letter tag on the line (PR/AP/GL/AR)
+6. Do NOT stop early or truncate — capture every transaction
+7. Parse Job Totals section at the end for summary fields
 `;
   }
 

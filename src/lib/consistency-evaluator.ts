@@ -54,6 +54,18 @@ function rd(n: number | null | undefined, decimals?: number): number | null {
   return Math.round(n * factor) / factor;
 }
 
+// ── Null-safe Proxy for collections access ───────────────────
+
+function nullSafeCollections(
+  collections: Record<string, Record<string, number | string | null>[]>,
+): Record<string, Record<string, number | string | null>[]> {
+  return new Proxy(collections, {
+    get(target, prop: string) {
+      return target[prop] || [];
+    },
+  });
+}
+
 // ── Core evaluation ──────────────────────────────────────────
 
 interface ExpressionResult {
@@ -104,13 +116,14 @@ export async function evaluateConsistencyChecks(
   }
 
   const results: CheckResult[] = [];
+  const safeCtx: EvalContext = { ...ctx, collections: nullSafeCollections(ctx.collections) };
 
   for (const spec of specs) {
     const evalFn = createCheckEvaluator(spec.expression);
 
     try {
       if (spec.scope === 'doc') {
-        const result = evalFn(ctx, rd);
+        const result = evalFn(safeCtx, rd);
         results.push({
           check_name: spec.check_name,
           display_name: spec.display_name,
@@ -127,13 +140,13 @@ export async function evaluateConsistencyChecks(
           hint_template: spec.hint_template,
         });
       } else {
-        const collection = ctx.collections[spec.scope];
+        const collection = safeCtx.collections[spec.scope];
         if (!collection || collection.length === 0) continue;
 
         for (let i = 0; i < collection.length; i++) {
           const record = collection[i];
           const scopedCtx: EvalContext = {
-            ...ctx,
+            ...safeCtx,
             current: record,
           };
 

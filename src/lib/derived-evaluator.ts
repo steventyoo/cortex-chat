@@ -67,6 +67,18 @@ function rd(n: number | null | undefined, decimals?: number): number | null {
   return Math.round(n * factor) / factor;
 }
 
+// ── Null-safe Proxy for collections access ───────────────────
+
+function nullSafeCollections(
+  collections: Record<string, Record<string, number | string | null>[]>,
+): Record<string, Record<string, number | string | null>[]> {
+  return new Proxy(collections, {
+    get(target, prop: string) {
+      return target[prop] || [];
+    },
+  });
+}
+
 // ── Core evaluation ──────────────────────────────────────────
 
 function topologicalSort(specs: DerivedFieldSpec[]): DerivedFieldSpec[] {
@@ -171,7 +183,7 @@ export function buildContext(
     flatCollections[name] = rows.map(flattenRecord);
   }
 
-  return { doc, collections: flatCollections, meta };
+  return { doc, collections: nullSafeCollections(flatCollections), meta };
 }
 
 export async function evaluateDerivedFields(
@@ -323,3 +335,94 @@ export function emitExtractedRows(
 
   return rows;
 }
+
+/**
+ * Evaluate all derived fields and return rows + the set of derived field names.
+ * The returned `derivedFieldNames` should be excluded from `emitExtractedRows`
+ * to prevent double-counting in `computed_export`.
+ */
+export async function evaluateAndMerge(
+  skillId: string,
+  fields: Record<string, { value: string | number | null; confidence: number }>,
+  collections: Record<string, RecordRow[]>,
+  meta: Record<string, unknown> = {},
+): Promise<{ derivedRows: ExportRow[]; derivedFieldNames: Set<string>; ctx: EvalContext }> {
+  const specs = await loadDerivedSpecs(skillId);
+  const ctx = buildContext(fields, collections, meta);
+  const derivedFieldNames = new Set<string>(specs.map(s => s.canonical_name));
+
+  if (specs.length === 0) {
+    return { derivedRows: [], derivedFieldNames, ctx };
+  }
+
+  const sorted = topologicalSort(specs);
+  const rows: ExportRow[] = [];
+
+  for (const spec of sorted) {
+    const evalFn = createEvaluator(spec.expression);
+
+    try {
+      if (spec.scope === 'doc' || spec.scope === 'project') {
+        const result = evalFn(ctx, safe, rd);
+        const numVal = typeof result === 'number' ? rd(result) : null;
+        const textVal = typeof result === 'string' ? result : null;
+
+        ctx.doc[spec.canonical_name] = numVal ?? textVal;
+
+        rows.push({
+          skill_id: skillId,
+          tab: spec.tab,
+          section: spec.section,
+          record_key: 'project',
+          field: spec.canonical_name,
+          canonical_name: spec.canonical_name,
+          display_name: spec.display_name,
+          data_type: spec.data_type,
+          status: spec.status,
+          value_number: numVal,
+          value_text: textVal,
+          notes: spec.formula,
+        });
+      } else {
+        const collection = ctx.collections[spec.scope];
+        if (!collection) continue;
+
+        for (let i = 0; i < collection.length; i++) {
+          const record = collection[i];
+          ctx.current = record;
+
+          const result = evalFn(ctx, safe, rd);
+          const numVal = typeof result === 'number' ? rd(result) : null;
+          const textVal = typeof result === 'string' ? result : null;
+
+          record[spec.canonical_name] = numVal ?? textVal;
+
+          const recordKey = String(record.cost_code || record.name || record.id || `${spec.scope}_${i}`);
+
+          rows.push({
+            skill_id: skillId,
+            tab: spec.tab,
+            section: spec.section,
+            record_key: `${spec.scope}=${recordKey}`,
+            field: spec.canonical_name,
+            canonical_name: spec.canonical_name,
+            display_name: spec.display_name,
+            data_type: spec.data_type,
+            status: spec.status,
+            value_number: numVal,
+            value_text: textVal,
+            notes: spec.formula,
+          });
+        }
+
+        ctx.current = undefined;
+      }
+    } catch (err) {
+      console.error(`[derived-evaluator] Error evaluating ${spec.canonical_name}:`, err);
+    }
+  }
+
+  console.log(`[derived-evaluator] evaluateAndMerge: ${rows.length} derived rows for skill=${skillId}`);
+  return { derivedRows: rows, derivedFieldNames, ctx };
+}
+
