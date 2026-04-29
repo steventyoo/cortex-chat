@@ -341,11 +341,22 @@ export async function runSkillPipeline(
     meta,
   );
 
+  // Inject doc-scoped derived values into fields so consistency checks can reference them
+  const fieldsWithDerived: FieldsMap = { ...extractedData.fields };
+  for (const [key, val] of Object.entries(ctx.doc)) {
+    if (derivedFieldNames.has(key) && val != null && !fieldsWithDerived[key]) {
+      fieldsWithDerived[key] = {
+        value: val,
+        confidence: 0.9,
+      };
+    }
+  }
+
   // 4. Run post-extraction validation (consistency checks + auto-fix)
   const validation = await runPostExtractionValidation({
     pipelineLogId,
     skillId,
-    fields: extractedData.fields,
+    fields: fieldsWithDerived,
     collections: transformedCollections,
     meta,
     tailText: options?.tailText,
@@ -362,9 +373,9 @@ export async function runSkillPipeline(
   const { withheldFields, anomalyFields, checkResults, reconciliationScore, identityScore, qualityScore } = validation;
 
   // Apply corrections from validation
-  let correctedFields = extractedData.fields;
+  let correctedFields = fieldsWithDerived;
   if (validation.correctedFields) {
-    correctedFields = { ...extractedData.fields };
+    correctedFields = { ...fieldsWithDerived };
     for (const [field, val] of Object.entries(validation.correctedFields)) {
       if (val && correctedFields[field] && val.value !== correctedFields[field].value) {
         console.log(`[skill-pipeline] Applying correction: ${field}: ${correctedFields[field].value} → ${val.value}`);
@@ -426,8 +437,8 @@ export async function runSkillPipeline(
     };
   });
 
-  for (let i = 0; i < dbRows.length; i += 100) {
-    const batch = dbRows.slice(i, i + 100);
+  for (let i = 0; i < dbRows.length; i += 500) {
+    const batch = dbRows.slice(i, i + 500);
     const { error } = await sb.from('computed_export').insert(batch);
     if (error) {
       console.error(`[skill-pipeline] Insert batch ${i} failed:`, error.message);
