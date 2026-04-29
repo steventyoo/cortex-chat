@@ -281,13 +281,30 @@ function buildAgentContextHints(skillId: string): string | undefined {
 - **AR** (Accounts Receivable): Billing/revenue lines. Format: \`AR <ref> <date> <description>\`
 
 **CRITICAL**: The 2-letter prefix (PR/AP/GL/AR) on each transaction line is the \`source\` field. You MUST set it for every row.
-- PR lines have hours (regular_hours, overtime_hours) and amounts
-- AP/GL/AR lines typically only have actual_amount (no hours)
+
+**PR transaction field extraction (IMPORTANT):**
+- \`actual_amount\`: The TOTAL burdened cost for the transaction (includes base wage + burden allocation)
+- \`regular_amount\`: The BASE WAGE for regular hours ONLY (hours × rate). This is NOT the same as actual_amount.
+- \`overtime_amount\`: The overtime wage amount (OT hours × OT rate)
+- \`doubletime_amount\`: Double-time wage if present
+- On each PR line, the detail shows: \`MM/DD/YY Regular: N hours AMOUNT\` — the AMOUNT there is \`regular_amount\`
+- If a line shows \`Overtime: N hours AMOUNT\`, that AMOUNT is \`overtime_amount\`
+- The separate total for the line (often on a subtotal row) is \`actual_amount\` (burdened total)
+- You MUST extract regular_amount and overtime_amount separately — do not leave them null
+
+**AP/GL/AR lines:**
+- These typically only have \`actual_amount\` (no hours or component amounts)
 - ALL source types go into the same \`payroll_transactions\` table
 
-**Downstream usage**: Source amounts (pr_amount, ap_amount, gl_amount) are computed by summing \`actual_amount\` grouped by \`source\`. If you only capture PR, the AP and GL derived totals will be zero.
+**Downstream usage**: Source amounts (pr_amount, ap_amount, gl_amount) are computed by summing \`actual_amount\` grouped by \`source\`. If you miss ANY AP or GL lines, the totals will not match.
 
-**Verification**: The "Job Totals by Source" section at the end shows the expected PR, AP, GL totals. Your extracted transaction sums should approximate these values.`;
+**VERIFICATION REQUIREMENT**: The "Job Totals by Source" section at the end shows the expected PR, AP, GL totals. After parsing, SUM your extracted transactions by source and compare against these totals. If your PR/AP/GL sums differ from the document's stated totals by more than $1, you have MISSED transactions. Go back and find them.
+
+**Common miss patterns:**
+- AP/GL lines buried in cost code sections you already parsed for PR
+- Multi-line AP entries where the amount is on the continuation line
+- GL journal entries that look different from PR/AP patterns
+- Transactions on the last page before Job Totals`;
   }
   return undefined;
 }
@@ -318,7 +335,9 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF.
 - AP format: \`AP <ref> <date> <vendor_code> <Vendor Name>\` then \`<date> <description> AMOUNT\`
 - GL format: \`GL <ref> <date> <description>\` then \`<date> <description> AMOUNT\`
 - AR format: \`AR <ref> <date> <description>\` then \`<date> <description> AMOUNT\`
-- regular_amount = BASE WAGE (not burdened). Do NOT include burden codes 995/998.
+- regular_amount = BASE WAGE for regular hours (hours × rate). It comes from the "Regular: N hours $X" detail line.
+- overtime_amount = OT wage (OT hours × rate). It comes from "Overtime: N hours $X" detail line.
+- actual_amount = TOTAL burdened cost for the transaction (burden-loaded, higher than regular+OT sum)
 - Burden codes: 995 = Payroll Burden, 998 = Payroll Taxes (have totals but no PR lines)
 - Revenue code 999 is NEGATIVE in Sage — use abs() for revenue fields
 - Job Totals section at end: Revenue, Expenses, Net, Retainage, "by Source" (PR/AP/GL)
@@ -329,8 +348,10 @@ Parsing strategy:
 3. Track current cost code across pages
 4. Extract ALL transaction lines (PR, AP, GL, AR): name, hours, amounts, cost_code, source
 5. The \`source\` field MUST match the 2-letter tag on the line (PR/AP/GL/AR)
-6. Do NOT stop early or truncate — capture every transaction
-7. Parse Job Totals section at the end for summary fields
+6. For PR lines: extract regular_amount (from "Regular: N hours AMOUNT") and overtime_amount separately
+7. Do NOT stop early or truncate — capture every transaction from every source type
+8. Parse Job Totals section at the end for summary fields
+9. VERIFY: Sum actual_amount by source and compare against "Job Totals by Source" — any gap means missed transactions
 `;
   }
 

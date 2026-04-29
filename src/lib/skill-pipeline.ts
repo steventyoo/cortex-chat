@@ -342,9 +342,10 @@ export async function runSkillPipeline(
   );
 
   // Inject doc-scoped derived values into fields so consistency checks can reference them
+  // Derived values always override raw extracted values for fields declared as derived
   const fieldsWithDerived: FieldsMap = { ...extractedData.fields };
   for (const [key, val] of Object.entries(ctx.doc)) {
-    if (derivedFieldNames.has(key) && val != null && !fieldsWithDerived[key]) {
+    if (derivedFieldNames.has(key) && val != null) {
       fieldsWithDerived[key] = {
         value: val,
         confidence: 0.9,
