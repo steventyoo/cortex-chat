@@ -568,7 +568,7 @@ export async function runExtractionAgent(
       await sb_db.from('pipeline_log').update({
         agent_activity_log: state.activityLog,
         agent_best_script: state.bestSnapshot?.script ?? lastScript ?? null,
-        agent_best_output: lastOutputRaw ?? null,
+        agent_best_output: state.bestSnapshot?.outputRaw ?? bestValidatedOutput ?? lastOutputRaw ?? null,
         agent_composite_score: state.bestSnapshot?.compositeScore ?? null,
         agent_rounds: round + 1,
         agent_tool_calls: state.totalToolCalls,
