@@ -405,7 +405,27 @@ export async function runSkillPipeline(
   );
 
   // 7. Write to computed_export
-  await sb.from('computed_export').delete().eq('project_id', projectId).eq('org_id', orgId);
+  // Strategy: find the current "good" run_id (if any), insert new rows,
+  // then swap by deleting the old run. If we timeout mid-insert, the next
+  // run will detect orphaned rows (multiple run_ids) and clean them up.
+
+  // Clean up orphaned rows from any previously failed/partial runs
+  const { data: existingRuns } = await sb
+    .from('computed_export')
+    .select('run_id')
+    .eq('project_id', projectId)
+    .eq('org_id', orgId)
+    .limit(1);
+  const previousRunId = existingRuns?.[0]?.run_id;
+
+  // If there are multiple run_ids, a prior run failed mid-write — clean up non-primary
+  if (previousRunId) {
+    await sb.from('computed_export')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('org_id', orgId)
+      .neq('run_id', previousRunId);
+  }
 
   const dbRows = allRows.map(r => {
     let confidence = 'Verified';
@@ -437,12 +457,32 @@ export async function runSkillPipeline(
     };
   });
 
+  let insertSuccess = true;
   for (let i = 0; i < dbRows.length; i += 500) {
     const batch = dbRows.slice(i, i + 500);
     const { error } = await sb.from('computed_export').insert(batch);
     if (error) {
       console.error(`[skill-pipeline] Insert batch ${i} failed:`, error.message);
+      insertSuccess = false;
+      break;
     }
+  }
+
+  if (insertSuccess) {
+    // All inserts succeeded — remove old run's rows
+    if (previousRunId && previousRunId !== runId) {
+      await sb.from('computed_export')
+        .delete()
+        .eq('project_id', projectId)
+        .eq('org_id', orgId)
+        .eq('run_id', previousRunId);
+    }
+  } else {
+    // Insert failed — rollback partial new rows, old data remains intact
+    await sb.from('computed_export')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('run_id', runId);
   }
 
   console.log(`[skill-pipeline] Done: run=${runId} rows=${allRows.length} identity=${identityScore}% quality=${qualityScore}%`);
