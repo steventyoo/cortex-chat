@@ -262,6 +262,10 @@ function aggregateWorkerRecords(transactions: RecordRow[]): { aggregated: Record
     'actual_amount', 'regular_amount', 'overtime_amount', 'doubletime_amount',
   ]);
 
+  const HOUR_FIELDS = new Set([
+    'regular_hours', 'overtime_hours', 'doubletime_hours',
+  ]);
+
   for (const txn of transactions) {
     const rawName =
       txn.name?.value ?? txn.worker_name?.value ?? txn.employee_name?.value
@@ -288,10 +292,20 @@ function aggregateWorkerRecords(transactions: RecordRow[]): { aggregated: Record
 
     if (txn.cost_code?.value) codes.add(String(txn.cost_code.value));
 
+    // Reversal detection: negative actual_amount means this is a payroll
+    // correction. The PDF shows positive hours on reversals, but they should
+    // cancel the original — negate hours so they net to zero.
+    const amt = (txn.actual_amount?.value as number) || 0;
+    const isReversal = amt < 0;
+
     for (const field of SUM_FIELDS) {
       const v = txn[field]?.value;
       if (v != null && typeof v === 'number') {
-        (agg[field] as FieldVal).value = ((agg[field] as FieldVal).value as number) + v;
+        let adjusted = v;
+        if (isReversal && HOUR_FIELDS.has(field) && v > 0) {
+          adjusted = -v;
+        }
+        (agg[field] as FieldVal).value = ((agg[field] as FieldVal).value as number) + adjusted;
       }
     }
     (agg.transaction_count as FieldVal).value = ((agg.transaction_count as FieldVal).value as number) + 1;
@@ -394,11 +408,12 @@ function reconcilePrTransactions(
   let txnAmountSum = 0;
   let txnWithHoursNoAmount = 0;
   for (const txn of transactions) {
+    const amt = (txn.actual_amount?.value as number) || (txn.regular_amount?.value as number) || 0;
+    const isReversal = amt < 0;
     const regH = (txn.regular_hours?.value as number) || 0;
     const otH = (txn.overtime_hours?.value as number) || 0;
-    txnRegHours += regH;
-    txnOtHours += otH;
-    const amt = (txn.actual_amount?.value as number) || (txn.regular_amount?.value as number) || 0;
+    txnRegHours += isReversal && regH > 0 ? -regH : regH;
+    txnOtHours += isReversal && otH > 0 ? -otH : otH;
     txnAmountSum += amt;
     if ((regH + otH) > 0 && amt === 0) txnWithHoursNoAmount++;
   }
