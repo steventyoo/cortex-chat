@@ -116,12 +116,6 @@ function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
       fixed.change_orders = { value: Math.round((revisedBudget - originalBudget) * 100) / 100, confidence: 0.9 };
     }
 
-    // Revenue codes (999) use Sage credit convention (negative). Normalize original_budget to positive.
-    const codeNum = parseInt(String(fixed.cost_code?.value ?? '0'), 10);
-    if (codeNum === 999 && fixed.original_budget) {
-      fixed.original_budget = { value: Math.abs(fixed.original_budget.value as number), confidence: fixed.original_budget.confidence };
-    }
-
     return fixed;
   });
 }
@@ -546,7 +540,8 @@ export async function runJcrModel(
 
   const dbRows = allRows.map(r => {
     let confidence = 'Verified';
-    if (withheldFields.has(r.field)) {
+    const scopedKey = `${r.record_key}:${r.field}`;
+    if (withheldFields.has(scopedKey) || withheldFields.has(r.field)) {
       confidence = 'Withheld';
     } else if (anomalyFields.has(r.field)) {
       confidence = 'Anomaly';

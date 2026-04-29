@@ -236,7 +236,18 @@ export function attachGapEvidence(
   const MAX_EVIDENCE_PER_GAP = 2;
 
   for (const gap of gaps) {
-    if (gap.scope === 'doc') continue;
+    if (gap.scope === 'doc') {
+      const headExcerpt = sourceText.slice(0, 2000).trim();
+      if (headExcerpt.length > 0) {
+        gap.evidence = [{
+          record_identifier: 'document_header',
+          document_excerpt: headExcerpt,
+          extracted_value: null,
+          expected_hint: `Extract doc-level field "${gap.field}"${gap.description ? ` (${gap.description})` : ''} from the report header/first page.`,
+        }];
+      }
+      continue;
+    }
 
     const records = collections[gap.scope];
     if (!records || records.length === 0) continue;
@@ -394,12 +405,14 @@ export async function runPostExtractionValidation(
     && input.sourceText
     && !parserHasGapFill(input.generatedCode)
   ) {
-    const collectionGaps = qualityGaps.filter(g => g.scope !== 'doc' && g.evidence && g.evidence.length > 0);
-    if (collectionGaps.length > 0) {
-      console.log(`[validator] Triggering gap-fill generation for ${collectionGaps.length} collection gap(s)`);
+    const fillableGaps = qualityGaps.filter(g => g.evidence && g.evidence.length > 0);
+    if (fillableGaps.length > 0) {
+      const collectionCount = fillableGaps.filter(g => g.scope !== 'doc').length;
+      const docCount = fillableGaps.filter(g => g.scope === 'doc').length;
+      console.log(`[validator] Triggering gap-fill generation for ${fillableGaps.length} gap(s) (${collectionCount} collection, ${docCount} doc)`);
       try {
-        const gapDesc = buildGapDescription(collectionGaps);
-        const gapFillCode = await generateGapFillCode(collectionGaps, gapDesc);
+        const gapDesc = buildGapDescription(fillableGaps);
+        const gapFillCode = await generateGapFillCode(fillableGaps, gapDesc);
         const combinedCode = appendGapFillToParser(input.generatedCode, gapFillCode);
 
         // Verify the gap-fill by running ONLY the fill_gaps function in isolation.
@@ -562,7 +575,11 @@ export async function runPostExtractionValidation(
 
   const withheldFields = new Set<string>();
   for (const err of extractionErrors) {
-    for (const f of err.affected_fields) withheldFields.add(f);
+    if (err.record_key) {
+      for (const f of err.affected_fields) withheldFields.add(`${err.record_key}:${f}`);
+    } else {
+      for (const f of err.affected_fields) withheldFields.add(f);
+    }
   }
 
   const anomalyFields = new Set<string>();
