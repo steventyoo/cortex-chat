@@ -91,14 +91,14 @@ function fixCostCodeColumnSwap(records: RecordRow[]): RecordRow[] {
       const actual = (ouRaw.value as number) || 0;
       const budget = (fixed.revised_budget?.value as number) || (fixed.original_budget?.value as number) || 0;
       fixed.over_under_budget = {
-        value: Math.round((budget - actual) * 100) / 100,
+        value: Math.round((actual - budget) * 100) / 100,
         confidence: ouRaw.confidence,
       };
     } else if (!needsSwap && jtdRaw) {
       const actual = (jtdRaw.value as number) || 0;
       const budget = (fixed.revised_budget?.value as number) || (fixed.original_budget?.value as number) || 0;
       fixed.over_under_budget = {
-        value: Math.round((budget - actual) * 100) / 100,
+        value: Math.round((actual - budget) * 100) / 100,
         confidence: jtdRaw.confidence,
       };
     }
