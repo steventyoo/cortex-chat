@@ -28,6 +28,7 @@ import { ExtractionSandbox, type ExtractionFile } from './sandbox';
 import { getSupabase } from './supabase';
 import { promoteParser, incrementValidated, updateParserQualityGaps, updateParserCode, type QualityGap, type GapEvidence } from './stores/parser-cache.store';
 import { getSkillFieldDefinitionsScoped, type FieldDefinition } from './skills';
+import { runExtractionAgent, type SchemaFieldDef } from './extraction-agent';
 import type { PatternParserMeta } from './pattern-extractor';
 
 type FieldVal = { value: string | number | null; confidence: number };
@@ -52,6 +53,10 @@ export interface ValidationInput {
     agent_tool_calls: number;
     composite_score: number;
   };
+  /** Per-page text arrays for the extraction agent (from unpdf) */
+  pages?: string[];
+  /** Raw file bytes for the extraction agent sandbox */
+  inputFiles?: ExtractionFile[];
 }
 
 export interface ValidationOutput {
@@ -396,20 +401,85 @@ export async function runPostExtractionValidation(
     } catch { /* non-fatal */ }
   }
 
+  // ── Agent-based doc-field extraction ──
+  // When doc-level fields are missing and the extraction agent has document
+  // access (pages + inputFiles), use it to fill the gaps. The agent has full
+  // document context and an iterative feedback loop — far more capable than
+  // the one-shot gap-fill for header/summary fields.
+  const docGaps = qualityGaps.filter(g => g.scope === 'doc');
+  if (docGaps.length > 0 && input.pages && input.pages.length > 0 && input.inputFiles && input.inputFiles.length > 0) {
+    console.log(`[validator] ${docGaps.length} doc-level gap(s) detected — invoking extraction agent for targeted fill`);
+    try {
+      let scopedDefs: Map<string, FieldDefinition[]>;
+      try { scopedDefs = await getSkillFieldDefinitionsScoped(input.skillId); } catch { scopedDefs = new Map(); }
+
+      const docFieldDefs = scopedDefs.get('doc') ?? [];
+      const docGapNames = new Set(docGaps.map(g => g.field));
+      const targetFields = docFieldDefs.filter(f => docGapNames.has(f.name));
+
+      if (targetFields.length > 0) {
+        const schemaFields: SchemaFieldDef[] = targetFields.map(f => ({
+          name: f.name,
+          scope: 'doc',
+          type: f.type,
+          description: f.description,
+          extractionHint: f.disambiguationRules ?? null,
+          required: f.required,
+        }));
+
+        const agentT = Date.now();
+        const agentResult = await runExtractionAgent({
+          skillId: input.skillId,
+          schemaFields,
+          pages: input.pages,
+          inputFiles: input.inputFiles,
+          pipelineLogId: input.pipelineLogId,
+        });
+        const agentMs = Date.now() - agentT;
+
+        let merged = 0;
+        for (const [fieldName, fieldVal] of Object.entries(agentResult.fields)) {
+          if (fieldVal.value !== null && fieldVal.value !== undefined && docGapNames.has(fieldName)) {
+            const old = fields[fieldName]?.value ?? null;
+            fields[fieldName] = { value: fieldVal.value as string | number | null, confidence: fieldVal.confidence };
+            console.log(`[validator] Agent filled doc field "${fieldName}": ${old} → ${fieldVal.value}`);
+            merged++;
+          }
+        }
+        console.log(
+          `[validator] Agent doc-fill complete: ${merged}/${docGaps.length} fields filled in ${agentMs}ms ` +
+          `(${agentResult.agentToolCalls} tool calls, score=${agentResult.compositeScore})`
+        );
+
+        // Re-run coverage check to update gaps after agent fill
+        if (merged > 0) {
+          const recheck = await checkFieldCoverage(input.skillId, fields, collections);
+          coverageResults = recheck.results;
+          qualityGaps = recheck.gaps;
+          if (sourceText) {
+            qualityGaps = attachGapEvidence(qualityGaps, sourceText, collections);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[validator] Agent doc-fill failed (non-fatal):`, err);
+    }
+  }
+
   // ── Gap-fill: generate a targeted Python function and append to cached parser ──
   // Only runs once per parser — subsequent runs use the combined code directly.
+  // Doc-scope fields are handled by the agent above; gap-fill targets collection fields only.
+  const collectionGaps = qualityGaps.filter(g => g.scope !== 'doc');
   if (
-    qualityGaps.length > 0
+    collectionGaps.length > 0
     && input.usedCachedParserId
     && input.generatedCode
     && input.sourceText
     && !parserHasGapFill(input.generatedCode)
   ) {
-    const fillableGaps = qualityGaps.filter(g => g.evidence && g.evidence.length > 0);
+    const fillableGaps = collectionGaps.filter(g => g.evidence && g.evidence.length > 0);
     if (fillableGaps.length > 0) {
-      const collectionCount = fillableGaps.filter(g => g.scope !== 'doc').length;
-      const docCount = fillableGaps.filter(g => g.scope === 'doc').length;
-      console.log(`[validator] Triggering gap-fill generation for ${fillableGaps.length} gap(s) (${collectionCount} collection, ${docCount} doc)`);
+      console.log(`[validator] Triggering gap-fill generation for ${fillableGaps.length} collection gap(s)`);
       try {
         const gapDesc = buildGapDescription(fillableGaps);
         const gapFillCode = await generateGapFillCode(fillableGaps, gapDesc);

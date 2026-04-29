@@ -40,31 +40,34 @@ function parseArgs() {
   let skill = '';
   let suite: 'all' | 'derived' | 'extraction' = 'all';
   let record: string | null = null;
+  let project: string | null = null;
   let noLangfuse = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--skill' && args[i + 1]) skill = args[i + 1];
     if (args[i] === '--suite' && args[i + 1]) suite = args[i + 1] as typeof suite;
     if (args[i] === '--record' && args[i + 1]) record = args[i + 1];
+    if (args[i] === '--project' && args[i + 1]) project = args[i + 1];
     if (args[i] === '--no-langfuse') noLangfuse = true;
   }
 
   if (!skill) {
-    console.error('Usage: npx tsx scripts/run-data-evals.ts --skill <skill_id> [--suite derived|extraction|all] [--record <record_key>] [--no-langfuse]');
+    console.error('Usage: npx tsx scripts/run-data-evals.ts --skill <skill_id> [--project <suffix>] [--suite derived|extraction|all] [--record <record_key>] [--no-langfuse]');
     process.exit(1);
   }
 
-  return { skill, suite, record, noLangfuse };
+  return { skill, suite, record, project, noLangfuse };
 }
 
 /* ── Load labels dynamically ───────────────────────────────── */
 
-async function loadLabels(skillId: string): Promise<SkillEvalLabels> {
+async function loadLabels(skillId: string, projectSuffix?: string | null): Promise<SkillEvalLabels> {
+  const fileName = projectSuffix ? `${skillId}_${projectSuffix}` : skillId;
   try {
-    const mod = await import(`../src/lib/eval-labels/${skillId}`);
+    const mod = await import(`../src/lib/eval-labels/${fileName}`);
     return mod.default as SkillEvalLabels;
   } catch (err) {
-    console.error(`No labels file found for skill "${skillId}". Expected: src/lib/eval-labels/${skillId}.ts`);
+    console.error(`No labels file found for "${fileName}". Expected: src/lib/eval-labels/${fileName}.ts`);
     throw err;
   }
 }
@@ -388,15 +391,16 @@ async function persistToSupabase(
 /* ── Main ──────────────────────────────────────────────────── */
 
 async function main() {
-  const { skill, suite, record, noLangfuse } = parseArgs();
+  const { skill, suite, record, project, noLangfuse } = parseArgs();
 
   console.log(`\nData Accuracy Eval — ${RUN_LABEL}`);
   console.log(`Skill:  ${skill}`);
   console.log(`Suite:  ${suite}`);
+  if (project) console.log(`Project: ${project}`);
   if (record) console.log(`Record: ${record}`);
   if (noLangfuse) console.log(`Langfuse: disabled`);
 
-  const labels = await loadLabels(skill);
+  const labels = await loadLabels(skill, project);
   console.log(`\nLoaded labels for ${labels.skillId} (project: ${labels.projectId})`);
   console.log(`  Derived labels:     ${labels.derivedLabels.length}`);
   console.log(`  Extraction labels:  ${labels.extractionLabels.length}`);
