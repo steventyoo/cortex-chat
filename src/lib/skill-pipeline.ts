@@ -341,11 +341,22 @@ export async function runSkillPipeline(
     meta,
   );
 
+  // Inject doc-scoped derived values into fields so consistency checks can reference them
+  const fieldsWithDerived: FieldsMap = { ...extractedData.fields };
+  for (const [key, val] of Object.entries(ctx.doc)) {
+    if (derivedFieldNames.has(key) && val != null && !fieldsWithDerived[key]) {
+      fieldsWithDerived[key] = {
+        value: val,
+        confidence: 0.9,
+      };
+    }
+  }
+
   // 4. Run post-extraction validation (consistency checks + auto-fix)
   const validation = await runPostExtractionValidation({
     pipelineLogId,
     skillId,
-    fields: extractedData.fields,
+    fields: fieldsWithDerived,
     collections: transformedCollections,
     meta,
     tailText: options?.tailText,
@@ -362,9 +373,9 @@ export async function runSkillPipeline(
   const { withheldFields, anomalyFields, checkResults, reconciliationScore, identityScore, qualityScore } = validation;
 
   // Apply corrections from validation
-  let correctedFields = extractedData.fields;
+  let correctedFields = fieldsWithDerived;
   if (validation.correctedFields) {
-    correctedFields = { ...extractedData.fields };
+    correctedFields = { ...fieldsWithDerived };
     for (const [field, val] of Object.entries(validation.correctedFields)) {
       if (val && correctedFields[field] && val.value !== correctedFields[field].value) {
         console.log(`[skill-pipeline] Applying correction: ${field}: ${correctedFields[field].value} → ${val.value}`);
@@ -394,7 +405,27 @@ export async function runSkillPipeline(
   );
 
   // 7. Write to computed_export
-  await sb.from('computed_export').delete().eq('project_id', projectId).eq('org_id', orgId);
+  // Strategy: find the current "good" run_id (if any), insert new rows,
+  // then swap by deleting the old run. If we timeout mid-insert, the next
+  // run will detect orphaned rows (multiple run_ids) and clean them up.
+
+  // Clean up orphaned rows from any previously failed/partial runs
+  const { data: existingRuns } = await sb
+    .from('computed_export')
+    .select('run_id')
+    .eq('project_id', projectId)
+    .eq('org_id', orgId)
+    .limit(1);
+  const previousRunId = existingRuns?.[0]?.run_id;
+
+  // If there are multiple run_ids, a prior run failed mid-write — clean up non-primary
+  if (previousRunId) {
+    await sb.from('computed_export')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('org_id', orgId)
+      .neq('run_id', previousRunId);
+  }
 
   const dbRows = allRows.map(r => {
     let confidence = 'Verified';
@@ -426,12 +457,32 @@ export async function runSkillPipeline(
     };
   });
 
-  for (let i = 0; i < dbRows.length; i += 100) {
-    const batch = dbRows.slice(i, i + 100);
+  let insertSuccess = true;
+  for (let i = 0; i < dbRows.length; i += 500) {
+    const batch = dbRows.slice(i, i + 500);
     const { error } = await sb.from('computed_export').insert(batch);
     if (error) {
       console.error(`[skill-pipeline] Insert batch ${i} failed:`, error.message);
+      insertSuccess = false;
+      break;
     }
+  }
+
+  if (insertSuccess) {
+    // All inserts succeeded — remove old run's rows
+    if (previousRunId && previousRunId !== runId) {
+      await sb.from('computed_export')
+        .delete()
+        .eq('project_id', projectId)
+        .eq('org_id', orgId)
+        .eq('run_id', previousRunId);
+    }
+  } else {
+    // Insert failed — rollback partial new rows, old data remains intact
+    await sb.from('computed_export')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('run_id', runId);
   }
 
   console.log(`[skill-pipeline] Done: run=${runId} rows=${allRows.length} identity=${identityScore}% quality=${qualityScore}%`);
