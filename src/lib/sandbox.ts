@@ -8,7 +8,7 @@ const MAX_STDOUT_SIZE = 50_000;
 const REQUIRED_PACKAGES = ['pandas', 'plotly', 'numpy'];
 const EXTRACTION_PACKAGES = [
   'openpyxl', 'pdfplumber', 'pandas', 'numpy', 'xlrd',
-  'python-docx', 'docx2txt', 'olefile', 'python-pptx',
+  'python-docx', 'docx2txt', 'olefile', 'python-pptx', 'pymupdf',
 ];
 
 function getCredentials() {
@@ -279,6 +279,33 @@ export async function createAnalysisSnapshot(): Promise<string> {
 
   const snapshot = await sandbox.snapshot();
   console.log(`[sandbox] Snapshot created: ${snapshot.snapshotId}`);
+  return snapshot.snapshotId;
+}
+
+/**
+ * Creates a snapshot for the extraction sandbox with pre-installed EXTRACTION_PACKAGES.
+ * Run once, then set EXTRACTION_SNAPSHOT_ID env var to skip pip install on every extraction.
+ */
+export async function createExtractionSnapshot(): Promise<string> {
+  const creds = getCredentials();
+  const sandbox = await Sandbox.create({
+    ...creds,
+    runtime: 'python3.13',
+    timeout: 180_000,
+  });
+
+  const pipResult = await sandbox.runCommand('pip', [
+    'install', '-q', ...EXTRACTION_PACKAGES,
+  ]);
+
+  if (pipResult.exitCode !== 0) {
+    const stderr = await pipResult.stderr();
+    await sandbox.stop({ blocking: true });
+    throw new Error(`Failed to install extraction packages: ${stderr.slice(0, 2000)}`);
+  }
+
+  const snapshot = await sandbox.snapshot();
+  console.log(`[sandbox] Extraction snapshot created: ${snapshot.snapshotId}`);
   return snapshot.snapshotId;
 }
 
