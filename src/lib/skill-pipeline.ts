@@ -160,6 +160,22 @@ function executeAggregate(
   const aggregations = (config.aggregations as Record<string, string>) || {};
   const computedFields = (config.computed_fields as Record<string, string>) || {};
   const reversalDetection = config.reversal_detection as { indicator_field: string; indicator_condition: string; negate_fields: string[] } | undefined;
+  const filter = config.filter as { field: string; operator: string; value: string | number } | undefined;
+
+  let records = sourceRecords;
+  if (filter) {
+    records = sourceRecords.filter(rec => {
+      const fieldVal = String(rec[filter.field]?.value ?? '').toUpperCase();
+      const target = String(filter.value).toUpperCase();
+      switch (filter.operator) {
+        case '==': return fieldVal === target;
+        case '!=': return fieldVal !== target;
+        case 'in': return target.split(',').map(s => s.trim()).includes(fieldVal);
+        default: return true;
+      }
+    });
+    console.log(`[skill-pipeline] Aggregate filter: ${filter.field} ${filter.operator} ${filter.value} → ${records.length}/${sourceRecords.length} records`);
+  }
 
   const resolveGroupKey = (rec: RecordRow): string => {
     for (const field of [...groupBy, ...nameAliases]) {
@@ -170,7 +186,7 @@ function executeAggregate(
   };
 
   const groups = new Map<string, RecordRow[]>();
-  for (const rec of sourceRecords) {
+  for (const rec of records) {
     const key = resolveGroupKey(rec);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(rec);
