@@ -57,6 +57,8 @@ export interface ValidationInput {
   pages?: string[];
   /** Raw file bytes for the extraction agent sandbox */
   inputFiles?: ExtractionFile[];
+  /** Names of fields that are computed by derived formulas (should not be re-extracted) */
+  derivedFieldNames?: Set<string>;
 }
 
 export interface ValidationOutput {
@@ -591,15 +593,27 @@ export async function runPostExtractionValidation(
     );
 
     try {
+      const derivedNames = input.derivedFieldNames ?? new Set<string>();
+
+      const filteredErrors = retriableErrors.map(e => ({
+        ...e,
+        affected_fields: e.affected_fields.filter(f => !derivedNames.has(f)),
+      })).filter(e => e.affected_fields.length > 0);
+
+      if (filteredErrors.length === 0) {
+        console.log('[validator] All affected fields are derived — skipping re-extraction');
+        break;
+      }
+
       const currentValues: Record<string, number | string | null> = {};
-      for (const err of retriableErrors) {
+      for (const err of filteredErrors) {
         for (const f of err.affected_fields) {
           currentValues[f] = (fields[f]?.value as number | string | null) ?? null;
         }
       }
 
       const result = await targetedFieldExtraction({
-        failingChecks: retriableErrors.map(e => ({
+        failingChecks: filteredErrors.map(e => ({
           check_name: e.check_name,
           message: e.message,
           affected_fields: e.affected_fields,

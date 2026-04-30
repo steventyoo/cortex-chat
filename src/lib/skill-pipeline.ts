@@ -394,6 +394,7 @@ export async function runSkillPipeline(
     agentMeta: options?.agentMeta,
     pages: options?.pages,
     inputFiles: options?.inputFiles,
+    derivedFieldNames,
   });
 
   const { withheldFields, anomalyFields, checkResults, reconciliationScore, identityScore, qualityScore } = validation;
