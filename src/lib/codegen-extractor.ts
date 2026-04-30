@@ -384,7 +384,7 @@ Parsing strategy:
 7. Do NOT stop early or truncate — capture every transaction from every source type
 8. Parse Job Totals section at the end for summary fields
 9. VERIFY: Sum actual_amount by source and compare against "Job Totals by Source" — any gap means missed transactions
-10. If sums differ by more than $1, re-parse the missed sections using pdfplumber for table-aware extraction
+10. If sums differ by more than $1, re-parse the missed sections using pymupdf (fitz) or pdfplumber on the original PDF at /tmp/input.pdf for positional/table-aware extraction
 `;
   }
 
