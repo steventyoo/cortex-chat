@@ -300,6 +300,20 @@ function buildAgentContextHints(skillId: string): string | undefined {
 
 **VERIFICATION REQUIREMENT**: The "Job Totals by Source" section at the end shows the expected PR, AP, GL totals. After parsing, SUM your extracted transactions by source and compare against these totals. If your PR/AP/GL sums differ from the document's stated totals by more than $1, you have MISSED transactions. Go back and find them.
 
+**CRITICAL — over_under_budget sign convention:**
+- The "+/- Budget" column in the document shows \`actual - budget\` (positive = over budget, negative = under budget)
+- A trailing "-" after a number means NEGATIVE (e.g., "673.50-" means -673.5)
+- Store the value EXACTLY as parsed from the document. Do NOT flip signs.
+- Example: if "+/- Budget" shows "673.50-", store over_under_budget = -673.5
+- The consistency check expects: over_under = jtd_cost - revised_budget
+
+**CRITICAL — Deduplication:**
+- Each transaction line in the document should produce EXACTLY ONE row in payroll_transactions
+- Track which lines you've already processed. Do NOT re-process lines across multiple passes.
+- A common bug: parsing pages individually AND also doing a full-document pass creates duplicates.
+- Before writing output, deduplicate by (source, name, cost_code, document_date, actual_amount)
+- Verify: your total row count should be reasonable (e.g., a 352-page report typically has 2000-3000 unique transactions, not 4000+)
+
 **Common miss patterns:**
 - AP/GL lines buried in cost code sections you already parsed for PR
 - Multi-line AP entries where the amount is on the continuation line
