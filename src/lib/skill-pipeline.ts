@@ -160,21 +160,30 @@ function executeAggregate(
   const aggregations = (config.aggregations as Record<string, string>) || {};
   const computedFields = (config.computed_fields as Record<string, string>) || {};
   const reversalDetection = config.reversal_detection as { indicator_field: string; indicator_condition: string; negate_fields: string[] } | undefined;
-  const filter = config.filter as { field: string; operator: string; value: string | number } | undefined;
+  const filter = config.filter as { field: string; operator: string; value: string | number } | { field: string; operator: string; value: string | number }[] | undefined;
 
   let records = sourceRecords;
   if (filter) {
+    const filters = Array.isArray(filter) ? filter : [filter];
     records = sourceRecords.filter(rec => {
-      const fieldVal = String(rec[filter.field]?.value ?? '').toUpperCase();
-      const target = String(filter.value).toUpperCase();
-      switch (filter.operator) {
-        case '==': return fieldVal === target;
-        case '!=': return fieldVal !== target;
-        case 'in': return target.split(',').map(s => s.trim()).includes(fieldVal);
-        default: return true;
-      }
+      return filters.every(f => {
+        const rawVal = rec[f.field]?.value;
+        const fieldVal = String(rawVal ?? '').toUpperCase();
+        const target = String(f.value).toUpperCase();
+        switch (f.operator) {
+          case '==': return fieldVal === target;
+          case '!=': return fieldVal !== target;
+          case 'in': return target.split(',').map(s => s.trim()).includes(fieldVal);
+          case '<': return Number(rawVal ?? 0) < Number(f.value);
+          case '>': return Number(rawVal ?? 0) > Number(f.value);
+          case '<=': return Number(rawVal ?? 0) <= Number(f.value);
+          case '>=': return Number(rawVal ?? 0) >= Number(f.value);
+          default: return true;
+        }
+      });
     });
-    console.log(`[skill-pipeline] Aggregate filter: ${filter.field} ${filter.operator} ${filter.value} → ${records.length}/${sourceRecords.length} records`);
+    const desc = filters.map(f => `${f.field} ${f.operator} ${f.value}`).join(' AND ');
+    console.log(`[skill-pipeline] Aggregate filter: ${desc} → ${records.length}/${sourceRecords.length} records`);
   }
 
   const resolveGroupKey = (rec: RecordRow): string => {

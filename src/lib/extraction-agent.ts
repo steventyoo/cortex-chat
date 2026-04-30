@@ -487,7 +487,7 @@ export async function runExtractionAgent(
 
   const EXTRACTION_PACKAGES = [
     'openpyxl', 'pdfplumber', 'pandas', 'numpy', 'xlrd',
-    'python-docx', 'docx2txt', 'olefile', 'python-pptx',
+    'python-docx', 'docx2txt', 'olefile', 'python-pptx', 'pymupdf',
   ];
   const EXEC_TIMEOUT = 120_000;
 

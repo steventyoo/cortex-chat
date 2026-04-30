@@ -311,9 +311,14 @@ function buildAgentContextHints(skillId: string): string | undefined {
 - Each transaction line in the document should produce EXACTLY ONE row in payroll_transactions
 - Track which lines you've already processed. Do NOT re-process lines across multiple passes.
 - A common bug: parsing pages individually AND also doing a full-document pass creates duplicates.
-- Do NOT create rows for burden codes 995, 998 or revenue code 999. These codes have Cost Code Totals but NO individual transaction lines. Creating zero-amount placeholder rows for them is WRONG.
 - Before writing output, deduplicate by (source, name, cost_code, document_date, actual_amount)
-- Verify: your total row count should be reasonable (e.g., a 352-page report typically has 2000-3000 unique transactions, not 4000+)
+
+**CRITICAL — Burden/Tax/Revenue codes (995, 998, 999):**
+- These codes DO have individual transaction lines (often thousands). They are NOT summary-only.
+- Code 995 (Payroll Burden) and 998 (Payroll Taxes) contain per-worker PR overhead allocations. Extract them like regular PR lines with source=PR, but they only have \`actual_amount\` — no hours, no regular/overtime breakdown.
+- Code 999 (Sales/Revenue) contains AR billing entries. Extract with source=AR.
+- The same workers appear under 995/998 as under regular labor codes (100-143). This is correct — each worker has separate burden/tax lines in addition to their wage lines.
+- A 352-page report will typically have 4000-5000+ total transactions across all codes.
 
 **Common miss patterns:**
 - AP/GL lines buried in cost code sections you already parsed for PR
