@@ -411,7 +411,8 @@ Your script must write /tmp/output.json with this structure:
 - The script must be deterministic — no randomness or external API calls.
 - Pay attention to number formats: commas in thousands (1,234.56), negative signs, parenthesized negatives.
 - Some documents have "smashed" numbers where two values run together without a separator.
-- Always verify your record counts match what you see in the document.${contextHints ? `\n\n## Document-Type Specific Guidance\n${contextHints}` : ''}`;
+- Always verify your record counts match what you see in the document.
+- ALWAYS include ALL imports at the top of EVERY script (import re, import json, import os, from collections import defaultdict, etc.). Each run_code executes a fresh .py file — previous imports, variables, and functions are NOT available unless you redefine them in the current script.${contextHints ? `\n\n## Document-Type Specific Guidance\n${contextHints}` : ''}`;
 }
 
 // ── Build EvalContext from parsed output ──────────────────────
