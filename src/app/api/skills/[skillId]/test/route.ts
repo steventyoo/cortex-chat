@@ -83,6 +83,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     columnMapping: {},
     sampleExtractions: overrides.sampleExtractions || [],
     classifierHints: null,
+    extractionHints: null,
     extractionMethod: 'llm',
   };
 
