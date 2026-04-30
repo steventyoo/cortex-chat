@@ -413,11 +413,26 @@ export async function runSkillPipeline(
   // 5. Re-evaluate derived fields after corrections
   let finalDerivedRows = derivedRows;
   let finalDerivedFieldNames = derivedFieldNames;
-  if (validation.correctedFields && Object.keys(validation.correctedFields).length > 0) {
+  const hasActualCorrections = validation.correctedFields &&
+    Object.entries(validation.correctedFields).some(([field, val]) =>
+      val && fieldsWithDerived[field] && val.value !== fieldsWithDerived[field].value
+    );
+
+  if (hasActualCorrections) {
     const reEval = await evaluateAndMerge(skillId, correctedFields, transformedCollections, meta);
     finalDerivedRows = reEval.derivedRows;
     finalDerivedFieldNames = reEval.derivedFieldNames;
     console.log(`[skill-pipeline] Re-evaluated derived fields after corrections: ${finalDerivedRows.length} rows`);
+  }
+
+  // Debug: log key derived values before persistence
+  const keyDerived = finalDerivedRows.filter(r =>
+    ['pr_amount', 'ap_amount', 'gl_amount'].includes(r.canonical_name)
+  );
+  if (keyDerived.length > 0) {
+    console.log(`[skill-pipeline] Derived field values for persistence:`,
+      keyDerived.map(r => `${r.canonical_name}=${r.value_number}`).join(', ')
+    );
   }
 
   // 6. Emit extracted rows (excluding derived field names to prevent double-counting)

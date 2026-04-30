@@ -320,6 +320,14 @@ function buildAgentContextHints(skillId: string): string | undefined {
 - The same workers appear under 995/998 as under regular labor codes (100-143). This is correct — each worker has separate burden/tax lines in addition to their wage lines.
 - A 352-page report will typically have 4000-5000+ total transactions across all codes.
 
+**CRITICAL — Page boundary handling:**
+- Sage reports have repeating page headers (date, time, report title, column labels, "Page:N of M") on every page.
+- These headers split transactions: a GL entry may start on one page with its source/ref/description, but the AMOUNT appears on the next page after the header.
+- ALWAYS strip page headers from the full text BEFORE parsing transactions. Build a regex for the header pattern and remove all occurrences to produce continuous text.
+- This is the single most common cause of amount parsing errors.
+- Typical header pattern includes: date/time line, "Job Cost Detail" title, company name, column labels (Date/Trans#/Vendor-Employee-Description/Regular Hrs/Overtime Hrs/Amount), "Page:N of M"
+- After stripping, the text becomes a continuous stream where every transaction line is immediately followed by its amount line with no interruption.
+
 **Common miss patterns:**
 - AP/GL lines buried in cost code sections you already parsed for PR
 - Multi-line AP entries where the amount is on the continuation line
@@ -363,15 +371,20 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF.
 - Job Totals section at end: Revenue, Expenses, Net, Retainage, "by Source" (PR/AP/GL)
 
 Parsing strategy:
-1. Iterate every page with pdfplumber
+0. FIRST: Strip all page headers from the raw text to create continuous content.
+   The header repeats on every page and follows a fixed pattern (report date/time,
+   title, column labels, company/page). Build a regex for this pattern and remove
+   all occurrences. This prevents transactions from being split by page boundaries.
+1. Read /tmp/source_text.txt and apply header stripping regex
 2. Detect cost-code headers (pattern: 3-digit code + " - " + description)
-3. Track current cost code across pages
+3. Track current cost code across the text
 4. Extract ALL transaction lines (PR, AP, GL, AR): name, hours, amounts, cost_code, source
 5. The \`source\` field MUST match the 2-letter tag on the line (PR/AP/GL/AR)
 6. For PR lines: extract regular_amount (from "Regular: N hours AMOUNT") and overtime_amount separately
 7. Do NOT stop early or truncate — capture every transaction from every source type
 8. Parse Job Totals section at the end for summary fields
 9. VERIFY: Sum actual_amount by source and compare against "Job Totals by Source" — any gap means missed transactions
+10. If sums differ by more than $1, re-parse the missed sections using pdfplumber for table-aware extraction
 `;
   }
 
