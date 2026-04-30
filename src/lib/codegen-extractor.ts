@@ -298,8 +298,8 @@ This is a **Sage 300 Construction (Timberline) Job Cost Report (JDR)** PDF.
 - AR format: \`AR <ref> <date> <description>\` then \`<date> <description> AMOUNT\`
 - regular_amount = BASE WAGE for regular hours (hours × rate). It comes from the "Regular: N hours $X" detail line.
 - overtime_amount = OT wage (OT hours × rate). It comes from "Overtime: N hours $X" detail line.
-- actual_amount = TOTAL burdened cost for the transaction (burden-loaded, higher than regular+OT sum)
-- Burden codes: 995 = Payroll Burden, 998 = Payroll Taxes (have totals but no PR lines)
+- actual_amount = line amount. For labor codes (< 900): actual_amount = regular_amount + overtime_amount. For burden codes (995, 998): allocated overhead.
+- Burden codes: 995 = Payroll Burden, 998 = Payroll Taxes (individual PR lines with only actual_amount)
 - Revenue code 999 is NEGATIVE in Sage — use abs() for revenue fields
 - Job Totals section at end: Revenue, Expenses, Net, Retainage, "by Source" (PR/AP/GL)
 
