@@ -270,73 +270,6 @@ Write the complete Python script now. Use only the standard library plus: pandas
  * These are appended to the agent's system prompt to guide extraction
  * behavior for specific document types.
  */
-function buildAgentContextHints(skillId: string): string | undefined {
-  if (skillId === 'job_cost_report') {
-    return `This is a **Sage 300 Construction Job Cost Report (JDR)**. The \`payroll_transactions\` secondary table must contain ALL transaction lines from ALL source types — not just PR (Payroll).
-
-**Transaction types to capture:**
-- **PR** (Payroll): Worker wage lines with hours and amounts. Format: \`PR <ref> <date> <emp_code> <Name>\`
-- **AP** (Accounts Payable): Vendor invoice lines. Format: \`AP <ref> <date> <vendor_code> <Vendor Name>\`
-- **GL** (General Ledger): Journal entry lines. Format: \`GL <ref> <date> <description>\`
-- **AR** (Accounts Receivable): Billing/revenue lines. Format: \`AR <ref> <date> <description>\`
-
-**CRITICAL**: The 2-letter prefix (PR/AP/GL/AR) on each transaction line is the \`source\` field. You MUST set it for every row.
-
-**PR transaction field extraction (IMPORTANT):**
-- \`actual_amount\`: The TOTAL burdened cost for the transaction (includes base wage + burden allocation)
-- \`regular_amount\`: The BASE WAGE for regular hours ONLY (hours × rate). This is NOT the same as actual_amount.
-- \`overtime_amount\`: The overtime wage amount (OT hours × OT rate)
-- \`doubletime_amount\`: Double-time wage if present
-- On each PR line, the detail shows: \`MM/DD/YY Regular: N hours AMOUNT\` — the AMOUNT there is \`regular_amount\`
-- If a line shows \`Overtime: N hours AMOUNT\`, that AMOUNT is \`overtime_amount\`
-- The separate total for the line (often on a subtotal row) is \`actual_amount\` (burdened total)
-- You MUST extract regular_amount and overtime_amount separately — do not leave them null
-
-**AP/GL/AR lines:**
-- These typically only have \`actual_amount\` (no hours or component amounts)
-- ALL source types go into the same \`payroll_transactions\` table
-
-**Downstream usage**: Source amounts (pr_amount, ap_amount, gl_amount) are computed by summing \`actual_amount\` grouped by \`source\`. If you miss ANY AP or GL lines, the totals will not match.
-
-**VERIFICATION REQUIREMENT**: The "Job Totals by Source" section at the end shows the expected PR, AP, GL totals. After parsing, SUM your extracted transactions by source and compare against these totals. If your PR/AP/GL sums differ from the document's stated totals by more than $1, you have MISSED transactions. Go back and find them.
-
-**CRITICAL — over_under_budget sign convention:**
-- The "+/- Budget" column in the document shows \`actual - budget\` (positive = over budget, negative = under budget)
-- A trailing "-" after a number means NEGATIVE (e.g., "673.50-" means -673.5)
-- Store the value EXACTLY as parsed from the document. Do NOT flip signs.
-- Example: if "+/- Budget" shows "673.50-", store over_under_budget = -673.5
-- The consistency check expects: over_under = jtd_cost - revised_budget
-
-**CRITICAL — Deduplication:**
-- Each transaction line in the document should produce EXACTLY ONE row in payroll_transactions
-- Track which lines you've already processed. Do NOT re-process lines across multiple passes.
-- A common bug: parsing pages individually AND also doing a full-document pass creates duplicates.
-- Before writing output, deduplicate by (source, name, cost_code, document_date, actual_amount)
-
-**CRITICAL — Burden/Tax/Revenue codes (995, 998, 999):**
-- These codes DO have individual transaction lines (often thousands). They are NOT summary-only.
-- Code 995 (Payroll Burden) and 998 (Payroll Taxes) contain per-worker PR overhead allocations. Extract them like regular PR lines with source=PR, but they only have \`actual_amount\` — no hours, no regular/overtime breakdown.
-- Code 999 (Sales/Revenue) contains AR billing entries. Extract with source=AR.
-- The same workers appear under 995/998 as under regular labor codes (100-143). This is correct — each worker has separate burden/tax lines in addition to their wage lines.
-- A 352-page report will typically have 4000-5000+ total transactions across all codes.
-
-**CRITICAL — Page boundary handling:**
-- Sage reports have repeating page headers (date, time, report title, column labels, "Page:N of M") on every page.
-- These headers split transactions: a GL entry may start on one page with its source/ref/description, but the AMOUNT appears on the next page after the header.
-- ALWAYS strip page headers from the full text BEFORE parsing transactions. Build a regex for the header pattern and remove all occurrences to produce continuous text.
-- This is the single most common cause of amount parsing errors.
-- Typical header pattern includes: date/time line, "Job Cost Detail" title, company name, column labels (Date/Trans#/Vendor-Employee-Description/Regular Hrs/Overtime Hrs/Amount), "Page:N of M"
-- After stripping, the text becomes a continuous stream where every transaction line is immediately followed by its amount line with no interruption.
-
-**Common miss patterns:**
-- AP/GL lines buried in cost code sections you already parsed for PR
-- Multi-line AP entries where the amount is on the continuation line
-- GL journal entries that look different from PR/AP patterns
-- Transactions on the last page before Job Totals`;
-  }
-  return undefined;
-}
-
 /** @deprecated Fallback for skills not yet migrated to scoped skill_fields. */
 function buildSecondaryTableSection(skill: DocumentSkill): string {
   const secondaryTables = skill.multiRecordConfig?.secondaryTables;
@@ -1378,7 +1311,7 @@ export async function extractWithCodegen(
           }));
         console.log(`[codegen] Starting extraction agent: ${schemaFields.length} schema fields, ${pages.length} pages`);
 
-        const contextHints = buildAgentContextHints(skill.skillId);
+        const contextHints = skill.extractionHints || undefined;
 
         const agentSpan = options?.langfuseParent?.span({
           name: 'extraction-agent',

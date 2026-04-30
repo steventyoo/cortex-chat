@@ -62,6 +62,7 @@ export interface DocumentSkill {
   columnMapping: Record<string, string>;
   sampleExtractions: FewShotExample[];
   classifierHints: { description: string; keywords: string[] } | null;
+  extractionHints: string | null;
   extractionMethod: 'llm' | 'codegen' | 'vision';
 }
 
@@ -119,6 +120,7 @@ function mapRowToSkill(row: Record<string, unknown>): DocumentSkill {
     columnMapping: (row.column_mapping as Record<string, string>) || {},
     sampleExtractions: (row.sample_extractions as FewShotExample[]) || [],
     classifierHints: (row.classifier_hints as DocumentSkill['classifierHints']) || null,
+    extractionHints: (row.extraction_hints as string) || null,
     extractionMethod: (method === 'codegen' || method === 'vision') ? method : 'llm',
   };
 }
