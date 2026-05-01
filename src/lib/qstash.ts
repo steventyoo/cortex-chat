@@ -111,32 +111,25 @@ export async function publishScanContinuation(
 
 export interface ExtractionContinuationPayload {
   continuation: true;
-  parserCacheId: string;
+  pipelineLogId: string;
   skillId: string;
-  formatFingerprint: string;
+  blobUrl: string;
+  attempt: number;
 }
 
 export async function publishExtractionContinuation(
   baseUrl: string,
-  parserCacheId: string,
-  skillId: string,
-  formatFingerprint: string,
+  payload: ExtractionContinuationPayload,
   delaySec: number = 5,
 ): Promise<string> {
   const client = getQStashClient();
   const url = `${baseUrl.replace(/\/$/, '')}/api/pipeline/continue-extraction`;
-  const body: ExtractionContinuationPayload = {
-    continuation: true,
-    parserCacheId,
-    skillId,
-    formatFingerprint,
-  };
   const result = await client.publishJSON({
     url,
-    body,
-    retries: 2,
+    body: payload,
+    retries: 3,
     delay: delaySec,
   });
-  console.log(`[qstash] Scheduled extraction continuation for cache=${parserCacheId} in ${delaySec}s → msgId=${result.messageId}`);
+  console.log(`[qstash] Scheduled extraction continuation attempt=${payload.attempt} for pipeline=${payload.pipelineLogId} in ${delaySec}s → msgId=${result.messageId}`);
   return result.messageId;
 }

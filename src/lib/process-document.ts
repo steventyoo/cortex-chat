@@ -253,6 +253,21 @@ async function processLargePdfVision(opts: {
         }
       }
       usedExtractionMethod = 'codegen';
+
+      // If agent scheduled a continuation (timed out), persist partial status and return early
+      if (codegenResult.continuationScheduled) {
+        codegenSpan.end({
+          output: { continuationScheduled: true },
+          metadata: { parserMethod: 'agent', formatFingerprint: codegenResult.metadata.formatFingerprint },
+        });
+        console.log(`[process:large-pdf] Agent extraction timed out — continuation scheduled via QStash`);
+        await sb.from('pipeline_log').update({
+          status: 'extracting_continued',
+          processing_note: 'Agent timed out, continuation scheduled',
+        }).eq('id', recordId);
+        return { success: true, recordId, status: 'extracting_continued' as const, timing };
+      }
+
       codegenSpan.end({
         output: {
           fieldCount: Object.keys(extraction.fields).length,
@@ -775,6 +790,21 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
             }
           }
           usedExtractionMethod = 'codegen';
+
+          // If agent scheduled a continuation, persist partial status and return early
+          if (codegenResult.continuationScheduled) {
+            codegenSpan.end({
+              output: { continuationScheduled: true },
+              metadata: { parserMethod: 'agent', formatFingerprint: codegenResult.metadata.formatFingerprint },
+            });
+            console.log(`[process] Agent extraction timed out — continuation scheduled via QStash`);
+            await sb.from('pipeline_log').update({
+              status: 'extracting_continued',
+              processing_note: 'Agent timed out, continuation scheduled',
+            }).eq('id', recordId);
+            return { success: true, recordId, status: 'extracting_continued' as const, timing };
+          }
+
           codegenSpan.end({
             output: {
               fieldCount: Object.keys(extraction.fields).length,
@@ -853,6 +883,21 @@ export async function processDocument(payload: ProcessPayload): Promise<ProcessR
           }
         }
         usedExtractionMethod = 'codegen';
+
+        // If agent scheduled a continuation, persist partial status and return early
+        if (codegenResult.continuationScheduled) {
+          codegenSpan2.end({
+            output: { continuationScheduled: true },
+            metadata: { parserMethod: 'agent', formatFingerprint: codegenResult.metadata.formatFingerprint },
+          });
+          console.log(`[process] Agent extraction timed out — continuation scheduled via QStash`);
+          await sb.from('pipeline_log').update({
+            status: 'extracting_continued',
+            processing_note: 'Agent timed out, continuation scheduled',
+          }).eq('id', recordId);
+          return { success: true, recordId, status: 'extracting_continued' as const, timing };
+        }
+
         codegenSpan2.end({
           output: { fields: extraction.fields, discoveredFields, records: extraction.records?.slice(0, 5) },
           metadata: {
