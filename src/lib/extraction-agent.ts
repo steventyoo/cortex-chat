@@ -786,20 +786,32 @@ export async function runExtractionAgent(
 
         const identity = computeIdentityScore(checkResults);
         const quality = computeQualityScore(checkResults);
-        const passed = checkResults.filter(r => r.status === 'pass').length;
+        const scoredChecks = checkResults.filter(r => r.check_role !== 'anomaly');
+        const anomalyChecks = checkResults.filter(r => r.check_role === 'anomaly');
+        const scoredPassed = scoredChecks.filter(r => r.status === 'pass').length;
+        const anomalyPassed = anomalyChecks.filter(r => r.status === 'pass').length;
 
         const report: string[] = [
-          `Identity score: ${identity}% | Quality score: ${quality}%`,
-          `Checks: ${passed}/${checkResults.length} passed\n`,
+          `Quality score: ${quality}% | Identity score: ${identity}%`,
+          `Scored checks (identity+structural): ${scoredPassed}/${scoredChecks.length} passed`,
+          `Anomaly flags (informational): ${anomalyChecks.length - anomalyPassed}/${anomalyChecks.length} flagged\n`,
+          `--- SCORED CHECKS (must pass for 100%) ---`,
         ];
 
-        for (const r of checkResults) {
+        for (const r of scoredChecks) {
           const icon = r.status === 'pass' ? 'PASS' : 'FAIL';
           report.push(`[${icon}] ${r.display_name} (${r.check_role}): ${r.message}`);
         }
 
-        if (state.bestSnapshot && passed < state.bestSnapshot.checksPassed) {
-          report.push(`\nWARNING: REGRESSION — ${state.bestSnapshot.checksPassed} checks passed in best iteration (${state.bestSnapshot.iteration}), now only ${passed}.`);
+        if (anomalyChecks.some(r => r.status === 'fail')) {
+          report.push(`\n--- ANOMALY FLAGS (informational, don't affect quality score) ---`);
+          for (const r of anomalyChecks.filter(r => r.status === 'fail')) {
+            report.push(`[FLAG] ${r.display_name}: ${r.message}`);
+          }
+        }
+
+        if (state.bestSnapshot && scoredPassed < state.bestSnapshot.checksPassed) {
+          report.push(`\nWARNING: REGRESSION — ${state.bestSnapshot.checksPassed} scored checks passed in best iteration (${state.bestSnapshot.iteration}), now only ${scoredPassed}.`);
         }
 
         // Track this iteration
@@ -820,8 +832,8 @@ export async function runExtractionAgent(
               Object.entries(parsedSecondary).map(([k, v]) => [k, v.length]),
             ),
           },
-          checksTotal: checkResults.length,
-          checksPassed: passed,
+          checksTotal: scoredChecks.length,
+          checksPassed: scoredPassed,
           compositeScore: quality,
           script: lastScript,
           outputRaw: lastOutputRaw,
