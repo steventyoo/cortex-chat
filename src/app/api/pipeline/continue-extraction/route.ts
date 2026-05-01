@@ -121,6 +121,7 @@ export async function POST(req: NextRequest) {
     const { url: newBlobUrl } = await put(newBlobKey, JSON.stringify(agentResult.continuationState), {
       access: 'public',
       addRandomSuffix: false,
+      allowOverwrite: true,
     });
     console.log(`[continue-extraction] Agent needs more time, scheduling attempt ${nextAttempt}`);
 

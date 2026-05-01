@@ -1343,6 +1343,7 @@ export async function extractWithCodegen(
           const { url: blobUrl } = await put(blobKey, JSON.stringify(agentResult.continuationState), {
             access: 'public',
             addRandomSuffix: false,
+            allowOverwrite: true,
           });
           console.log(`[codegen] Saved continuation state to blob: ${blobKey} (attempt ${agentResult.continuationState.attempt})`);
 
