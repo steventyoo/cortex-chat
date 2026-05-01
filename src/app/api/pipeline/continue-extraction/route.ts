@@ -5,6 +5,7 @@ import { put, del } from '@vercel/blob';
 import { getSupabase } from '@/lib/supabase';
 import { runSkillPipeline } from '@/lib/skill-pipeline';
 import { getSkillFieldDefinitionsScoped, getSkill } from '@/lib/skills';
+import { getBaseUrl } from '@/lib/base-url';
 
 export const maxDuration = 600;
 
@@ -123,9 +124,7 @@ export async function POST(req: NextRequest) {
     });
     console.log(`[continue-extraction] Agent needs more time, scheduling attempt ${nextAttempt}`);
 
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : 'http://localhost:3000');
+    const baseUrl = getBaseUrl();
 
     await publishExtractionContinuation(baseUrl, {
       continuation: true,
