@@ -44,6 +44,36 @@ export interface AgentExtractionResult {
   inputTokens: number;
   outputTokens: number;
   activityLog: ActivityEntry[];
+  needsContinuation?: boolean;
+  continuationState?: ContinuationState;
+}
+
+export interface ContinuationState {
+  messages: Anthropic.Messages.MessageParam[];
+  bestSnapshot: SerializedIterationSnapshot | null;
+  iterationHistory: SerializedIterationSnapshot[];
+  lastOutputRaw: unknown;
+  bestValidatedOutput: unknown;
+  lastScript: string;
+  totalToolCalls: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  activityLog: ActivityEntry[];
+  sandboxId: string;
+  attempt: number;
+  continuationCount: number;
+}
+
+/** JSON-safe version of IterationSnapshot (Set<string> -> string[]) */
+interface SerializedIterationSnapshot {
+  iteration: number;
+  populatedFields: string[];
+  recordCounts: Record<string, number>;
+  checksTotal: number;
+  checksPassed: number;
+  compositeScore: number;
+  script: string;
+  outputRaw: unknown;
 }
 
 interface IterationSnapshot {
@@ -76,6 +106,25 @@ export interface ActivityEntry {
 }
 
 // ── Tool Definitions (Anthropic format) ──────────────────────
+
+/** Converts a resume state (from JSON deserialization) back to AgentState with proper Sets */
+function deserializeResumeState(raw: AgentState): AgentState {
+  return {
+    ...raw,
+    bestSnapshot: raw.bestSnapshot ? {
+      ...raw.bestSnapshot,
+      populatedFields: raw.bestSnapshot.populatedFields instanceof Set
+        ? raw.bestSnapshot.populatedFields
+        : new Set(raw.bestSnapshot.populatedFields as unknown as string[]),
+    } : null,
+    iterationHistory: raw.iterationHistory.map(s => ({
+      ...s,
+      populatedFields: s.populatedFields instanceof Set
+        ? s.populatedFields
+        : new Set(s.populatedFields as unknown as string[]),
+    })),
+  };
+}
 
 const AGENT_TOOLS: Anthropic.Messages.Tool[] = [
   {
@@ -469,6 +518,10 @@ export interface RunExtractionAgentOptions {
   pipelineLogId?: string;
   /** Skill-specific extraction hints appended to the system prompt */
   contextHints?: string;
+  /** Sandbox ID for reconnection on continuation (skips creating a new one) */
+  existingSandboxId?: string;
+  /** How many times this extraction has been continued (0 = first attempt) */
+  continuationCount?: number;
 }
 
 export async function runExtractionAgent(
@@ -482,6 +535,8 @@ export async function runExtractionAgent(
     startedAt = Date.now(),
     maxDurationMs = 420_000,
     pipelineLogId,
+    existingSandboxId,
+    continuationCount = 0,
   } = options;
 
   const sb_db = pipelineLogId ? getSupabase() : null;
@@ -491,6 +546,7 @@ export async function runExtractionAgent(
     'python-docx', 'docx2txt', 'olefile', 'python-pptx', 'pymupdf',
   ];
   const EXEC_TIMEOUT = 120_000;
+  const SANDBOX_TIMEOUT = 30 * 60_000; // 30 min — survives across QStash continuations
 
   const doc = new DocumentContext(pages);
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -505,6 +561,7 @@ export async function runExtractionAgent(
 
   // Persistent sandbox — boots once, reused across all run_code calls
   let sb: (Sandbox & AsyncDisposable) | null = null;
+  let sandboxId: string | null = existingSandboxId ?? null;
   let lastOutputRaw: unknown = null;
   let bestValidatedOutput: unknown = null;
   let lastScript = '';
@@ -516,20 +573,36 @@ export async function runExtractionAgent(
       apiKey: process.env.SANDBOX_API_KEY,
       teamId: process.env.SANDBOX_TEAM_ID,
     };
+
+    // Reconnect to existing sandbox on continuation
+    if (existingSandboxId) {
+      try {
+        const reconnected = await Sandbox.get({ sandboxId: existingSandboxId, ...creds });
+        sb = reconnected as unknown as Sandbox & AsyncDisposable;
+        sandboxId = existingSandboxId;
+        console.log(`[extraction-agent] Reconnected to sandbox: ${existingSandboxId}`);
+        return sb;
+      } catch (reconnectErr) {
+        console.warn(`[extraction-agent] Sandbox reconnect failed, creating new one:`, reconnectErr);
+        sandboxId = null;
+        // Fall through to create a new sandbox below
+      }
+    }
+
     const snapshotId = process.env.EXTRACTION_SNAPSHOT_ID;
 
     if (snapshotId) {
       sb = await Sandbox.create({
         ...creds,
         source: { type: 'snapshot', snapshotId },
-        timeout: 10 * 60_000,
+        timeout: SANDBOX_TIMEOUT,
         networkPolicy: 'deny-all',
       });
     } else {
       sb = await Sandbox.create({
         ...creds,
         runtime: 'python3.13',
-        timeout: 10 * 60_000,
+        timeout: SANDBOX_TIMEOUT,
       });
       const pipResult = await sb.runCommand('pip', ['install', '-q', ...EXTRACTION_PACKAGES]);
       if (pipResult.exitCode !== 0) {
@@ -539,11 +612,12 @@ export async function runExtractionAgent(
       await sb.updateNetworkPolicy('deny-all');
     }
 
+    sandboxId = sb.sandboxId;
     await sb.writeFiles(sandboxFiles.map(f => ({ path: f.path, content: f.content })));
     return sb;
   }
 
-  const state: AgentState = options.resumeState ?? {
+  const state: AgentState = options.resumeState ? deserializeResumeState(options.resumeState) : {
     messages: [{ role: 'user', content: 'Begin extracting data from this document. Start by exploring its structure.' }],
     bestSnapshot: null,
     iterationHistory: [],
@@ -643,26 +717,27 @@ export async function runExtractionAgent(
           } catch (fileErr) {
             console.log(`[extraction-agent] run_code: /tmp/output.json read failed: ${fileErr instanceof Error ? fileErr.message : String(fileErr)}`);
           }
-          // Fall back to stdout if no output.json
-          if (!captured) {
-            try {
-              const stdout = await result.stdout();
-              if (stdout) {
-                output += `\nSTDOUT:\n${stdout.slice(0, 5000)}`;
+          // Always capture stdout — agent needs to see its print() output for debugging
+          try {
+            const stdout = await result.stdout();
+            if (stdout && stdout.trim()) {
+              if (!captured) {
                 try {
                   lastOutputRaw = JSON.parse(stdout);
                   captured = true;
                   console.log(`[extraction-agent] run_code OK: parsed stdout as JSON (${stdout.length} chars)`);
                 } catch {
-                  console.log(`[extraction-agent] run_code OK: stdout not JSON (${stdout.length} chars)`);
+                  // not JSON, that's fine
                 }
-              } else {
-                output += `\n(no stdout)`;
-                console.log(`[extraction-agent] run_code OK: no stdout and no output.json`);
               }
-            } catch (stdoutErr) {
-              console.log(`[extraction-agent] run_code: stdout read failed: ${stdoutErr instanceof Error ? stdoutErr.message : String(stdoutErr)}`);
+              output += `\nSTDOUT:\n${stdout.slice(0, 5000)}`;
+              console.log(`[extraction-agent] run_code OK: stdout (${stdout.length} chars)`);
+            } else if (!captured) {
+              output += `\n(no stdout)`;
+              console.log(`[extraction-agent] run_code OK: no stdout and no output.json`);
             }
+          } catch (stdoutErr) {
+            console.log(`[extraction-agent] run_code: stdout read failed: ${stdoutErr instanceof Error ? stdoutErr.message : String(stdoutErr)}`);
           }
         }
         return output;
@@ -766,6 +841,7 @@ export async function runExtractionAgent(
   // ── Agentic loop ─────────────────────────────────────────
 
   let timeNudgeSent = false;
+  let needsContinuation = false;
 
   try {
     for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
@@ -773,6 +849,7 @@ export async function runExtractionAgent(
       if (elapsed > maxDurationMs - 60_000) {
         logActivity(round, 'status', `Approaching timeout at round ${round}, elapsed=${elapsed}ms — stopping loop`);
         console.log(`[extraction-agent] Approaching timeout at round ${round}, elapsed=${elapsed}ms`);
+        needsContinuation = true;
         break;
       }
 
@@ -854,7 +931,10 @@ export async function runExtractionAgent(
       }
     }
   } finally {
-    if (sb) await sb.stop({ blocking: true }).catch(() => {});
+    // Only stop sandbox if we're done (no continuation needed)
+    if (sb && !needsContinuation) {
+      await sb.stop({ blocking: true }).catch(() => {});
+    }
   }
 
   // Final checkpoint with complete state
@@ -904,5 +984,27 @@ export async function runExtractionAgent(
     inputTokens: state.totalInputTokens,
     outputTokens: state.totalOutputTokens,
     activityLog: state.activityLog,
+    needsContinuation,
+    continuationState: needsContinuation && sandboxId ? {
+      messages: state.messages,
+      bestSnapshot: state.bestSnapshot ? {
+        ...state.bestSnapshot,
+        populatedFields: [...state.bestSnapshot.populatedFields],
+      } : null,
+      iterationHistory: state.iterationHistory.map(s => ({
+        ...s,
+        populatedFields: [...s.populatedFields],
+      })),
+      lastOutputRaw,
+      bestValidatedOutput,
+      lastScript,
+      totalToolCalls: state.totalToolCalls,
+      totalInputTokens: state.totalInputTokens,
+      totalOutputTokens: state.totalOutputTokens,
+      activityLog: state.activityLog,
+      sandboxId,
+      attempt: continuationCount + 1,
+      continuationCount: continuationCount + 1,
+    } : undefined,
   };
 }

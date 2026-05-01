@@ -27,7 +27,10 @@ import {
   runExtractionAgent,
   type SchemaFieldDef,
   type AgentExtractionResult,
+  type ContinuationState,
 } from './extraction-agent';
+import { put } from '@vercel/blob';
+import { publishExtractionContinuation, type ExtractionContinuationPayload } from './qstash';
 
 const MAX_RETRIES = 2;
 
@@ -54,6 +57,8 @@ export interface CodegenExtractionResult {
       composite_score: number;
     };
   };
+  /** If true, extraction was interrupted and a QStash continuation has been scheduled */
+  continuationScheduled?: boolean;
 }
 
 // ── Meta-prompt builder ──────────────────────────────────────
@@ -1329,6 +1334,45 @@ export async function extractWithCodegen(
           pipelineLogId: options?.pipelineLogId,
           contextHints,
         });
+
+        // Handle continuation: agent timed out but has more work to do
+        if (agentResult.needsContinuation && agentResult.continuationState && options?.pipelineLogId) {
+          const pipelineLogId = options.pipelineLogId;
+          const blobKey = `extraction-state/${pipelineLogId}/${agentResult.continuationState.attempt}.json`;
+          const { url: blobUrl } = await put(blobKey, JSON.stringify(agentResult.continuationState), {
+            access: 'public',
+            addRandomSuffix: false,
+          });
+          console.log(`[codegen] Saved continuation state to blob: ${blobKey} (attempt ${agentResult.continuationState.attempt})`);
+
+          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
+            ? `https://${process.env.VERCEL_URL}`
+            : 'http://localhost:3000';
+
+          const continuationPayload: ExtractionContinuationPayload = {
+            continuation: true,
+            pipelineLogId,
+            skillId: skill.skillId,
+            blobUrl,
+            attempt: agentResult.continuationState.attempt,
+          };
+          await publishExtractionContinuation(baseUrl, continuationPayload);
+
+          agentSpan?.end({
+            output: { continuationScheduled: true, attempt: agentResult.continuationState.attempt },
+            metadata: { totalElapsedMs: Date.now() - t0 },
+          });
+
+          // Return a minimal result signaling continuation — caller should NOT run pipeline yet
+          const partialResult = normalizePatternResult(
+            agentResult.fields, agentResult.records, agentResult.secondaryTables, skill, classifierConfidence,
+          );
+          partialResult.metadata.retries = 0;
+          partialResult.metadata.parserMethod = 'agent';
+          partialResult.metadata.formatFingerprint = formatFingerprint;
+          partialResult.metadata.formatLabel = formatLabel;
+          return { ...partialResult, continuationScheduled: true };
+        }
 
         const fieldCount = Object.keys(agentResult.fields).length;
         const recordCount = agentResult.records.length;
