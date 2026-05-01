@@ -23,7 +23,8 @@ export async function middleware(request: NextRequest) {
   if (
     pathname === '/api/pipeline/scan-drive' ||
     pathname === '/api/pipeline/process' ||
-    pathname === '/api/pipeline/recover'
+    pathname === '/api/pipeline/recover' ||
+    pathname === '/api/pipeline/continue-extraction'
   ) {
     return NextResponse.next();
   }
