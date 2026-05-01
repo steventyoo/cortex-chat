@@ -888,8 +888,24 @@ export async function runExtractionAgent(
       }
 
       if (response.stop_reason === 'end_turn') {
-        logActivity(round, 'status', `Agent finished (stop_reason=end_turn, tokens: ${response.usage.input_tokens}in/${response.usage.output_tokens}out)`);
-        console.log(`[extraction-agent] Agent finished at round ${round}, stop_reason=end_turn`);
+        // Don't let the agent stop unless it's achieved 100% quality (or exhausted retries)
+        const bestScore = state.bestSnapshot?.compositeScore ?? 0;
+        const endTurnRetries = state.activityLog.filter(e => e.content?.includes('not-done-yet')).length;
+        if (bestScore < 100 && endTurnRetries < 3 && lastOutputRaw) {
+          const failedChecks = state.bestSnapshot
+            ? `${state.bestSnapshot.checksTotal - state.bestSnapshot.checksPassed} checks still failing`
+            : 'checks not yet run';
+          const pushBack = `You stopped but your quality score is only ${bestScore}% (${failedChecks}). ` +
+            `You MUST reach 100%. Call check_consistency to see which checks fail, then fix your extraction. ` +
+            `Common issues: missing transaction types (AP, GL, burden PR in codes 995/998), incorrect overtime splits, or missing cost code lines. ` +
+            `Do NOT stop until all checks pass.`;
+          state.messages.push({ role: 'user', content: pushBack });
+          logActivity(round, 'status', `Agent tried to stop at ${bestScore}% — pushing back (not-done-yet attempt ${endTurnRetries + 1}/3)`);
+          console.log(`[extraction-agent] Agent tried to stop at ${bestScore}% quality, pushing back (attempt ${endTurnRetries + 1}/3)`);
+          continue; // Don't break — force agent to keep going
+        }
+        logActivity(round, 'status', `Agent finished (stop_reason=end_turn, score=${bestScore}%, tokens: ${response.usage.input_tokens}in/${response.usage.output_tokens}out)`);
+        console.log(`[extraction-agent] Agent finished at round ${round}, stop_reason=end_turn, score=${bestScore}%`);
         break;
       }
 
