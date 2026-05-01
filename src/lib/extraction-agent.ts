@@ -828,7 +828,7 @@ export async function runExtractionAgent(
         };
         state.iterationHistory.push(snapshot);
 
-        if (!state.bestSnapshot || quality > state.bestSnapshot.compositeScore) {
+        if (!state.bestSnapshot || quality >= state.bestSnapshot.compositeScore) {
           state.bestSnapshot = snapshot;
         }
 

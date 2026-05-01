@@ -147,6 +147,12 @@ export async function POST(req: NextRequest) {
     `${agentResult.records.length} records, score=${agentResult.compositeScore}%`,
   );
 
+  // Mark as completed BEFORE running pipeline to prevent QStash retries from re-processing
+  await sb.from('pipeline_log').update({
+    status: 'tier2_validated',
+    processing_note: `Continuation completed with score=${agentResult.compositeScore}%`,
+  }).eq('id', pipelineLogId);
+
   await runPostExtractionPipeline(agentResult, pipelineLogId, skillId, logRow.org_id, logRow.project_id);
 
   // Cleanup
