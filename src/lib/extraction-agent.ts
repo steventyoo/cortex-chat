@@ -448,7 +448,9 @@ Your script must write /tmp/output.json with this structure:
 3. Write a COMPLETE Python extraction script that writes JSON to /tmp/output.json. Do this EARLY — even if incomplete.
 4. Call validate_output to check field coverage and spot nulls.
 5. Call check_consistency to verify the extracted values satisfy mathematical relationships.
-6. If there are issues, fix your script and re-run. Iterate until quality is acceptable.
+6. If ANY checks fail, fix your script and re-run. Keep iterating until you reach 100% quality.
+7. Do NOT stop until check_consistency returns 100% quality. Every failing check means something is wrong with your extraction — investigate and fix it.
+8. If a check fails and you believe the check formula is wrong (your extracted values are correct per the document), explain why in your reasoning and move on. But NEVER assume a check is wrong without verifying against the actual document.
 
 ## CRITICAL RULES
 - You have LIMITED TIME. Your #1 priority is to produce /tmp/output.json with valid JSON.
