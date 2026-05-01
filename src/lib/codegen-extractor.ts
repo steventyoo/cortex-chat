@@ -31,6 +31,7 @@ import {
 } from './extraction-agent';
 import { put } from '@vercel/blob';
 import { publishExtractionContinuation, type ExtractionContinuationPayload } from './qstash';
+import { getBaseUrl } from './base-url';
 
 const MAX_RETRIES = 2;
 
@@ -1345,9 +1346,7 @@ export async function extractWithCodegen(
           });
           console.log(`[codegen] Saved continuation state to blob: ${blobKey} (attempt ${agentResult.continuationState.attempt})`);
 
-          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VERCEL_URL
-            ? `https://${process.env.VERCEL_URL}`
-            : 'http://localhost:3000';
+          const baseUrl = getBaseUrl();
 
           const continuationPayload: ExtractionContinuationPayload = {
             continuation: true,
