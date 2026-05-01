@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     .eq('id', pipelineLogId)
     .single();
 
-  if (!logRow || (logRow.status !== 'extracting_continued')) {
+  if (!logRow || !['extracting_continued', 'processing'].includes(logRow.status)) {
     console.log(`[continue-extraction] Skipping — pipeline already in status: ${logRow?.status}`);
     return NextResponse.json({ status: 'skipped', reason: `pipeline status is ${logRow?.status}` });
   }

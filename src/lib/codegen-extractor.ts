@@ -32,6 +32,7 @@ import {
 import { put } from '@vercel/blob';
 import { publishExtractionContinuation, type ExtractionContinuationPayload } from './qstash';
 import { getBaseUrl } from './base-url';
+import { getSupabase } from './supabase';
 
 const MAX_RETRIES = 2;
 
@@ -1346,6 +1347,13 @@ export async function extractWithCodegen(
             allowOverwrite: true,
           });
           console.log(`[codegen] Saved continuation state to blob: ${blobKey} (attempt ${agentResult.continuationState.attempt})`);
+
+          // Update status BEFORE publishing QStash to avoid race condition
+          const sb = getSupabase();
+          await sb.from('pipeline_log').update({
+            status: 'extracting_continued',
+            processing_note: `Agent timed out at attempt ${agentResult.continuationState.attempt}, continuation scheduled`,
+          }).eq('id', pipelineLogId);
 
           const baseUrl = getBaseUrl();
 
